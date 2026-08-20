@@ -2,7 +2,7 @@ const { app, BrowserWindow, ipcMain, dialog, Notification, Tray, Menu, nativeIma
 const path = require('path');
 const fs = require('fs');
 const { pathToFileURL } = require('url');
-
+#
 const isDev = !app.isPackaged;
 
 let mainWindow = null;
