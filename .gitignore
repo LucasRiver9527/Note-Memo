@@ -1,15 +1,8 @@
-# 操作系统生成的文件
 .DS_Store
 Thumbs.db
-
-# 编辑器配置（如果你不想分享个人设置）
 .vscode/
 .idea/
-
-# 日志文件
 *.log
-
-# 临时文件
 *.tmp
 *.temp
 node_modules/
