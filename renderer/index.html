@@ -1,0 +1,182 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+  <meta charset="UTF-8" />
+  <meta http-equiv="Content-Security-Policy" content="default-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' data: note-bg:;" />
+  <title>便签</title>
+  <link rel="stylesheet" href="styles.css" />
+</head>
+<body>
+  <div id="app">
+    <div id="bgLayer"></div>
+    <!-- 顶部标题栏 -->
+    <header id="titlebar">
+      <div class="tb-left">
+        <div class="brand-logo">▣</div>
+        <span class="brand-name">便签</span>
+        <span class="note-count" id="noteCount">0</span>
+      </div>
+      <div class="tb-center">
+        <div class="search-box">
+          <span class="search-icon">⌕</span>
+          <input id="searchInput" type="text" placeholder="搜索便签…" />
+          <button id="searchClear" class="icon-btn hidden" title="清除">✕</button>
+        </div>
+      </div>
+      <div class="tb-right">
+        <button class="tb-btn" id="btnAdd" title="新建便签 (Ctrl+Shift+N)">＋ 新建</button>
+        <button class="icon-btn" id="btnTheme" title="主题与外观">🎨</button>
+        <button class="icon-btn" id="btnMenu" title="更多">⋮</button>
+        <span class="tb-divider"></span>
+        <button class="icon-btn win-btn" id="btnPin" title="窗口置顶">📌</button>
+        <button class="icon-btn win-btn" id="btnMin" title="最小化">─</button>
+        <button class="icon-btn win-btn close" id="btnClose" title="关闭到托盘">✕</button>
+      </div>
+    </header>
+
+    <!-- 分组筛选栏 -->
+    <nav id="filterbar">
+      <button class="chip active" data-group="all">全部</button>
+      <button class="chip" data-group="ungrouped">未分组</button>
+      <span class="chip-sep"></span>
+      <div id="groupChips"></div>
+      <button class="chip add-chip" id="btnAddGroup" title="新建分组">＋ 分组</button>
+      <div class="view-toggle">
+        <button class="view-btn active" id="viewBoard" title="便签视图">▦</button>
+        <button class="view-btn" id="viewMemo" title="备忘录视图">☰</button>
+      </div>
+    </nav>
+
+    <!-- 便签画布 -->
+    <main id="canvas">
+      <div id="board"></div>
+      <div id="memoList" class="hidden"></div>
+      <div class="empty-hint hidden" id="emptyHint">
+        <div class="empty-icon">🗒️</div>
+        <p>还没有便签</p>
+        <p class="sub">双击空白处或点击右上角「＋ 新建」创建</p>
+      </div>
+    </main>
+  </div>
+
+  <!-- 设置面板 -->
+  <div id="settingsOverlay" class="hidden">
+    <aside id="settingsPanel">
+      <header class="sp-header">
+        <span>主题与外观</span>
+        <button class="icon-btn" id="btnCloseSettings">✕</button>
+      </header>
+      <div class="sp-body">
+        <section>
+          <h4>预设主题</h4>
+          <div class="theme-grid" id="themeGrid"></div>
+        </section>
+        <section>
+          <h4>强调色</h4>
+          <div class="swatch-row" id="accentSwatches"></div>
+          <label class="color-field">
+            <span>自定义</span>
+            <input type="color" id="customAccent" value="#6c5ce7" />
+          </label>
+        </section>
+        <section>
+          <h4>便签外观</h4>
+          <label class="field">
+            <span>便签不透明度</span>
+            <input type="range" id="noteOpacity" min="60" max="100" value="100" />
+          </label>
+          <label class="field">
+            <span>窗口不透明度</span>
+            <input type="range" id="winOpacity" min="50" max="100" value="100" />
+          </label>
+          <label class="field">
+            <span>字体大小</span>
+            <input type="range" id="fontSize" min="11" max="22" value="14" />
+          </label>
+          <label class="field">
+            <span>字体</span>
+            <select id="fontFamily">
+              <option value="system">系统默认</option>
+              <option value="'Segoe UI', sans-serif">Segoe UI</option>
+              <option value="'Microsoft YaHei', sans-serif">微软雅黑</option>
+              <option value="'KaiTi', 'STKaiti', serif">楷体</option>
+              <option value="'FangSong', 'STFangsong', serif">仿宋</option>
+              <option value="'Consolas', monospace">等宽 Consolas</option>
+            </select>
+          </label>
+          <label class="color-field">
+            <span>字体颜色</span>
+            <input type="color" id="noteTextColor" value="#2d2f38" />
+          </label>
+        </section>
+        <section>
+          <h4>画布背景</h4>
+          <label class="color-field">
+            <span>背景色</span>
+            <input type="color" id="canvasColor" value="#1e1f26" />
+          </label>
+          <label class="field">
+            <span>背景图片</span>
+            <select id="backgroundMode">
+              <option value="cover">填充</option>
+              <option value="contain">适应</option>
+              <option value="stretch">拉伸</option>
+              <option value="repeat">平铺</option>
+              <option value="center">居中</option>
+            </select>
+          </label>
+          <div class="bg-actions">
+            <button class="sp-btn" id="btnPickImage" style="width:auto;padding:8px 14px">选择图片…</button>
+            <button class="sp-btn ghost" id="btnClearImage" style="width:auto;padding:8px 14px">清除图片</button>
+          </div>
+          <button class="sp-btn" id="btnResetTheme">恢复默认</button>
+        </section>
+        <section>
+          <h4>顶栏与背景</h4>
+          <label class="color-field">
+            <span>顶栏底色</span>
+            <input type="color" id="topBarColor" value="#000000" />
+          </label>
+          <label class="field">
+            <span>顶栏透明度</span>
+            <input type="range" id="topBarOpacity" min="0" max="100" value="100" />
+          </label>
+          <label class="field">
+            <span>背景图片透明度</span>
+            <input type="range" id="bgOpacity" min="0" max="100" value="100" />
+          </label>
+        </section>
+      </div>
+    </aside>
+  </div>
+
+  <!-- 更多菜单 -->
+  <div id="menuOverlay" class="hidden">
+    <div id="menuPanel">
+      <button class="menu-item" id="btnExport">⬇ 导出备份</button>
+      <button class="menu-item" id="btnImport">⬆ 导入备份</button>
+      <button class="menu-item" id="btnArrange">▦ 整理排列</button>
+      <button class="menu-item danger" id="btnClearAll">🗑 清空全部便签</button>
+      <div class="menu-tip">快捷键：Ctrl+Shift+N 新建便签</div>
+    </div>
+  </div>
+
+  <!-- 提醒弹窗 -->
+  <div id="reminderOverlay" class="hidden">
+    <div id="reminderModal">
+      <header><span id="reminderTitle">设置提醒</span></header>
+      <div class="rm-body">
+        <input type="datetime-local" id="reminderInput" />
+      </div>
+      <footer>
+        <button class="sp-btn ghost" id="btnReminderCancel">取消</button>
+        <button class="sp-btn primary" id="btnReminderSave">确定</button>
+      </footer>
+    </div>
+  </div>
+
+  <div id="toast" class="hidden"></div>
+
+  <script src="app.js"></script>
+</body>
+</html>
