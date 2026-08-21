@@ -66,5 +66,17 @@ html, body {
 }
 .todo-add:hover { opacity: 1; }
 
+.note-images { display: flex; flex-direction: column; gap: 6px; margin-bottom: 6px; }
+.note-img-item { position: relative; display: inline-block; align-self: flex-start; max-width: 100%; cursor: pointer; outline: none; }
+.note-img-item img { display: block; max-width: 100%; border-radius: 6px; user-select: none; -webkit-user-drag: none; pointer-events: none; }
+.note-img-item.selected img { box-shadow: 0 0 0 2px var(--accent, #6c5ce7); }
+.note-img-item .img-del {
+  position: absolute; top: 4px; right: 4px; width: 20px; height: 20px; border-radius: 50%;
+  background: rgba(0,0,0,0.55); color: #fff; border: none; cursor: pointer; font-size: 11px; line-height: 1;
+  display: none; align-items: center; justify-content: center;
+}
+.note-img-item:hover .img-del { display: flex; }
+.note-img-item .img-resize { position: absolute; right: 0; bottom: 0; width: 18px; height: 18px; cursor: nwse-resize; }
+
 ::-webkit-scrollbar { width: 8px; }
 ::-webkit-scrollbar-thumb { background: rgba(127,127,127,0.35); border-radius: 999px; }

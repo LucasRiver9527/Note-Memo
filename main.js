@@ -1,4 +1,4 @@
-const { app, BrowserWindow, ipcMain, dialog, Notification, Tray, Menu, nativeImage, globalShortcut, screen, protocol, net, shell } = require('electron');
+const { app, BrowserWindow, ipcMain, dialog, Notification, Tray, Menu, nativeImage, globalShortcut, screen, protocol, net, shell, clipboard } = require('electron');
 const path = require('path');
 const fs = require('fs');
 const { pathToFileURL } = require('url');
@@ -25,6 +25,64 @@ function readData() {
 
 function writeData(data) {
   fs.writeFileSync(dataPath(), JSON.stringify(data, null, 2), 'utf-8');
+}
+
+function clipboardImageToDataUrl() {
+  const img = clipboard.readImage();
+  if (!img.isEmpty()) return img.toDataURL();
+
+  let filePath = null;
+
+  // 1) 资源管理器复制文件 -> CF_HDROP
+  try {
+    const buf = clipboard.readBuffer('CF_HDROP');
+    if (buf && buf.length > 16) {
+      const pFiles = buf.readUInt32LE(0);
+      const fWide = buf.readUInt32LE(16) !== 0;
+      const list = buf.slice(pFiles);
+      const str = fWide ? list.toString('utf16le') : list.toString('latin1');
+      filePath = str.split('\0').find((p) => p && p.length > 1);
+    }
+  } catch (e) { /* ignore */ }
+
+  // 2) FileNameW
+  if (!filePath) {
+    try {
+      const buf = clipboard.readBuffer('FileNameW');
+      if (buf && buf.length) {
+        const str = buf.toString('utf16le');
+        filePath = str.split('\0').find((p) => p && p.length > 1);
+      }
+    } catch (e) { /* ignore */ }
+  }
+
+  // 3) 复制单个图片文件时，CF_UNICODETEXT 就是文件路径
+  if (!filePath) {
+    try {
+      const t = (clipboard.readText() || '').trim().replace(/^"(.*)"$/, '$1');
+      if (t && /^file:\/\/\//i.test(t)) {
+        try { filePath = decodeURIComponent(t.replace(/^file:\/\/\//i, '')); } catch (e) { filePath = t.replace(/^file:\/\/\//i, ''); }
+      } else if (t && /^[a-zA-Z]:[\\/]/.test(t) && fs.existsSync(t)) {
+        filePath = t;
+      }
+    } catch (e) { /* ignore */ }
+  }
+
+  if (!filePath) return null;
+  const lowerPath = filePath.toLowerCase();
+  const imageExts = ['.png', '.jpg', '.jpeg', '.gif', '.webp', '.bmp'];
+  if (!imageExts.some((e) => lowerPath.endsWith(e))) return null;
+  try {
+    const mime = lowerPath.endsWith('.jpg') || lowerPath.endsWith('.jpeg') ? 'image/jpeg'
+      : lowerPath.endsWith('.gif') ? 'image/gif'
+      : lowerPath.endsWith('.webp') ? 'image/webp'
+      : lowerPath.endsWith('.bmp') ? 'image/bmp'
+      : 'image/png';
+    const data = fs.readFileSync(filePath);
+    return 'data:' + mime + ';base64,' + data.toString('base64');
+  } catch (e) {
+    return null;
+  }
 }
 
 function createWindow() {
@@ -62,6 +120,13 @@ function createWindow() {
       e.preventDefault();
       mainWindow.hide();
     }
+  });
+
+  mainWindow.on('maximize', () => {
+    mainWindow.webContents.send('window:maximized', true);
+  });
+  mainWindow.on('unmaximize', () => {
+    mainWindow.webContents.send('window:maximized', false);
   });
 
   mainWindow.on('closed', () => {
@@ -186,7 +251,7 @@ function scheduleReminders(notes) {
 
 function fireReminder(note) {
   recentlyFired.add(note.id);
-  const title = note.title ? note.title : '便签提醒';
+  const title = note.title ? note.title : '待办提醒';
   const body = note.type === 'todo'
     ? (note.items || []).filter((i) => !i.done).map((i) => i.text).join('\n')
     : (note.content || '').slice(0, 200);
@@ -275,6 +340,43 @@ function setupIpc() {
     }
   });
 
+  ipcMain.handle('dialog:choose-directory', async () => {
+    const result = await dialog.showOpenDialog(mainWindow, {
+      title: '选择备份文件夹',
+      properties: ['openDirectory', 'createDirectory']
+    });
+    if (result.canceled || !result.filePaths.length) return { ok: false, canceled: true };
+    return { ok: true, path: result.filePaths[0] };
+  });
+
+  ipcMain.handle('backup:export', async (e, data, dir) => {
+    try {
+      let target = dir;
+      if (!target) target = path.join(app.getPath('userData'), 'backups');
+      if (!fs.existsSync(target)) fs.mkdirSync(target, { recursive: true });
+      const stamp = new Date();
+      const pad = (x) => String(x).padStart(2, '0');
+      const name = `便签备份-${stamp.getFullYear()}${pad(stamp.getMonth() + 1)}${pad(stamp.getDate())}-${pad(stamp.getHours())}${pad(stamp.getMinutes())}${pad(stamp.getSeconds())}.json`;
+      const file = path.join(target, name);
+      fs.writeFileSync(file, JSON.stringify(data, null, 2), 'utf-8');
+      return { ok: true, path: file };
+    } catch (err) {
+      return { ok: false, error: err.message };
+    }
+  });
+
+  ipcMain.handle('backup:open-dir', async (e, dir) => {
+    try {
+      let target = dir;
+      if (!target) target = path.join(app.getPath('userData'), 'backups');
+      if (!fs.existsSync(target)) fs.mkdirSync(target, { recursive: true });
+      const err = await shell.openPath(target);
+      return { ok: !err, error: err || '' };
+    } catch (err) {
+      return { ok: false, error: err.message };
+    }
+  });
+
   ipcMain.handle('dialog:pick-image', async () => {
     const result = await dialog.showOpenDialog(mainWindow, {
       title: '选择背景图片',
@@ -291,6 +393,64 @@ function setupIpc() {
       const dest = path.join(bgDir, name);
       fs.copyFileSync(src, dest);
       return { ok: true, url: 'note-bg://local/' + encodeURIComponent(name) };
+    } catch (err) {
+      return { ok: false, error: err.message };
+    }
+  });
+
+  ipcMain.handle('note:save-image', async (e, dataUrl) => {
+    try {
+      const m = /^data:image\/(png|jpe?g|gif|webp|bmp);base64,(.+)$/.exec(String(dataUrl || ''));
+      if (!m) return { ok: false, error: 'unsupported image' };
+      const ext = m[1] === 'jpeg' ? 'jpg' : m[1];
+      const imgDir = path.join(app.getPath('userData'), 'images');
+      if (!fs.existsSync(imgDir)) fs.mkdirSync(imgDir, { recursive: true });
+      const name = 'img-' + Date.now() + '-' + Math.random().toString(36).slice(2, 8) + '.' + ext;
+      fs.writeFileSync(path.join(imgDir, name), Buffer.from(m[2], 'base64'));
+      return { ok: true, url: 'note-img://local/' + encodeURIComponent(name) };
+    } catch (err) {
+      return { ok: false, error: err.message };
+    }
+  });
+
+  ipcMain.handle('dialog:pick-note-image', async () => {
+    const result = await dialog.showOpenDialog(mainWindow, {
+      title: '选择图片',
+      properties: ['openFile'],
+      filters: [{ name: '图片', extensions: ['png', 'jpg', 'jpeg', 'gif', 'webp', 'bmp'] }]
+    });
+    if (result.canceled || !result.filePaths.length) return { ok: false, canceled: true };
+    try {
+      const src = result.filePaths[0];
+      const ext = (path.extname(src) || '.png').toLowerCase();
+      const imgDir = path.join(app.getPath('userData'), 'images');
+      if (!fs.existsSync(imgDir)) fs.mkdirSync(imgDir, { recursive: true });
+      const name = 'img-' + Date.now() + '-' + Math.random().toString(36).slice(2, 8) + ext;
+      fs.copyFileSync(src, path.join(imgDir, name));
+      return { ok: true, url: 'note-img://local/' + encodeURIComponent(name) };
+    } catch (err) {
+      return { ok: false, error: err.message };
+    }
+  });
+
+  ipcMain.handle('dialog:pick-font', async () => {
+    const result = await dialog.showOpenDialog(mainWindow, {
+      title: '选择字体文件',
+      properties: ['openFile'],
+      filters: [{ name: '字体文件', extensions: ['ttf', 'otf', 'woff', 'woff2'] }]
+    });
+    if (result.canceled || !result.filePaths.length) return { ok: false, canceled: true };
+    try {
+      const src = result.filePaths[0];
+      const ext = (path.extname(src) || '.ttf').toLowerCase();
+      const fontDir = path.join(app.getPath('userData'), 'fonts');
+      if (!fs.existsSync(fontDir)) fs.mkdirSync(fontDir, { recursive: true });
+      const id = 'cf' + Date.now().toString(36) + Math.random().toString(36).slice(2, 6);
+      const family = 'CustomFont-' + id;
+      const name = family + ext;
+      fs.copyFileSync(src, path.join(fontDir, name));
+      const baseName = path.basename(src, ext);
+      return { ok: true, id, name: baseName, family, url: 'note-font://local/' + encodeURIComponent(name) };
     } catch (err) {
       return { ok: false, error: err.message };
     }
@@ -336,18 +496,34 @@ function setupIpc() {
     detachedWindows.clear();
     return true;
   });
-  ipcMain.handle('open-external', (e, url) => {
-    if (typeof url === 'string' && /^https?:\/\//i.test(url)) {
-      shell.openExternal(url);
+  ipcMain.handle('open-external', async (e, url) => {
+    try {
+      if (typeof url !== 'string' || !url.trim()) return false;
+      let u = url.trim();
+      if (!/^[a-zA-Z][a-zA-Z0-9+.-]*:\/\//.test(u)) u = 'http://' + u;
+      await shell.openExternal(u);
       return true;
+    } catch (err) {
+      return false;
     }
-    return false;
+  });
+
+  ipcMain.handle('clipboard:read-text', () => clipboard.readText());
+  ipcMain.handle('clipboard:read-image', () => clipboardImageToDataUrl());
+  ipcMain.handle('clipboard:write-text', (e, text) => {
+    clipboard.writeText(String(text || ''));
+    return true;
   });
 
   // Window controls
   ipcMain.on('window:minimize', () => mainWindow && mainWindow.minimize());
   ipcMain.on('window:hide', () => mainWindow && mainWindow.hide());
   ipcMain.on('window:close', () => mainWindow && mainWindow.hide());
+  ipcMain.on('window:maximize', () => {
+    if (!mainWindow) return;
+    if (mainWindow.isMaximized()) mainWindow.unmaximize();
+    else mainWindow.maximize();
+  });
   ipcMain.on('window:always-on-top', (e, flag) => {
     if (mainWindow) mainWindow.setAlwaysOnTop(!!flag);
   });
@@ -378,6 +554,28 @@ if (!gotLock) {
         const url = new URL(request.url);
         const name = path.basename(url.pathname);
         const file = path.join(app.getPath('userData'), 'backgrounds', name);
+        return net.fetch(pathToFileURL(file).toString());
+      } catch (e) {
+        return new Response('Not Found', { status: 404 });
+      }
+    });
+
+    protocol.handle('note-img', (request) => {
+      try {
+        const url = new URL(request.url);
+        const name = path.basename(url.pathname);
+        const file = path.join(app.getPath('userData'), 'images', name);
+        return net.fetch(pathToFileURL(file).toString());
+      } catch (e) {
+        return new Response('Not Found', { status: 404 });
+      }
+    });
+
+    protocol.handle('note-font', (request) => {
+      try {
+        const url = new URL(request.url);
+        const name = path.basename(url.pathname);
+        const file = path.join(app.getPath('userData'), 'fonts', name);
         return net.fetch(pathToFileURL(file).toString());
       } catch (e) {
         return new Response('Not Found', { status: 404 });

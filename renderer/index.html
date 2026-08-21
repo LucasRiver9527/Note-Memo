@@ -2,175 +2,289 @@
 <html lang="zh-CN">
 <head>
   <meta charset="UTF-8" />
-  <meta http-equiv="Content-Security-Policy" content="default-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' data: note-bg:;" />
+  <meta http-equiv="Content-Security-Policy" content="default-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' data: note-bg: note-img:; font-src 'self' data: note-font:;" />
   <title>便签</title>
   <link rel="stylesheet" href="styles.css" />
 </head>
 <body>
   <div id="app">
     <div id="bgLayer"></div>
-    <!-- 顶部标题栏 -->
     <header id="titlebar">
       <div class="tb-left">
         <div class="brand-logo">▣</div>
-        <span class="brand-name">便签</span>
+        <span class="brand-name" data-i18n="app_name">便签</span>
         <span class="note-count" id="noteCount">0</span>
       </div>
       <div class="tb-center">
         <div class="search-box">
           <span class="search-icon">⌕</span>
-          <input id="searchInput" type="text" placeholder="搜索便签…" />
-          <button id="searchClear" class="icon-btn hidden" title="清除">✕</button>
+          <input id="searchInput" type="text" data-i18n-placeholder="search" placeholder="搜索便签…" />
+          <button id="searchClear" class="icon-btn hidden" data-i18n-title="clear" title="清除">✕</button>
         </div>
       </div>
       <div class="tb-right">
-        <button class="tb-btn" id="btnAdd" title="新建便签 (Ctrl+Shift+N)">＋ 新建</button>
-        <button class="icon-btn" id="btnTheme" title="主题与外观">🎨</button>
-        <button class="icon-btn" id="btnMenu" title="更多">⋮</button>
+        <button class="tb-btn" id="btnAdd" data-i18n="new_note" data-i18n-title="new_note_tip" title="新建便签 (Ctrl+Shift+N)">＋ 新建</button>
+        <button class="tb-btn secondary" id="btnQuickArrange" data-i18n="quick_arrange" data-i18n-title="quick_arrange" title="一键整理">⚡ 一键整理</button>
+        <button class="icon-btn" id="btnSettings" data-i18n-title="global_settings" title="全局设置">⚙</button>
         <span class="tb-divider"></span>
-        <button class="icon-btn win-btn" id="btnPin" title="窗口置顶">📌</button>
-        <button class="icon-btn win-btn" id="btnMin" title="最小化">─</button>
-        <button class="icon-btn win-btn close" id="btnClose" title="关闭到托盘">✕</button>
+        <button class="icon-btn win-btn" id="btnPin" data-i18n-title="always_on_top" title="窗口置顶">📌</button>
+        <button class="icon-btn win-btn" id="btnMin" data-i18n-title="minimize" title="最小化">─</button>
+        <button class="icon-btn win-btn" id="btnMax" data-i18n-title="maximize" title="最大化"></button>
+        <button class="icon-btn win-btn close" id="btnClose" data-i18n-title="close" title="关闭到托盘">✕</button>
       </div>
     </header>
 
-    <!-- 分组筛选栏 -->
     <nav id="filterbar">
-      <button class="chip active" data-group="all">全部</button>
-      <button class="chip" data-group="ungrouped">未分组</button>
+      <button class="chip active" data-group="all" data-i18n="all">全部</button>
+      <button class="chip" data-group="ungrouped" data-i18n="ungrouped">未分组</button>
       <span class="chip-sep"></span>
       <div id="groupChips"></div>
-      <button class="chip add-chip" id="btnAddGroup" title="新建分组">＋ 分组</button>
+      <button class="chip add-chip" id="btnAddGroup" data-i18n="add_group" data-i18n-title="new_group" title="新建分组">＋ 分组</button>
       <div class="view-toggle">
-        <button class="view-btn active" id="viewBoard" title="便签视图">▦</button>
-        <button class="view-btn" id="viewMemo" title="备忘录视图">☰</button>
+        <button class="view-btn active" id="viewBoard" data-i18n-title="board_view" title="便签视图">▦</button>
+        <button class="view-btn" id="viewMemo" data-i18n-title="memo_view" title="备忘录视图">☰</button>
+        <button class="view-btn" id="viewTodo" data-i18n-title="todo_view" title="待办区">✓</button>
       </div>
     </nav>
 
-    <!-- 便签画布 -->
     <main id="canvas">
       <div id="board"></div>
       <div id="memoList" class="hidden"></div>
+      <div id="todoList" class="hidden"></div>
       <div class="empty-hint hidden" id="emptyHint">
         <div class="empty-icon">🗒️</div>
-        <p>还没有便签</p>
-        <p class="sub">双击空白处或点击右上角「＋ 新建」创建</p>
+        <p data-i18n="no_notes">还没有便签</p>
+        <p class="sub" data-i18n="no_notes_sub">双击空白处或点击右上角「＋ 新建」创建</p>
       </div>
     </main>
   </div>
 
-  <!-- 设置面板 -->
+  <!-- 全局设置面板 -->
   <div id="settingsOverlay" class="hidden">
     <aside id="settingsPanel">
       <header class="sp-header">
-        <span>主题与外观</span>
+        <span data-i18n="settings_title">⚙ 全局设置</span>
         <button class="icon-btn" id="btnCloseSettings">✕</button>
       </header>
-      <div class="sp-body">
-        <section>
-          <h4>预设主题</h4>
-          <div class="theme-grid" id="themeGrid"></div>
-        </section>
-        <section>
-          <h4>强调色</h4>
-          <div class="swatch-row" id="accentSwatches"></div>
-          <label class="color-field">
-            <span>自定义</span>
-            <input type="color" id="customAccent" value="#6c5ce7" />
-          </label>
-        </section>
-        <section>
-          <h4>便签外观</h4>
-          <label class="field">
-            <span>便签不透明度</span>
-            <input type="range" id="noteOpacity" min="60" max="100" value="100" />
-          </label>
-          <label class="field">
-            <span>窗口不透明度</span>
-            <input type="range" id="winOpacity" min="50" max="100" value="100" />
-          </label>
-          <label class="field">
-            <span>字体大小</span>
-            <input type="range" id="fontSize" min="11" max="22" value="14" />
-          </label>
-          <label class="field">
-            <span>字体</span>
-            <select id="fontFamily">
-              <option value="system">系统默认</option>
-              <option value="'Segoe UI', sans-serif">Segoe UI</option>
-              <option value="'Microsoft YaHei', sans-serif">微软雅黑</option>
-              <option value="'KaiTi', 'STKaiti', serif">楷体</option>
-              <option value="'FangSong', 'STFangsong', serif">仿宋</option>
-              <option value="'Consolas', monospace">等宽 Consolas</option>
-            </select>
-          </label>
-          <label class="color-field">
-            <span>字体颜色</span>
-            <input type="color" id="noteTextColor" value="#2d2f38" />
-          </label>
-        </section>
-        <section>
-          <h4>画布背景</h4>
-          <label class="color-field">
-            <span>背景色</span>
-            <input type="color" id="canvasColor" value="#1e1f26" />
-          </label>
-          <label class="field">
-            <span>背景图片</span>
-            <select id="backgroundMode">
-              <option value="cover">填充</option>
-              <option value="contain">适应</option>
-              <option value="stretch">拉伸</option>
-              <option value="repeat">平铺</option>
-              <option value="center">居中</option>
-            </select>
-          </label>
-          <div class="bg-actions">
-            <button class="sp-btn" id="btnPickImage" style="width:auto;padding:8px 14px">选择图片…</button>
-            <button class="sp-btn ghost" id="btnClearImage" style="width:auto;padding:8px 14px">清除图片</button>
-          </div>
-          <button class="sp-btn" id="btnResetTheme">恢复默认</button>
-        </section>
-        <section>
-          <h4>顶栏与背景</h4>
-          <label class="color-field">
-            <span>顶栏底色</span>
-            <input type="color" id="topBarColor" value="#000000" />
-          </label>
-          <label class="field">
-            <span>顶栏透明度</span>
-            <input type="range" id="topBarOpacity" min="0" max="100" value="100" />
-          </label>
-          <label class="field">
-            <span>背景图片透明度</span>
-            <input type="range" id="bgOpacity" min="0" max="100" value="100" />
-          </label>
-        </section>
+      <div class="sp-layout">
+        <nav class="sp-nav">
+          <button class="sp-nav-item active" data-tab="appearance" data-i18n="tab_appearance">🎨 外观</button>
+          <button class="sp-nav-item" data-tab="font" data-i18n="tab_font">🔤 字体</button>
+          <button class="sp-nav-item" data-tab="sort" data-i18n="tab_sort">↕ 排序</button>
+          <button class="sp-nav-item" data-tab="backup" data-i18n="tab_backup">⬇ 备份</button>
+          <button class="sp-nav-item" data-tab="trash" data-i18n="tab_trash">🗑 回收站</button>
+          <button class="sp-nav-item" data-tab="data" data-i18n="tab_data">📦 数据</button>
+        </nav>
+
+        <div class="sp-content">
+          <!-- 外观 -->
+          <section class="sp-tab" data-tab="appearance">
+            <h4 data-i18n="mode">模式</h4>
+            <div class="seg-row" id="modeSeg">
+              <button class="seg" data-mode="auto" data-i18n="mode_auto">跟随主题</button>
+              <button class="seg" data-mode="light" data-i18n="mode_light">普通（浅色）</button>
+              <button class="seg" data-mode="dark" data-i18n="mode_dark">夜间（深色）</button>
+            </div>
+
+            <h4 data-i18n="theme">主题</h4>
+            <div class="theme-grid" id="themeGrid"></div>
+
+            <h4 data-i18n="accent">强调色</h4>
+            <div class="swatch-row" id="accentSwatches"></div>
+            <label class="color-field">
+              <span data-i18n="custom">自定义</span>
+              <input type="color" id="customAccent" value="#6c5ce7" />
+            </label>
+
+            <h4 data-i18n="note_appearance">便签外观</h4>
+            <label class="field">
+              <span data-i18n="note_opacity">便签不透明度</span>
+              <input type="range" id="noteOpacity" min="60" max="100" value="100" />
+            </label>
+            <label class="field">
+              <span data-i18n="win_opacity">窗口不透明度</span>
+              <input type="range" id="winOpacity" min="50" max="100" value="100" />
+            </label>
+
+            <h4 data-i18n="canvas_bg">画布背景</h4>
+            <label class="color-field">
+              <span data-i18n="bg_color">背景色</span>
+              <input type="color" id="canvasColor" value="#1e1f26" />
+            </label>
+            <label class="field">
+              <span data-i18n="bg_image">背景图片</span>
+              <select id="backgroundMode">
+                <option value="cover" data-i18n="bg_fill">填充</option>
+                <option value="contain" data-i18n="bg_fit">适应</option>
+                <option value="stretch" data-i18n="bg_stretch">拉伸</option>
+                <option value="repeat" data-i18n="bg_tile">平铺</option>
+                <option value="center" data-i18n="bg_center">居中</option>
+              </select>
+            </label>
+            <div class="bg-actions">
+              <button class="sp-btn" id="btnPickImage" data-i18n="pick_image" style="width:auto;padding:8px 14px">选择图片…</button>
+              <button class="sp-btn ghost" id="btnClearImage" data-i18n="clear_image" style="width:auto;padding:8px 14px">清除图片</button>
+            </div>
+
+            <h4 data-i18n="topbar_bg">顶栏与背景</h4>
+            <label class="color-field">
+              <span data-i18n="topbar_color">顶栏底色</span>
+              <input type="color" id="topBarColor" value="#000000" />
+            </label>
+            <label class="field">
+              <span data-i18n="topbar_opacity">顶栏透明度</span>
+              <input type="range" id="topBarOpacity" min="0" max="100" value="100" />
+            </label>
+            <label class="field">
+              <span data-i18n="bg_opacity">背景图片透明度</span>
+              <input type="range" id="bgOpacity" min="0" max="100" value="100" />
+            </label>
+
+            <h4 data-i18n="todo_area">待办区</h4>
+            <p class="sp-hint" data-i18n="todo_area_hint">待办区各区域底色默认跟随主题，可自定义颜色与透明度。</p>
+            <label class="color-field">
+              <span data-i18n="search_bg">搜索框底色</span>
+              <input type="color" id="todoSearchColor" value="#6b6c76" />
+            </label>
+            <label class="field">
+              <span data-i18n="search_opacity">搜索框透明度</span>
+              <input type="range" id="todoSearchOpacity" min="0" max="100" value="100" />
+            </label>
+            <label class="color-field">
+              <span data-i18n="items_bg">待办事项底色</span>
+              <input type="color" id="todoItemsColor" value="#6b6c76" />
+            </label>
+            <label class="field">
+              <span data-i18n="items_opacity">待办事项透明度</span>
+              <input type="range" id="todoItemsOpacity" min="0" max="100" value="100" />
+            </label>
+            <label class="color-field">
+              <span data-i18n="remind_bg">时间待办底色</span>
+              <input type="color" id="todoRemindColor" value="#6b6c76" />
+            </label>
+            <label class="field">
+              <span data-i18n="remind_opacity">时间待办透明度</span>
+              <input type="range" id="todoRemindOpacity" min="0" max="100" value="100" />
+            </label>
+            <button class="sp-btn ghost" id="btnResetTodoArea" data-i18n="reset_todo">恢复待办区默认（跟随主题）</button>
+
+            <button class="sp-btn ghost" id="btnResetTheme" data-i18n="reset_theme">恢复默认外观</button>
+          </section>
+
+          <!-- 字体 -->
+          <section class="sp-tab hidden" data-tab="font">
+            <label class="field">
+              <span data-i18n="font_family">字体</span>
+              <select id="fontFamily"></select>
+            </label>
+            <label class="field">
+              <span data-i18n="font_size">字体大小</span>
+              <input type="range" id="fontSize" min="11" max="22" value="14" />
+            </label>
+            <label class="color-field">
+              <span data-i18n="font_color">字体颜色</span>
+              <input type="color" id="noteTextColor" value="#2d2f38" />
+            </label>
+            <div class="bg-actions" style="margin-bottom:12px">
+              <button class="sp-btn ghost" id="btnResetFontColor" style="width:auto;padding:8px 14px" data-i18n="font_color_follow">跟随主题</button>
+            </div>
+            <p class="sp-hint" data-i18n="font_color_hint">字体颜色应用到便签内容与界面文字；选择默认则跟随主题。</p>
+
+            <h4 data-i18n="custom_fonts">自定义字体</h4>
+            <p class="sp-hint" data-i18n="custom_fonts_hint">可导入你下载的字体文件（.ttf/.otf/.woff），内置字体不可删除。</p>
+            <button class="sp-btn ghost" id="btnAddFont" style="width:auto">＋ <span data-i18n="add_font">添加字体</span>…</button>
+            <div class="font-list" id="fontList"></div>
+          </section>
+
+          <!-- 排序 -->
+          <section class="sp-tab hidden" data-tab="sort">
+            <h4 data-i18n="sort_mode">排序方式</h4>
+            <label class="field">
+              <span data-i18n="sort_mode">便签排序</span>
+              <select id="sortMode">
+                <option value="custom" data-i18n="sort_custom">自定义顺序</option>
+                <option value="updated" data-i18n="sort_updated">按更新时间</option>
+                <option value="created" data-i18n="sort_created">按创建时间</option>
+                <option value="title" data-i18n="sort_title">按标题</option>
+                <option value="color" data-i18n="sort_color">按颜色</option>
+              </select>
+            </label>
+            <p class="sp-hint" id="sortHint" data-i18n="sort_hint">排序在「备忘录」和「待办」视图中生效；选择「自定义顺序」后可拖动下方便签调整顺序。</p>
+            <h4 data-i18n="custom_order">自定义顺序</h4>
+            <div class="sort-list" id="sortList"></div>
+          </section>
+
+          <!-- 备份 -->
+          <section class="sp-tab hidden" data-tab="backup">
+            <h4 data-i18n="backup_folder">备份文件夹</h4>
+            <p class="sp-hint" data-i18n="backup_hint">设置一个专门的备份文件夹，「一键导出」会把备份文件保存到该文件夹内。</p>
+            <div class="dir-row">
+              <input id="backupDir" type="text" data-i18n-placeholder="backup_dir_placeholder" placeholder="默认：应用数据目录/backups" spellcheck="false" />
+              <button class="sp-btn ghost" id="btnChooseDir" data-i18n="choose" style="width:auto;padding:8px 12px">选择…</button>
+            </div>
+            <div class="bg-actions" style="margin-top:10px">
+              <button class="sp-btn" id="btnBackupNow" data-i18n="backup_now">⬇ 一键导出</button>
+              <button class="sp-btn ghost" id="btnOpenDir" data-i18n="open_folder" style="width:auto">打开文件夹</button>
+            </div>
+            <h4 data-i18n="more">更多</h4>
+            <div class="stack">
+              <button class="sp-btn ghost" id="btnExport" data-i18n="export_as">导出到指定位置…</button>
+              <button class="sp-btn ghost" id="btnImport" data-i18n="import">导入备份…</button>
+            </div>
+          </section>
+
+          <!-- 回收站 -->
+          <section class="sp-tab hidden" data-tab="trash">
+            <h4 data-i18n="recycle_bin">回收站</h4>
+            <label class="field">
+              <span data-i18n="keep_days">保留天数</span>
+              <select id="trashDays">
+                <option value="0" data-i18n="forever">永久保留</option>
+                <option value="1">1</option>
+                <option value="3">3</option>
+                <option value="7">7</option>
+                <option value="14">14</option>
+                <option value="30">30</option>
+              </select>
+            </label>
+            <p class="sp-hint" data-i18n="trash_hint">删除的便签会先进入回收站，超过保留天数后自动彻底删除。</p>
+            <button class="sp-btn ghost danger" id="btnEmptyTrash" data-i18n="empty_trash">🗑 清空回收站</button>
+            <div class="trash-list" id="trashList"></div>
+          </section>
+
+          <!-- 数据 -->
+          <section class="sp-tab hidden" data-tab="data">
+            <h4>语言 / Language</h4>
+            <label class="field">
+              <span data-i18n="language">语言</span>
+              <select id="languageSelect">
+                <option value="zh">简体中文</option>
+                <option value="en">English</option>
+              </select>
+            </label>
+
+            <h4 data-i18n="organize">整理与清空</h4>
+            <div class="stack">
+              <button class="sp-btn ghost" id="btnArrange" data-i18n="arrange">▦ 整理排列便签</button>
+              <button class="sp-btn ghost danger" id="btnClearAll" data-i18n="clear_all">🗑 清空全部便签</button>
+            </div>
+            <p class="sp-hint" data-i18n="clear_all_hint">清空全部便签会将其移入回收站，可在回收站中恢复。</p>
+          </section>
+        </div>
       </div>
     </aside>
   </div>
 
-  <!-- 更多菜单 -->
-  <div id="menuOverlay" class="hidden">
-    <div id="menuPanel">
-      <button class="menu-item" id="btnExport">⬇ 导出备份</button>
-      <button class="menu-item" id="btnImport">⬆ 导入备份</button>
-      <button class="menu-item" id="btnArrange">▦ 整理排列</button>
-      <button class="menu-item danger" id="btnClearAll">🗑 清空全部便签</button>
-      <div class="menu-tip">快捷键：Ctrl+Shift+N 新建便签</div>
-    </div>
-  </div>
-
-  <!-- 提醒弹窗 -->
+  <!-- 待办提醒弹窗 -->
   <div id="reminderOverlay" class="hidden">
     <div id="reminderModal">
-      <header><span id="reminderTitle">设置提醒</span></header>
+      <header><span id="reminderTitle" data-i18n="set_todo_time">设置待办时间</span></header>
       <div class="rm-body">
         <input type="datetime-local" id="reminderInput" />
       </div>
       <footer>
-        <button class="sp-btn ghost" id="btnReminderCancel">取消</button>
-        <button class="sp-btn primary" id="btnReminderSave">确定</button>
+        <button class="sp-btn ghost" id="btnReminderCancel" data-i18n="cancel">取消</button>
+        <button class="sp-btn primary" id="btnReminderSave" data-i18n="ok">确定</button>
       </footer>
     </div>
   </div>
