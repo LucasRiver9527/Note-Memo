@@ -128,7 +128,8 @@ const I18N = {
     built_in: '内置',
     today: '今天', open_link: '打开链接', up: '上移', down: '下移', restore_note: '恢复', delete_forever: '彻底删除', deleted_at: '删除于 ', empty_item: '（空）',
     left_click_filter: '左键筛选 · 右键编辑分组', delete_link: '打开链接', trash_empty: '回收站是空的', toast_set_fail: '设置失败：',
-    copy: '复制', cut: '剪切', paste: '粘贴', select_all: '全选', toast_saved: '已保存'
+    copy: '复制', cut: '剪切', paste: '粘贴', select_all: '全选', toast_saved: '已保存',
+    about: '关于', changelog_title: '更新说明', changelog_open: '✨ 查看更新说明', got_it: '知道了'
   },
   en: {
     app_name: 'Notes',
@@ -183,13 +184,42 @@ const I18N = {
     built_in: 'Built-in',
     today: 'Today', open_link: 'Open link', up: 'Move up', down: 'Move down', restore_note: 'Restore', delete_forever: 'Delete forever', deleted_at: 'Deleted ', empty_item: '(empty)',
     left_click_filter: 'Left-click filter · Right-click edit', delete_link: 'Open link', trash_empty: 'Recycle bin is empty', toast_set_fail: 'Setting failed: ',
-    copy: 'Copy', cut: 'Cut', paste: 'Paste', select_all: 'Select all', toast_saved: 'Saved'
+    copy: 'Copy', cut: 'Cut', paste: 'Paste', select_all: 'Select all', toast_saved: 'Saved',
+    about: 'About', changelog_title: "What's New", changelog_open: '✨ View changelog', got_it: 'Got it'
   }
 };
 
 function t(key) {
   const lang = (state && state.settings && state.settings.language) || 'zh';
   return (I18N[lang] && I18N[lang][key]) || I18N.zh[key] || key;
+}
+
+const CHANGELOG = [
+  { zh: '全新设置中心：外观、字体、排序、备份、回收站、数据，一个面板全搞定', en: 'New settings center: appearance, font, sort, backup, recycle bin and data in one panel' },
+  { zh: '支持简体中文 / English 双语界面', en: 'Bilingual UI: Simplified Chinese / English' },
+  { zh: '便签可插入图片：粘贴、选图、拖拽调整大小', en: 'Insert images into notes: paste, pick, or drag to resize' },
+  { zh: '可导入自定义字体文件（.ttf / .otf / .woff）', en: 'Import custom font files (.ttf / .otf / .woff)' },
+  { zh: '新增「待办区」视图，集中管理待办与时间提醒', en: 'New Todo view to manage todos and reminders in one place' },
+  { zh: '一键导出备份，可自选备份文件夹', en: 'One-click backup export with a custom folder' },
+  { zh: '回收站：误删可恢复，到期自动清理', en: 'Recycle bin: restore deleted notes, auto cleanup' },
+  { zh: '一键整理便签，多种排序方式', en: 'One-click arrange and multiple sort options' }
+];
+
+const APP_VERSION = '1.1.0';
+
+function renderChangelog() {
+  const lang = (state && state.settings && state.settings.language) || 'zh';
+  const list = $('#changelogList');
+  list.innerHTML = CHANGELOG.map((c) => `<li>${c[lang] || c.zh}</li>`).join('');
+}
+
+function openChangelog() {
+  renderChangelog();
+  $('#changelogOverlay').classList.remove('hidden');
+}
+
+function closeChangelog() {
+  $('#changelogOverlay').classList.add('hidden');
 }
 
 let state = {
@@ -2174,6 +2204,10 @@ function bindUI() {
   $('#btnCloseSettings').onclick = () => $('#settingsOverlay').classList.add('hidden');
   $('#settingsOverlay').onclick = (e) => { if (e.target.id === 'settingsOverlay') $('#settingsOverlay').classList.add('hidden'); };
 
+  $('#btnChangelog').onclick = openChangelog;
+  $('#btnChangelogClose').onclick = closeChangelog;
+  $('#changelogOverlay').onclick = (e) => { if (e.target.id === 'changelogOverlay') closeChangelog(); };
+
   $$('.sp-nav-item').forEach((b) => { b.onclick = () => switchTab(b.dataset.tab); });
 
   $$('#modeSeg .seg').forEach((b) => {
@@ -2505,6 +2539,13 @@ async function init() {
   applyCustomFonts();
   applyTheme();
   applyLanguage();
+
+  if (!state.settings.lastSeenVersion || state.settings.lastSeenVersion !== APP_VERSION) {
+    state.settings.lastSeenVersion = APP_VERSION;
+    save();
+    openChangelog();
+  }
+
   syncSettingsInputs();
   renderThemePanel();
   renderGroupChips();

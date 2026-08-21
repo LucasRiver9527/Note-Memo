@@ -269,6 +269,11 @@
               <button class="sp-btn ghost danger" id="btnClearAll" data-i18n="clear_all">🗑 清空全部便签</button>
             </div>
             <p class="sp-hint" data-i18n="clear_all_hint">清空全部便签会将其移入回收站，可在回收站中恢复。</p>
+
+            <h4 data-i18n="about">关于</h4>
+            <div class="stack">
+              <button class="sp-btn ghost" id="btnChangelog" data-i18n="changelog_open">✨ 查看更新说明</button>
+            </div>
           </section>
         </div>
       </div>
@@ -290,6 +295,22 @@
   </div>
 
   <div id="toast" class="hidden"></div>
+
+  <!-- 更新说明弹窗 -->
+  <div id="changelogOverlay" class="hidden">
+    <div id="changelogModal">
+      <header>
+        <span data-i18n="changelog_title">更新说明</span>
+        <span class="cl-ver">v1.1.0</span>
+      </header>
+      <div class="cl-body">
+        <ul id="changelogList"></ul>
+      </div>
+      <footer>
+        <button class="sp-btn primary" id="btnChangelogClose" data-i18n="got_it">知道了</button>
+      </footer>
+    </div>
+  </div>
 
   <script src="app.js"></script>
 </body>
