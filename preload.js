@@ -1,4 +1,4 @@
-const { contextBridge, ipcRenderer } = require('electron');
+const { contextBridge, ipcRenderer, webUtils } = require('electron');
 
 contextBridge.exposeInMainWorld('api', {
   loadData: () => ipcRenderer.invoke('data:load'),
@@ -8,10 +8,20 @@ contextBridge.exposeInMainWorld('api', {
   pickImage: () => ipcRenderer.invoke('dialog:pick-image'),
   saveNoteImage: (dataUrl) => ipcRenderer.invoke('note:save-image', dataUrl),
   pickNoteImage: () => ipcRenderer.invoke('dialog:pick-note-image'),
+  addImageFile: (filePath) => ipcRenderer.invoke('note:add-image-file', filePath),
   pickFont: () => ipcRenderer.invoke('dialog:pick-font'),
+  pickSound: () => ipcRenderer.invoke('dialog:pick-sound'),
   chooseDirectory: () => ipcRenderer.invoke('dialog:choose-directory'),
   backupExport: (data, dir) => ipcRenderer.invoke('backup:export', data, dir),
   openPath: (dir) => ipcRenderer.invoke('backup:open-dir', dir),
+
+  readClipboardFiles: () => ipcRenderer.invoke('clipboard:read-files'),
+  statPath: (p) => ipcRenderer.invoke('path:stat', p),
+  getPathForFile: (file) => { try { return webUtils.getPathForFile(file); } catch (e) { return ''; } },
+  openFilePath: (p, isDir) => ipcRenderer.invoke('file:open', p, isDir),
+  deleteNoteFromDesktop: (id) => ipcRenderer.invoke('note:delete', id),
+  setFontSize: (size) => ipcRenderer.invoke('settings:set-font-size', size),
+  onFontSize: (cb) => ipcRenderer.on('settings:font-size', (e, v) => cb(v)),
 
   minimize: () => ipcRenderer.send('window:minimize'),
   hide: () => ipcRenderer.send('window:hide'),
@@ -22,8 +32,10 @@ contextBridge.exposeInMainWorld('api', {
   readClipboard: () => ipcRenderer.invoke('clipboard:read-text'),
   readClipboardImage: () => ipcRenderer.invoke('clipboard:read-image'),
   writeClipboard: (text) => ipcRenderer.invoke('clipboard:write-text', text),
+  copyImage: (src) => ipcRenderer.invoke('clipboard:write-image', src),
   setAlwaysOnTop: (flag) => ipcRenderer.send('window:always-on-top', flag),
   setOpacity: (opacity) => ipcRenderer.send('window:set-opacity', opacity),
+  setSelfOpacity: (opacity) => ipcRenderer.send('window:set-self-opacity', opacity),
   setNoteOpacity: (opacity) => ipcRenderer.send('window:set-note-opacity', opacity),
   onNoteOpacity: (cb) => ipcRenderer.on('window:note-opacity', (e, v) => cb(v)),
   setEffects: (fx) => ipcRenderer.send('window:set-effects', fx),
@@ -32,12 +44,15 @@ contextBridge.exposeInMainWorld('api', {
   onCreateNote: (cb) => ipcRenderer.on('note:create', () => cb()),
   onAlwaysOnTop: (cb) => ipcRenderer.on('window:always-on-top', (e, flag) => cb(flag)),
   onReminderFired: (cb) => ipcRenderer.on('reminder:fired', (e, id) => cb(id)),
+  onReminderSound: (cb) => ipcRenderer.on('reminder:sound', (e, info) => cb(info)),
+  onNoteDeleted: (cb) => ipcRenderer.on('note:deleted', (e, id) => cb(id)),
 
   pinToDesktop: (id) => ipcRenderer.invoke('note:pin', id),
   unpinFromDesktop: (id) => ipcRenderer.invoke('note:unpin', id),
   closeAllDetached: () => ipcRenderer.invoke('note:close-all'),
   noteGet: (id) => ipcRenderer.invoke('note:get', id),
   noteUpdate: (note) => ipcRenderer.invoke('note:update', note),
+  showNativeMenu: (opts) => ipcRenderer.invoke('note:show-menu', opts),
   onNoteChanged: (cb) => ipcRenderer.on('note:changed', (e, note) => cb(note)),
   onNoteUnpinned: (cb) => ipcRenderer.on('note:unpinned', (e, id) => cb(id))
 });

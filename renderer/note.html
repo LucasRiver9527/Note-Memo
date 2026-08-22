@@ -2,7 +2,7 @@
 <html lang="zh-CN">
 <head>
   <meta charset="UTF-8" />
-  <meta http-equiv="Content-Security-Policy" content="default-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' data: note-img:;" />
+  <meta http-equiv="Content-Security-Policy" content="default-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' data: note-img:; media-src 'self' data: note-sound:;" />
   <title>便签</title>
   <link rel="stylesheet" href="note.css" />
 </head>
@@ -15,6 +15,7 @@
     </div>
     <div id="dnBody" class="dn-body"></div>
   </div>
+  <div id="ctxMenu" class="ctx-menu hidden"></div>
   <script src="note.js"></script>
 </body>
 </html>

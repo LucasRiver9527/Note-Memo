@@ -3,16 +3,17 @@ html, body {
   height: 100%; background: transparent; overflow: hidden;
   user-select: none; font-family: var(--font, sans-serif);
 }
+.hidden { display: none !important; }
 
 #note {
   width: 100vw; height: 100vh;
   display: flex; flex-direction: column;
-  border-radius: 12px; overflow: hidden;
+  border-radius: 0; overflow: hidden;
   box-shadow: none;
 }
 body.glass #note {
-  border: 1px solid rgba(255, 255, 255, 0.2);
-  box-shadow: none;
+  background-color: color-mix(in srgb, var(--note-color, #f7d65a) 35%, transparent) !important;
+  border: 1px solid rgba(255, 255, 255, 0.22);
 }
 
 .dn-head {
@@ -41,7 +42,7 @@ body.glass #note {
   min-height: 90px;
   white-space: pre-wrap; word-break: break-word; overflow-wrap: anywhere;
   outline: none; user-select: text; cursor: text;
-  color: inherit; font-family: inherit; font-size: var(--font-size, 14px); font-weight: 500; line-height: 1.55;
+  color: inherit; font-family: inherit; font-size: var(--note-font-size, var(--font-size, 14px)); font-weight: 500; line-height: 1.55;
 }
 .dn-content:empty::before { content: attr(data-placeholder); color: rgba(127,127,127,0.55); }
 .dn-content a.note-link {
@@ -60,11 +61,11 @@ body.glass #note {
 .todo-item input[type="checkbox"]:checked::after { content: "✓"; position: absolute; left: 1px; top: -3px; color: #fff; font-size: 11px; font-weight: 700; }
 .todo-item .todo-text {
   flex: 1; background: transparent; border: none; outline: none; color: inherit; font-family: inherit;
-  font-size: var(--font-size, 14px); line-height: 1.45; border-bottom: 1px solid transparent; user-select: text;
+  font-size: var(--note-font-size, var(--font-size, 14px)); line-height: 1.45; border-bottom: 1px solid transparent; user-select: text;
 }
 .todo-item.done .todo-text { text-decoration: line-through; opacity: 0.5; }
-.todo-item .todo-del { background: transparent; border: none; cursor: pointer; color: inherit; font-size: 13px; opacity: 0; }
-.todo-item:hover .todo-del { opacity: 0.6; }
+.todo-item .todo-del { background: transparent; border: none; cursor: pointer; color: inherit; font-size: 13px; opacity: 0.55; }
+.todo-item:hover .todo-del { opacity: 1; }
 .todo-add {
   background: transparent; border: none; cursor: pointer; color: inherit; opacity: 0.65;
   font-size: 12.5px; padding: 4px 0 2px 24px; font-family: inherit;
@@ -85,3 +86,64 @@ body.glass #note {
 
 ::-webkit-scrollbar { width: 8px; }
 ::-webkit-scrollbar-thumb { background: rgba(127,127,127,0.35); border-radius: 999px; }
+
+/* 内联图片 */
+.dn-content .inline-img { position: relative; display: inline-block; vertical-align: middle; margin: 0 2px; outline: none; max-width: 100%; }
+.inline-img img { display: block; max-width: 100%; border-radius: 6px; user-select: none; -webkit-user-drag: none; pointer-events: none; }
+.inline-img.selected img { box-shadow: 0 0 0 2px var(--accent, #6c5ce7); }
+.inline-img .img-del { position: absolute; top: 4px; right: 4px; width: 20px; height: 20px; border-radius: 50%; background: rgba(0,0,0,0.55); color: #fff; border: none; cursor: pointer; font-size: 11px; line-height: 1; display: none; align-items: center; justify-content: center; }
+.inline-img:hover .img-del { display: flex; }
+.inline-img .img-resize { position: absolute; right: 0; bottom: 0; width: 18px; height: 18px; cursor: nwse-resize; }
+
+/* 文件链接 */
+.dn-content .file-link { display: inline-block; padding: 1px 7px; margin: 0 2px; border-radius: 6px; background: rgba(127,127,127,0.16); border: 1px solid rgba(127,127,127,0.24); cursor: pointer; font-size: 0.95em; user-select: none; vertical-align: middle; word-break: break-all; }
+.file-link:hover { background: rgba(127,127,127,0.3); }
+
+/* markdown */
+.dn-content mark.hl { background: var(--hl-color, #fff59d); color: var(--hl-fg, #2d2f38); border-radius: 3px; padding: 0 2px; }
+.dn-content b, .dn-content strong { font-weight: 700; }
+
+/* 右键菜单 */
+.ctx-menu { position: fixed; z-index: 9999; min-width: 132px; background: rgba(30,31,38,0.96); color: #ececf1; border: 1px solid rgba(255,255,255,0.1); border-radius: 10px; padding: 5px; box-shadow: 0 10px 40px rgba(0,0,0,0.45); max-height: calc(100vh - 16px); overflow-y: auto; }
+.ctx-menu .cm-item { display: flex; align-items: center; gap: 6px; width: 100%; background: transparent; border: none; color: inherit; padding: 5px 8px; border-radius: 6px; cursor: pointer; text-align: left; font-size: 12px; font-family: inherit; }
+.ctx-menu .cm-item:hover { background: rgba(108,92,231,0.28); }
+.ctx-menu .cm-item.danger:hover { background: rgba(229,72,77,0.3); }
+.ctx-menu .cm-sep { height: 1px; background: rgba(255,255,255,0.1); margin: 4px 0; }
+.ctx-menu .cm-label { font-size: 11px; color: rgba(255,255,255,0.5); padding: 6px 10px 2px; }
+.ctx-menu .cm-slider { display: block; width: calc(100% - 20px); margin: 4px 10px 10px; accent-color: #6c5ce7; }
+
+/* 表格 */
+.note-table-block { display: block; margin: 6px 0; outline: none; border-radius: 6px; max-width: 100%; overflow-x: auto; }
+.note-table-block.tbl-selected { box-shadow: 0 0 0 2px var(--accent, #6c5ce7); }
+.note-table { border-collapse: collapse; width: 100%; font-size: var(--note-font-size, var(--font-size, 14px)); color: inherit; }
+.note-table td {
+  border: var(--tbl-border-width, 3px) solid var(--tbl-border-color, rgba(0,0,0,0.7));
+  padding: 6px 8px; min-width: 40px; height: 28px;
+  vertical-align: middle; text-align: center; position: relative; word-break: break-word; outline: none; background: transparent;
+}
+.note-table td.cell-selected { background: rgba(108,92,231,0.25); }
+.note-table td.box-selected { background: rgba(108,92,231,0.25); }
+.note-table td.cell-editing { background: rgba(127,127,127,0.16); }
+.note-table td.diag { min-width: 64px; height: 40px; }
+.note-table td.diag .diag-line { position: absolute; inset: 0; width: 100%; height: 100%; pointer-events: none; z-index: 0; }
+.note-table td.diag .diag-line line { stroke: var(--tbl-border-color, rgba(0,0,0,0.7)); stroke-width: var(--tbl-border-width, 3px); vector-effect: non-scaling-stroke; }
+.note-table .tbl-t1, .note-table .tbl-t2 { position: absolute; pointer-events: none; line-height: 1.2; max-width: 45%; z-index: 1; }
+.note-table td.diag-tlbr .tbl-t1 { top: 4%; right: 6%; }
+.note-table td.diag-tlbr .tbl-t2 { bottom: 4%; left: 6%; }
+.note-table td.diag-trbl .tbl-t1 { top: 4%; left: 6%; }
+.note-table td.diag-trbl .tbl-t2 { bottom: 4%; right: 6%; }
+
+.table-toolbar {
+  position: fixed; z-index: 9999;
+  display: flex; gap: 2px;
+  background: rgba(30,31,38,0.96); border: 1px solid rgba(255,255,255,0.1);
+  border-radius: 8px; padding: 3px; box-shadow: 0 10px 40px rgba(0,0,0,0.45);
+}
+.table-toolbar button {
+  background: transparent; border: none; color: #ececf1;
+  height: 26px; padding: 0 8px; border-radius: 6px; cursor: pointer;
+  font-size: 12px; line-height: 1; font-family: inherit;
+  display: inline-flex; align-items: center; justify-content: center;
+  white-space: nowrap;
+}
+.table-toolbar button:hover { background: rgba(108,92,231,0.28); }
