@@ -157,6 +157,10 @@ function createDetachedWindow(noteId) {
   });
   win.loadFile(path.join(__dirname, 'renderer', 'note.html'), { query: { id: noteId } });
   win.setAlwaysOnTop(true, 'screen-saver');
+  const meta = readData();
+  const metaSettings = (meta && meta.settings) ? meta.settings : {};
+  const metaOpacity = metaSettings.winOpacity != null ? metaSettings.winOpacity : 100;
+  win.setOpacity(metaOpacity / 100);
   win.on('focus', () => win.setAlwaysOnTop(true, 'screen-saver'));
   win.on('show', () => win.setAlwaysOnTop(true, 'screen-saver'));
   win.on('blur', () => win.setAlwaysOnTop(true, 'screen-saver'));
@@ -528,7 +532,16 @@ function setupIpc() {
     if (mainWindow) mainWindow.setAlwaysOnTop(!!flag);
   });
   ipcMain.on('window:set-opacity', (e, opacity) => {
-    if (mainWindow) mainWindow.setOpacity(opacity);
+    const srcWin = BrowserWindow.fromWebContents(e.sender);
+    if (srcWin) srcWin.setOpacity(opacity);
+    detachedWindows.forEach((w) => {
+      if (w && !w.isDestroyed()) w.setOpacity(opacity);
+    });
+  });
+  ipcMain.on('window:set-note-opacity', (e, opacity) => {
+    detachedWindows.forEach((w) => {
+      if (w && !w.isDestroyed()) w.webContents.send('window:note-opacity', opacity);
+    });
   });
   ipcMain.handle('window:toggle', () => {
     toggleWindow();

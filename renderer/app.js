@@ -367,6 +367,7 @@ function applyTheme() {
   root.style.setProperty('--accent', accent);
   root.style.setProperty('--accent-soft', hexToRgba(accent, light ? 0.14 : 0.2));
   root.style.setProperty('--note-opacity', (s.noteOpacity / 100).toFixed(2));
+  window.api.setNoteOpacity(s.noteOpacity);
   root.style.setProperty('--font-size', s.fontSize + 'px');
   root.style.setProperty('--font-family', resolveFontCss(s.fontFamily));
   root.style.setProperty('--titlebar-bg', light ? 'rgba(255,255,255,0.7)' : 'rgba(0,0,0,0.18)');
