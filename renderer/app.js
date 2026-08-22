@@ -41,8 +41,11 @@ const FONT_OPTIONS = [
 
 const TEXT_COLORS = ['#2d2f38', '#000000', '#444444', '#ffffff', '#c0392b', '#b8860b', '#1e5a8a', '#1e7d5a', '#5b2d8f', '#7f8c8d'];
 
+const DEFAULT_THEME_ID = 'mint';
+const DEFAULT_NOTE_COLOR = '#93f1ce';
+
 const DEFAULT_SETTINGS = {
-  themeId: 'dark',
+  themeId: DEFAULT_THEME_ID,
   appearanceMode: 'auto',
   accent: '#6c5ce7',
   noteOpacity: 100,
@@ -70,7 +73,9 @@ const DEFAULT_SETTINGS = {
   todoItemsColor: null,
   todoItemsOpacity: 100,
   todoRemindColor: null,
-  todoRemindOpacity: 100
+  todoRemindOpacity: 100,
+  noteColor: DEFAULT_NOTE_COLOR,
+  glass: false
 };
 
 /* ============ 国际化 ============ */
@@ -81,13 +86,14 @@ const I18N = {
     tab_appearance: '🎨 外观', tab_font: '🔤 字体', tab_sort: '↕ 排序', tab_backup: '⬇ 备份', tab_trash: '🗑 回收站', tab_data: '📦 数据',
     mode: '模式', mode_auto: '跟随主题', mode_light: '普通（浅色）', mode_dark: '夜间（深色）',
     theme: '主题', accent: '强调色', custom: '自定义',
-    note_appearance: '便签外观', note_opacity: '便签不透明度', win_opacity: '窗口不透明度',
+    note_appearance: '便签外观', note_opacity: '便签不透明度', win_opacity: '窗口不透明度', note_bg: '新建便签底色',
     canvas_bg: '画布背景', bg_color: '背景色', bg_image: '背景图片', bg_fill: '填充', bg_fit: '适应', bg_stretch: '拉伸', bg_tile: '平铺', bg_center: '居中',
     pick_image: '选择图片…', clear_image: '清除图片',
     topbar_bg: '顶栏与背景', topbar_color: '顶栏底色', topbar_opacity: '顶栏透明度', bg_opacity: '背景图片透明度',
     todo_area: '待办区', todo_area_hint: '待办区各区域底色默认跟随主题，可自定义颜色与透明度。',
     search_bg: '搜索框底色', search_opacity: '搜索框透明度', items_bg: '待办事项底色', items_opacity: '待办事项透明度', remind_bg: '时间待办底色', remind_opacity: '时间待办透明度',
-    reset_todo: '恢复待办区默认（跟随主题）', reset_theme: '恢复默认外观',
+    reset_todo: '恢复待办区默认（跟随主题）', reset_theme: '恢复默认外观', default_theme: '恢复默认主题', reset_note_bg: '恢复默认便签底色',
+    effects: '效果', glass: '便签玻璃拟态', effects_hint: '开启后便签呈现半透明磨砂质感，默认关闭。',
     font_family: '字体', font_size: '字体大小', font_color: '字体颜色', font_color_hint: '字体颜色应用到便签内容与界面文字；选择默认则跟随主题。', font_color_follow: '跟随主题',
     custom_fonts: '自定义字体', custom_fonts_hint: '可导入你下载的字体文件（.ttf/.otf/.woff），内置字体不可删除。', add_font: '添加字体',
     sort_mode: '排序方式', sort_custom: '自定义顺序', sort_updated: '按更新时间', sort_created: '按创建时间', sort_title: '按标题', sort_color: '按颜色',
@@ -113,7 +119,7 @@ const I18N = {
     canvas_bg_color: '画布背景色', note_color_1: '便签色 1', note_color_2: '便签色 2', save: '保存',
     toast_pinned: '已钉在桌面', toast_unpin: '已退出分组', toast_group_created: '分组已创建', toast_group_deleted: '分组已删除',
     toast_removed: '已移入回收站', toast_restored: '已恢复便签', toast_trash_empty: '回收站已清空',
-    toast_theme_deleted: '主题已删除', toast_theme_updated: '主题已更新', toast_theme_created: '主题已创建',
+    toast_theme_deleted: '主题已删除', toast_theme_updated: '主题已更新', toast_theme_created: '主题已创建', toast_note_bg_reset: '已恢复默认便签底色',
     toast_bg_set: '背景图片已设置', toast_bg_cleared: '已清除背景图片', toast_reset: '已恢复默认外观',
     toast_todo_set: '待办已设置', toast_todo_added: '已添加待办', toast_todo_created: '已新建待办，可设置待办时间',
     toast_reminder: '待办提醒：', toast_arranged: '已一键整理', toast_arranged_menu: '已整理排列', toast_moved_trash: '已移入回收站',
@@ -137,13 +143,14 @@ const I18N = {
     tab_appearance: '🎨 Appearance', tab_font: '🔤 Font', tab_sort: '↕ Sort', tab_backup: '⬇ Backup', tab_trash: '🗑 Recycle Bin', tab_data: '📦 Data',
     mode: 'Mode', mode_auto: 'Follow theme', mode_light: 'Light', mode_dark: 'Dark',
     theme: 'Theme', accent: 'Accent', custom: 'Custom',
-    note_appearance: 'Note appearance', note_opacity: 'Note opacity', win_opacity: 'Window opacity',
+    note_appearance: 'Note appearance', note_opacity: 'Note opacity', win_opacity: 'Window opacity', note_bg: 'New note background',
     canvas_bg: 'Canvas background', bg_color: 'Background color', bg_image: 'Background image', bg_fill: 'Fill', bg_fit: 'Fit', bg_stretch: 'Stretch', bg_tile: 'Tile', bg_center: 'Center',
     pick_image: 'Choose image…', clear_image: 'Clear image',
     topbar_bg: 'Title bar & background', topbar_color: 'Title bar color', topbar_opacity: 'Title bar opacity', bg_opacity: 'Background image opacity',
     todo_area: 'Todo area', todo_area_hint: 'Todo area backgrounds follow the theme by default; you can customize color and opacity.',
     search_bg: 'Search box bg', search_opacity: 'Search box opacity', items_bg: 'Todo items bg', items_opacity: 'Todo items opacity', remind_bg: 'Reminders bg', remind_opacity: 'Reminders opacity',
-    reset_todo: 'Reset todo area (follow theme)', reset_theme: 'Reset appearance',
+    reset_todo: 'Reset todo area (follow theme)', reset_theme: 'Reset appearance', default_theme: 'Restore default theme', reset_note_bg: 'Restore default note background',
+    effects: 'Effects', glass: 'Note glassmorphism', effects_hint: 'Makes notes semi-transparent frosted; off by default.',
     font_family: 'Font', font_size: 'Font size', font_color: 'Font color', font_color_hint: 'Font color applies to note content and UI text; default follows the theme.', font_color_follow: 'Follow theme',
     custom_fonts: 'Custom fonts', custom_fonts_hint: 'Import your own font files (.ttf/.otf/.woff). Built-in fonts cannot be deleted.', add_font: 'Add font',
     sort_mode: 'Sort order', sort_custom: 'Custom order', sort_updated: 'By update time', sort_created: 'By create time', sort_title: 'By title', sort_color: 'By color',
@@ -169,7 +176,7 @@ const I18N = {
     canvas_bg_color: 'Canvas background', note_color_1: 'Note color 1', note_color_2: 'Note color 2', save: 'Save',
     toast_pinned: 'Pinned to desktop', toast_unpin: 'Removed from group', toast_group_created: 'Group created', toast_group_deleted: 'Group deleted',
     toast_removed: 'Moved to recycle bin', toast_restored: 'Note restored', toast_trash_empty: 'Recycle bin emptied',
-    toast_theme_deleted: 'Theme deleted', toast_theme_updated: 'Theme updated', toast_theme_created: 'Theme created',
+    toast_theme_deleted: 'Theme deleted', toast_theme_updated: 'Theme updated', toast_theme_created: 'Theme created', toast_note_bg_reset: 'Default note background restored',
     toast_bg_set: 'Background image set', toast_bg_cleared: 'Background image cleared', toast_reset: 'Appearance reset',
     toast_todo_set: 'Todo set', toast_todo_added: 'Todo added', toast_todo_created: 'Todo created, set a time',
     toast_reminder: 'Reminder: ', toast_arranged: 'Arranged', toast_arranged_menu: 'Arranged', toast_moved_trash: 'Moved to recycle bin',
@@ -261,11 +268,15 @@ function autoTextColor(bg) {
   return isDarkColor(bg) ? '#ffffff' : '#2d2f38';
 }
 
+function defaultNoteColor() {
+  return state.settings.noteColor || DEFAULT_NOTE_COLOR;
+}
+
 function getTheme() {
   const id = state.settings.themeId;
   return PRESETS.find((p) => p.id === id)
     || (state.settings.customThemes || []).find((t) => t.id === id)
-    || PRESETS[0];
+    || PRESETS.find((p) => p.id === DEFAULT_THEME_ID) || PRESETS[0];
 }
 
 function isLightTheme() {
@@ -368,6 +379,8 @@ function applyTheme() {
   root.style.setProperty('--accent-soft', hexToRgba(accent, light ? 0.14 : 0.2));
   root.style.setProperty('--note-opacity', (s.noteOpacity / 100).toFixed(2));
   window.api.setNoteOpacity(s.noteOpacity);
+  document.body.classList.toggle('glass', !!s.glass);
+  window.api.setEffects({ glass: !!s.glass });
   root.style.setProperty('--font-size', s.fontSize + 'px');
   root.style.setProperty('--font-family', resolveFontCss(s.fontFamily));
   root.style.setProperty('--titlebar-bg', light ? 'rgba(255,255,255,0.7)' : 'rgba(0,0,0,0.18)');
@@ -496,8 +509,9 @@ function renderThemePanel() {
 function deleteCustomTheme(id) {
   state.settings.customThemes = (state.settings.customThemes || []).filter((t) => t.id !== id);
   if (state.settings.themeId === id) {
-    state.settings.themeId = PRESETS[0].id;
-    state.settings.accent = PRESETS[0].accent;
+    const def = PRESETS.find((p) => p.id === DEFAULT_THEME_ID) || PRESETS[0];
+    state.settings.themeId = def.id;
+    state.settings.accent = def.accent;
     state.settings.canvasColor = null;
     applyTheme();
   }
@@ -584,6 +598,7 @@ function syncSettingsInputs() {
   renderFontSelect();
   $('#noteOpacity').value = state.settings.noteOpacity;
   $('#winOpacity').value = state.settings.winOpacity;
+  const nc = $('#noteColorInput'); if (nc) nc.value = state.settings.noteColor || DEFAULT_NOTE_COLOR;
   $('#fontSize').value = state.settings.fontSize;
   $('#fontFamily').value = state.settings.fontFamily;
   $('#canvasColor').value = state.settings.canvasColor || getTheme().bg;
@@ -599,6 +614,7 @@ function syncSettingsInputs() {
   $('#todoItemsOpacity').value = state.settings.todoItemsOpacity != null ? state.settings.todoItemsOpacity : 100;
   $('#todoRemindColor').value = state.settings.todoRemindColor || soft;
   $('#todoRemindOpacity').value = state.settings.todoRemindOpacity != null ? state.settings.todoRemindOpacity : 100;
+  const gl = $('#glassToggle'); if (gl) gl.checked = !!state.settings.glass;
   syncModeSeg();
 }
 
@@ -892,6 +908,7 @@ function buildNoteEl(n) {
   el.style.width = (n.w || 240) + 'px';
   el.style.height = (n.h || 180) + 'px';
   el.style.background = n.color;
+  el.style.setProperty('--note-color', n.color);
   el.style.zIndex = n.z || (++zCounter);
 
   let textColor = n.textColor || state.settings.noteTextColor;
@@ -1384,7 +1401,7 @@ function createTodoNote(text) {
     content: '',
     type: 'todo',
     items: [{ id: uid(), text, done: false }],
-    color: '#000000',
+    color: defaultNoteColor(),
     textColor: null,
     fontFamily: null,
     images: [],
@@ -1413,7 +1430,7 @@ function createEmptyTodoNote() {
     content: '',
     type: 'todo',
     items: [],
-    color: '#000000',
+    color: defaultNoteColor(),
     textColor: null,
     fontFamily: null,
     images: [],
@@ -1658,7 +1675,7 @@ function createNote(x, y) {
     content: '',
     type: 'note',
     items: [],
-    color: '#000000',
+    color: defaultNoteColor(),
     textColor: null,
     fontFamily: null,
     images: [],
@@ -2347,6 +2364,14 @@ function bindUI() {
   // 外观输入
   $('#noteOpacity').addEventListener('input', (e) => { state.settings.noteOpacity = Number(e.target.value); applyTheme(); });
   $('#noteOpacity').addEventListener('change', save);
+  $('#noteColorInput').addEventListener('input', (e) => { state.settings.noteColor = e.target.value; });
+  $('#noteColorInput').addEventListener('change', save);
+  $('#btnResetNoteColor').onclick = () => {
+    state.settings.noteColor = DEFAULT_NOTE_COLOR;
+    syncSettingsInputs();
+    save();
+    toast(t('toast_note_bg_reset'));
+  };
   $('#winOpacity').addEventListener('input', (e) => { state.settings.winOpacity = Number(e.target.value); applyTheme(); });
   $('#winOpacity').addEventListener('change', save);
   $('#fontSize').addEventListener('input', (e) => { state.settings.fontSize = Number(e.target.value); applyTheme(); });
@@ -2416,6 +2441,21 @@ function bindUI() {
     save();
     toast(t('toast_reset'));
   };
+
+  $('#btnDefaultTheme').onclick = () => {
+    const def = PRESETS.find((p) => p.id === DEFAULT_THEME_ID) || PRESETS[0];
+    state.settings.themeId = def.id;
+    state.settings.canvasColor = null;
+    state.settings.accent = def.accent;
+    state.settings.appearanceMode = 'auto';
+    syncSettingsInputs();
+    renderThemePanel();
+    applyTheme();
+    save();
+    toast(t('toast_theme_updated'));
+  };
+
+  $('#glassToggle').addEventListener('change', (e) => { state.settings.glass = e.target.checked; applyTheme(); save(); });
 
   // 待办提醒弹窗
   $('#btnReminderCancel').onclick = closeReminder;

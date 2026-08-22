@@ -238,8 +238,15 @@ async function init() {
   const wrap = $('#note');
   wrap.style.background = note.color;
   wrap.style.color = tc;
+  wrap.style.setProperty('--note-color', note.color);
   wrap.style.opacity = (settings.noteOpacity != null ? settings.noteOpacity : 100) / 100;
   window.api.onNoteOpacity((v) => { wrap.style.opacity = (v != null ? v : 100) / 100; });
+  const applyFx = (fx) => {
+    document.body.classList.toggle('glass', !!(fx && fx.glass));
+    window.api.setEffects({ glass: !!(fx && fx.glass) });
+  };
+  applyFx(settings);
+  window.api.onEffects(applyFx);
 
   document.documentElement.style.setProperty('--font-size', (settings.fontSize || 14) + 'px');
   let fam;

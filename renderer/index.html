@@ -97,6 +97,13 @@
             </label>
 
             <h4 data-i18n="note_appearance">便签外观</h4>
+            <label class="color-field">
+              <span data-i18n="note_bg">新建便签底色</span>
+              <input type="color" id="noteColorInput" value="#93f1ce" />
+            </label>
+            <div style="margin:-4px 0 12px">
+              <button class="sp-btn ghost" id="btnResetNoteColor" data-i18n="reset_note_bg" style="width:auto;padding:6px 12px">恢复默认便签底色</button>
+            </div>
             <label class="field">
               <span data-i18n="note_opacity">便签不透明度</span>
               <input type="range" id="noteOpacity" min="60" max="100" value="100" />
@@ -168,7 +175,17 @@
             </label>
             <button class="sp-btn ghost" id="btnResetTodoArea" data-i18n="reset_todo">恢复待办区默认（跟随主题）</button>
 
-            <button class="sp-btn ghost" id="btnResetTheme" data-i18n="reset_theme">恢复默认外观</button>
+            <div class="stack" style="margin-top:4px">
+              <button class="sp-btn ghost" id="btnDefaultTheme" data-i18n="default_theme">恢复默认主题</button>
+              <button class="sp-btn ghost" id="btnResetTheme" data-i18n="reset_theme">恢复默认外观</button>
+            </div>
+
+            <h4 data-i18n="effects">效果</h4>
+            <label class="field">
+              <span data-i18n="glass">便签玻璃拟态</span>
+              <input type="checkbox" id="glassToggle" />
+            </label>
+            <p class="sp-hint" data-i18n="effects_hint">开启后便签呈现半透明磨砂质感，默认关闭。</p>
           </section>
 
           <!-- 字体 -->

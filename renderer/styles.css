@@ -48,6 +48,7 @@ body { padding: 0; }
   border-radius: 14px;
   border: 1px solid var(--border);
   overflow: hidden;
+  box-shadow: var(--shadow);
   transition: background 0.3s ease, color 0.3s ease;
 }
 
@@ -520,6 +521,7 @@ body.maximized #settingsOverlay { border-radius: 0; }
 .field { display: flex; align-items: center; justify-content: space-between; margin-bottom: 12px; font-size: calc(var(--font-size) - 1px); flex-wrap: nowrap; }
 .field span { color: var(--fg-dim); white-space: nowrap; flex-shrink: 0; }
 .field input[type="range"] { width: 150px; accent-color: var(--accent); }
+.field input[type="checkbox"] { width: 18px; height: 18px; accent-color: var(--accent); cursor: pointer; flex-shrink: 0; }
 .field select {
   background: var(--bg-soft); color: var(--fg); border: 1px solid var(--border);
   border-radius: 7px; padding: 5px 8px; font-family: inherit; font-size: calc(var(--font-size) - 1px);
@@ -735,6 +737,18 @@ body.maximized #changelogOverlay { border-radius: 0; }
 select option {
   background: var(--bg); color: var(--fg);
 }
+
+/* ---------- 毛玻璃 / 玻璃拟态 ---------- */
+body.glass .note,
+body.glass .memo-row {
+  background-color: color-mix(in srgb, var(--note-color, #f7d65a) 46%, transparent) !important;
+  -webkit-backdrop-filter: blur(14px) saturate(1.35);
+  backdrop-filter: blur(14px) saturate(1.35);
+  border: 1px solid rgba(255, 255, 255, 0.22);
+  box-shadow: 0 8px 34px rgba(0, 0, 0, 0.26);
+}
+body.glass .note:hover,
+body.glass .memo-row:hover { box-shadow: 0 12px 40px rgba(0, 0, 0, 0.32); }
 ::-webkit-scrollbar { width: 10px; height: 10px; }
 ::-webkit-scrollbar-thumb { background: var(--border); border-radius: 999px; }
 ::-webkit-scrollbar-thumb:hover { background: var(--fg-dim); }

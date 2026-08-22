@@ -98,6 +98,7 @@ function createWindow() {
     frame: false,
     transparent: true,
     backgroundColor: '#00000000',
+    hasShadow: false,
     resizable: true,
     show: false,
     icon: path.join(__dirname, 'assets', 'icon.png'),
@@ -147,7 +148,7 @@ function createDetachedWindow(noteId) {
     resizable: true,
     alwaysOnTop: true,
     skipTaskbar: false,
-    hasShadow: true,
+    hasShadow: false,
     icon: path.join(__dirname, 'assets', 'icon.png'),
     webPreferences: {
       preload: path.join(__dirname, 'preload.js'),
@@ -542,6 +543,14 @@ function setupIpc() {
     detachedWindows.forEach((w) => {
       if (w && !w.isDestroyed()) w.webContents.send('window:note-opacity', opacity);
     });
+  });
+  ipcMain.on('window:set-effects', (e, fx) => {
+    const srcWin = BrowserWindow.fromWebContents(e.sender);
+    if (srcWin === mainWindow) {
+      detachedWindows.forEach((w) => {
+        if (w && !w.isDestroyed()) w.webContents.send('window:effects', fx);
+      });
+    }
   });
   ipcMain.handle('window:toggle', () => {
     toggleWindow();

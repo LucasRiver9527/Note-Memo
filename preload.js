@@ -26,6 +26,8 @@ contextBridge.exposeInMainWorld('api', {
   setOpacity: (opacity) => ipcRenderer.send('window:set-opacity', opacity),
   setNoteOpacity: (opacity) => ipcRenderer.send('window:set-note-opacity', opacity),
   onNoteOpacity: (cb) => ipcRenderer.on('window:note-opacity', (e, v) => cb(v)),
+  setEffects: (fx) => ipcRenderer.send('window:set-effects', fx),
+  onEffects: (cb) => ipcRenderer.on('window:effects', (e, v) => cb(v)),
 
   onCreateNote: (cb) => ipcRenderer.on('note:create', () => cb()),
   onAlwaysOnTop: (cb) => ipcRenderer.on('window:always-on-top', (e, flag) => cb(flag)),
