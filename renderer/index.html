@@ -303,6 +303,7 @@
             <div class="stack">
               <button class="sp-btn ghost" id="btnExport" data-i18n="export_as">导出到指定位置…</button>
               <button class="sp-btn ghost" id="btnImport" data-i18n="import">导入备份…</button>
+              <button class="sp-btn ghost" id="btnCleanupMedia" data-i18n="cleanup_media">🧹 清理未引用媒体</button>
             </div>
           </section>
 
@@ -349,7 +350,7 @@
             <div class="about-card">
               <div class="about-logo">▣</div>
               <div class="about-name" data-i18n="app_name">便签</div>
-              <div class="about-ver">v<span id="aboutVersion">1.2.0</span></div>
+              <div class="about-ver">v<span id="aboutVersion">1.2.2</span></div>
               <div class="about-desc" data-i18n="about_desc">美观可定制的 Windows 桌面便签。</div>
             </div>
             <h4 data-i18n="about_info">软件信息</h4>
@@ -359,6 +360,9 @@
             </div>
             <h4 data-i18n="changelog_title">更新说明</h4>
             <button class="sp-btn ghost" id="btnChangelog" data-i18n="changelog_open" style="width:auto;padding:8px 14px">✨ 查看更新说明</button>
+            <div style="margin-top:8px">
+              <button class="sp-btn" id="btnCheckUpdate" data-i18n="check_update" style="width:auto;padding:8px 14px">🔄 检查更新</button>
+            </div>
           </section>
         </div>
       </div>
@@ -412,6 +416,7 @@
     </div>
   </div>
 
-  <script src="app.js"></script>
+  <script src="logic.js"></script>
+<script src="app.js"></script>
 </body>
 </html>

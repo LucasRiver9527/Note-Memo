@@ -4,9 +4,6 @@ const $$ = (s, root = document) => Array.from(root.querySelectorAll(s));
 const NOTE_COLORS = ['#000000', '#1e1e28', '#2d2f38', '#24344d', '#3a2a4d', '#1f3d33', '#4d2a2a', '#f7d65a', '#ffb3c1', '#a8e6cf', '#a0d8ff', '#d0b3ff', '#ffd8a8', '#f5a97f', '#e6c9ff'];
 const TEXT_COLORS = ['#2d2f38', '#000000', '#444444', '#ffffff', '#c0392b', '#b8860b', '#1e5a8a', '#1e7d5a', '#5b2d8f', '#7f8c8d'];
 
-function escapeHtml(s) {
-  return String(s).replace(/[&<>"']/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
-}
 function uid() { return 'i' + Date.now().toString(36) + Math.random().toString(36).slice(2, 6); }
 function isDark(hex) {
   const h = String(hex || '').replace('#', '');
@@ -15,13 +12,6 @@ function isDark(hex) {
   const g = parseInt(h.slice(2, 4), 16);
   const b = parseInt(h.slice(4, 6), 16);
   return (0.299 * r + 0.587 * g + 0.114 * b) / 255 < 0.55;
-}
-function hexToRgba(hex, alpha) {
-  const h = String(hex || '').replace('#', '');
-  const r = parseInt(h.slice(0, 2), 16);
-  const g = parseInt(h.slice(2, 4), 16);
-  const b = parseInt(h.slice(4, 6), 16);
-  return `rgba(${r}, ${g}, ${b}, ${alpha})`;
 }
 
 const noteId = new URLSearchParams(location.search).get('id');
@@ -38,7 +28,7 @@ function tr(key) {
   const D = {
     zh: {
       note_title: '标题', note_content: '写点什么…', todo_ph: '待办…', add_todo: '＋ 添加待办', notfound: '便签不存在',
-      unpin: '取消钉住（回到列表）', delete: '删除', delete_image: '删除图片', resize_image: '拖动调整大小', open_link: '打开链接',
+      unpin: '取消钉住（回到列表）', delete: '删除', delete_image: '删除图片', img_missing: '图片已丢失', resize_image: '拖动调整大小', open_link: '打开链接',
       copy: '复制', cut: '剪切', paste: '粘贴', select_all: '全选', bold: '加粗', highlight: '高亮', unbold: '取消加粗', unhighlight: '取消高亮',
       insert_image: '插入图片', todo_mode: '待办模式', color: '改变颜色', opacity: '不透明度', save: '保存', text_color: '文字颜色',
       insert_table: '插入表格', table_rows: '行数', table_cols: '列数', add_row: '添加行', add_col: '添加列', del_row: '删除行', del_col: '删除列',
@@ -49,7 +39,7 @@ function tr(key) {
     },
     en: {
       note_title: 'Title', note_content: 'Write something…', todo_ph: 'Todo…', add_todo: '＋ Add todo', notfound: 'Note not found',
-      unpin: 'Unpin (back to list)', delete: 'Delete', delete_image: 'Delete image', resize_image: 'Drag to resize', open_link: 'Open link',
+      unpin: 'Unpin (back to list)', delete: 'Delete', delete_image: 'Delete image', img_missing: 'Image missing', resize_image: 'Drag to resize', open_link: 'Open link',
       copy: 'Copy', cut: 'Cut', paste: 'Paste', select_all: 'Select all', bold: 'Bold', highlight: 'Highlight', unbold: 'Unbold', unhighlight: 'Remove highlight',
       insert_image: 'Insert image', todo_mode: 'Todo mode', color: 'Change color', opacity: 'Opacity', save: 'Save', text_color: 'Text color',
       insert_table: 'Insert table', table_rows: 'Rows', table_cols: 'Cols', add_row: 'Add row', add_col: 'Add col', del_row: 'Delete row', del_col: 'Delete col',
@@ -355,6 +345,19 @@ function wireImages() {
     const img = $('img', item);
     const del = $('.img-del', item);
     const handle = $('.img-resize', item);
+
+    if (img) {
+      const markMissing = () => {
+        item.classList.add('img-missing');
+        if (handle) handle.remove();
+        const label = document.createElement('div');
+        label.className = 'img-missing-label';
+        label.textContent = tr('img_missing');
+        img.replaceWith(label);
+      };
+      img.addEventListener('error', markMissing);
+      if (img.complete && img.naturalWidth === 0) markMissing();
+    }
 
     const removeImage = () => {
       note.images = (note.images || []).filter((x) => x.id !== id);
@@ -893,16 +896,19 @@ function renderBody() {
     });
     content.addEventListener('input', () => { note.content = readRichContent(content); save(); });
     content.addEventListener('paste', async (e) => {
-      e.preventDefault();
-      if (copiedImage) { insertImageReferenceAtCursor(copiedImage.src, copiedImage.w); return; }
       const cd = e.clipboardData || window.clipboardData;
-      const files = await window.api.readClipboardFiles();
-      if (files && files.length) { await insertPastedFilesAtCursor(files); return; }
+      const text = cd ? cd.getData('text/plain') : '';
       const items = (cd && cd.items) ? Array.from(cd.items) : [];
       const hasImage = items.some((it) => it.type && it.type.indexOf('image') === 0);
+      if (copiedImage) { e.preventDefault(); insertImageReferenceAtCursor(copiedImage.src, copiedImage.w); return; }
+      e.preventDefault();
+      const files = await window.api.readClipboardFiles();
+      if (files && files.length) { await insertPastedFilesAtCursor(files); return; }
       if (hasImage) { await handleImagePaste(cd); return; }
-      const text = cd ? cd.getData('text/plain') : '';
-      if (text) document.execCommand('insertText', false, text);
+      if (text) {
+        if (savedRange) restoreSelection();
+        document.execCommand('insertText', false, text);
+      }
     });
     content.addEventListener('drop', async (e) => {
       e.preventDefault();

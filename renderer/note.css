@@ -94,6 +94,8 @@ body.glass #note {
 .inline-img .img-del { position: absolute; top: 4px; right: 4px; width: 20px; height: 20px; border-radius: 50%; background: rgba(0,0,0,0.55); color: #fff; border: none; cursor: pointer; font-size: 11px; line-height: 1; display: none; align-items: center; justify-content: center; }
 .inline-img:hover .img-del { display: flex; }
 .inline-img .img-resize { position: absolute; right: 0; bottom: 0; width: 18px; height: 18px; cursor: nwse-resize; }
+.inline-img.img-missing { background: rgba(150,150,150,0.12); border: 1px dashed rgba(150,150,150,0.5); border-radius: 6px; }
+.inline-img .img-missing-label { display: flex; align-items: center; padding: 6px 12px; color: #999; font-size: 12px; white-space: nowrap; }
 
 /* 文件链接 */
 .dn-content .file-link { display: inline-block; padding: 1px 7px; margin: 0 2px; border-radius: 6px; background: rgba(127,127,127,0.16); border: 1px solid rgba(127,127,127,0.24); cursor: pointer; font-size: 0.95em; user-select: none; vertical-align: middle; word-break: break-all; }

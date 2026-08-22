@@ -806,6 +806,8 @@ body.glass .memo-row:hover { box-shadow: 0 12px 40px rgba(0, 0, 0, 0.32); }
 }
 .inline-img:hover .img-del { display: flex; }
 .inline-img .img-resize { position: absolute; right: 0; bottom: 0; width: 18px; height: 18px; cursor: nwse-resize; }
+.inline-img.img-missing { background: rgba(150,150,150,0.12); border: 1px dashed rgba(150,150,150,0.5); border-radius: 6px; }
+.inline-img .img-missing-label { display: flex; align-items: center; padding: 6px 12px; color: #999; font-size: 12px; white-space: nowrap; }
 
 /* ---------- 文件/文件夹链接 ---------- */
 .note-content .file-link,

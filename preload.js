@@ -14,6 +14,7 @@ contextBridge.exposeInMainWorld('api', {
   chooseDirectory: () => ipcRenderer.invoke('dialog:choose-directory'),
   backupExport: (data, dir) => ipcRenderer.invoke('backup:export', data, dir),
   openPath: (dir) => ipcRenderer.invoke('backup:open-dir', dir),
+  cleanupOrphanMedia: () => ipcRenderer.invoke('media:cleanup-orphans'),
 
   readClipboardFiles: () => ipcRenderer.invoke('clipboard:read-files'),
   statPath: (p) => ipcRenderer.invoke('path:stat', p),
@@ -54,5 +55,11 @@ contextBridge.exposeInMainWorld('api', {
   noteUpdate: (note) => ipcRenderer.invoke('note:update', note),
   showNativeMenu: (opts) => ipcRenderer.invoke('note:show-menu', opts),
   onNoteChanged: (cb) => ipcRenderer.on('note:changed', (e, note) => cb(note)),
-  onNoteUnpinned: (cb) => ipcRenderer.on('note:unpinned', (e, id) => cb(id))
+  onNoteUnpinned: (cb) => ipcRenderer.on('note:unpinned', (e, id) => cb(id)),
+
+  onUpdateAvailable: (cb) => ipcRenderer.on('update:available', (e, info) => cb(info)),
+  onUpdateDownloaded: (cb) => ipcRenderer.on('update:downloaded', (e, info) => cb(info)),
+  checkUpdate: () => ipcRenderer.invoke('update:check'),
+  downloadUpdate: () => ipcRenderer.invoke('update:download'),
+  quitAndInstall: () => ipcRenderer.invoke('update:install')
 });

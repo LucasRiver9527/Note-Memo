@@ -108,7 +108,7 @@ const I18N = {
     sort_mode: '排序方式', sort_custom: '自定义顺序', sort_updated: '按更新时间', sort_created: '按创建时间', sort_title: '按标题', sort_color: '按颜色',
     sort_hint: '排序在「备忘录」和「待办」视图中生效；选择「自定义顺序」后可拖动下方便签调整顺序。', custom_order: '自定义顺序',
     backup_folder: '备份文件夹', backup_hint: '设置一个专门的备份文件夹，「一键导出」会把备份文件保存到该文件夹内。', backup_dir_placeholder: '默认：应用数据目录/backups',
-    choose: '选择…', backup_now: '⬇ 一键导出', open_folder: '打开文件夹', more: '更多', export_as: '导出到指定位置…', import: '导入备份…',
+    choose: '选择…', backup_now: '⬇ 一键导出', open_folder: '打开文件夹', more: '更多', export_as: '导出到指定位置…', import: '导入备份…', cleanup_media: '🧹 清理未引用媒体',
     recycle_bin: '回收站', keep_days: '保留天数', forever: '永久保留', trash_hint: '删除的便签会先进入回收站，超过保留天数后自动彻底删除。', empty_trash: '🗑 清空回收站',
     language: '语言', organize: '整理与清空', arrange: '▦ 整理排列便签', clear_all: '🗑 清空全部便签', clear_all_hint: '清空全部便签会将其移入回收站，可在回收站中恢复。',
     new_note: '＋ 新建', new_note_tip: '新建便签 (Ctrl+Shift+N)', quick_arrange: '⚡ 一键整理', global_settings: '全局设置',
@@ -118,7 +118,7 @@ const I18N = {
     no_notes: '还没有便签', no_notes_sub: '双击空白处或点击右上角「＋ 新建」创建',
     note_title: '标题', note_content: '写点什么…', todo_ph: '待办…', add_todo: '＋ 添加待办',
     pin: '置顶', todo_mode: '待办模式', add_to_group: '加入分组', remove_from_group: '退出分组', desktop: '钉在桌面', todo_remind: '待办提醒', color: '颜色', delete: '删除', insert_image: '插入图片',
-    delete_image: '删除图片', resize_image: '拖动调整大小', set_group: '点击设置分组', drag_sort: '拖动排序',
+    delete_image: '删除图片', img_missing: '图片已丢失', resize_image: '拖动调整大小', set_group: '点击设置分组', drag_sort: '拖动排序',
     set_todo_time: '设置待办时间', cancel: '取消', ok: '确定',
     todo_items: '待办事项', time_todos: '时间待办', add_todo_ph: '添加待办，回车确认…', add: '添加', untitled: '未命名便签', open_note: '打开便签', delete_todo: '删除待办', clear_time: '清除时间待办', overdue: '已逾期',
     no_todos: '暂无待办事项，点击右上「＋ 新建」或在上方输入添加', no_reminders: '暂无时间待办，在便签上点击 ⏰ 设置',
@@ -133,11 +133,12 @@ const I18N = {
     toast_todo_set: '待办已设置', toast_todo_added: '已添加待办', toast_todo_created: '已新建待办，可设置待办时间',
     toast_reminder: '待办提醒：', toast_arranged: '已一键整理', toast_arranged_menu: '已整理排列', toast_moved_trash: '已移入回收站',
     toast_todo_reset: '待办区已恢复跟随主题', toast_img_pasted: '图片已粘贴', toast_img_copied: '图片已复制', toast_img_saved_fail: '图片保存失败：',
-    toast_exported: '已导出：', toast_export_fail: '导出失败：', toast_backup_ok: '已备份：', toast_backup_fail: '备份失败：',
+    toast_exported: '已导出：', toast_export_fail: '导出失败：', toast_backup_ok: '已备份：', toast_backup_fail: '备份失败：', toast_cleanup_ok: '已清理 {n} 个未引用文件，释放 {m} MB', toast_cleanup_fail: '清理失败：',
     toast_imported: '导入成功', toast_import_fail: '导入失败：', toast_font_added: '字体已添加', toast_font_deleted: '字体已删除',
-    confirm_import_title: '导入备份', confirm_import_msg: '导入将覆盖当前全部便签与设置，确定继续？',
+    confirm_import_title: '导入备份', confirm_import_msg: '导入将覆盖当前全部便签与设置，确定继续？', confirm_cleanup_title: '清理未引用媒体', confirm_cleanup_msg: '将删除不再被任何便签、回收站或设置引用的图片/字体/背景/音频文件。此操作不可撤销，确定吗？',
     confirm_clear_all_title: '清空全部', confirm_clear_all_msg: '确定将所有便签移入回收站？可在回收站中恢复。',
     confirm_empty_trash_title: '清空回收站', confirm_empty_trash_msg: '确定彻底删除回收站中的所有便签？此操作不可撤销。',
+    update_available_title: '发现新版本', update_available_msg: '发现新版本 v{v}，是否下载更新？', update_ready_title: '更新已就绪', update_ready_msg: '新版本 v{v} 已下载完成，重启即可安装。现在就重启吗？', check_update: '🔄 检查更新', checking_update: '正在检查更新…', up_to_date: '已是最新版本', check_update_fail: '检查更新失败：',
     confirm_delete_group_msg: '分组内的便签将变为未分组。',
     drag_to_sort: '选择「自定义顺序」后可拖动排序',
     built_in: '内置',
@@ -186,7 +187,7 @@ const I18N = {
     sort_mode: 'Sort order', sort_custom: 'Custom order', sort_updated: 'By update time', sort_created: 'By create time', sort_title: 'By title', sort_color: 'By color',
     sort_hint: 'Sorting applies in List and Todo views; choose "Custom order" to drag notes below.', custom_order: 'Custom order',
     backup_folder: 'Backup folder', backup_hint: 'Set a dedicated backup folder; "Export now" saves backup files into it.', backup_dir_placeholder: 'Default: app data dir/backups',
-    choose: 'Choose…', backup_now: '⬇ Export now', open_folder: 'Open folder', more: 'More', export_as: 'Export to…', import: 'Import…',
+    choose: 'Choose…', backup_now: '⬇ Export now', open_folder: 'Open folder', more: 'More', export_as: 'Export to…', import: 'Import…', cleanup_media: '🧹 Clean unused media',
     recycle_bin: 'Recycle Bin', keep_days: 'Retention days', forever: 'Forever', trash_hint: 'Deleted notes go to the recycle bin first, and are permanently removed after the retention period.', empty_trash: '🗑 Empty recycle bin',
     language: 'Language', organize: 'Organize & clear', arrange: '▦ Arrange notes', clear_all: '🗑 Clear all notes', clear_all_hint: 'Clearing all notes moves them to the recycle bin, where they can be restored.',
     new_note: '＋ New', new_note_tip: 'New note (Ctrl+Shift+N)', quick_arrange: '⚡ Arrange', global_settings: 'Global Settings',
@@ -196,7 +197,7 @@ const I18N = {
     no_notes: 'No notes yet', no_notes_sub: 'Double-click a blank area or click ＋ New',
     note_title: 'Title', note_content: 'Write something…', todo_ph: 'Todo…', add_todo: '＋ Add todo',
     pin: 'Pin', todo_mode: 'Todo mode', add_to_group: 'Add to group', remove_from_group: 'Remove from group', desktop: 'Pin to desktop', todo_remind: 'Reminder', color: 'Color', delete: 'Delete', insert_image: 'Insert image',
-    delete_image: 'Delete image', resize_image: 'Drag to resize', set_group: 'Click to set group', drag_sort: 'Drag to sort',
+    delete_image: 'Delete image', img_missing: 'Image missing', resize_image: 'Drag to resize', set_group: 'Click to set group', drag_sort: 'Drag to sort',
     set_todo_time: 'Set todo time', cancel: 'Cancel', ok: 'OK',
     todo_items: 'Todo items', time_todos: 'Time todos', add_todo_ph: 'Add a todo, press Enter…', add: 'Add', untitled: 'Untitled note', open_note: 'Open note', delete_todo: 'Delete todo', clear_time: 'Clear time', overdue: 'Overdue',
     no_todos: 'No todos yet. Click ＋ New or type above to add.', no_reminders: 'No time todos yet. Click ⏰ on a note to set one.',
@@ -211,11 +212,13 @@ const I18N = {
     toast_todo_set: 'Todo set', toast_todo_added: 'Todo added', toast_todo_created: 'Todo created, set a time',
     toast_reminder: 'Reminder: ', toast_arranged: 'Arranged', toast_arranged_menu: 'Arranged', toast_moved_trash: 'Moved to recycle bin',
     toast_todo_reset: 'Todo area follows theme again', toast_img_pasted: 'Image pasted', toast_img_copied: 'Image copied', toast_img_saved_fail: 'Failed to save image: ',
-    toast_exported: 'Exported: ', toast_export_fail: 'Export failed: ', toast_backup_ok: 'Backed up: ', toast_backup_fail: 'Backup failed: ',
+    toast_exported: 'Exported: ', toast_export_fail: 'Export failed: ', toast_backup_ok: 'Backed up: ', toast_backup_fail: 'Backup failed: ', toast_cleanup_ok: 'Cleaned {n} unused files, freed {m} MB', toast_cleanup_fail: 'Cleanup failed: ',
     toast_imported: 'Imported', toast_import_fail: 'Import failed: ', toast_font_added: 'Font added', toast_font_deleted: 'Font deleted',
     confirm_import_title: 'Import backup', confirm_import_msg: 'Importing will overwrite all current notes and settings. Continue?',
+    confirm_cleanup_title: 'Clean unused media', confirm_cleanup_msg: 'This deletes images/fonts/backgrounds/sounds not referenced by any note, recycle bin, or setting. This cannot be undone. Continue?',
     confirm_clear_all_title: 'Clear all', confirm_clear_all_msg: 'Move all notes to the recycle bin? They can be restored there.',
     confirm_empty_trash_title: 'Empty recycle bin', confirm_empty_trash_msg: 'Permanently delete all notes in the recycle bin? This cannot be undone.',
+    update_available_title: 'Update available', update_available_msg: 'A new version v{v} is available. Download now?', update_ready_title: 'Update ready', update_ready_msg: 'Version v{v} has been downloaded. Restart to install now?', check_update: '🔄 Check for updates', checking_update: 'Checking for updates…', up_to_date: 'You are up to date', check_update_fail: 'Update check failed: ',
     confirm_delete_group_msg: 'Notes in this group will become ungrouped.',
     drag_to_sort: 'Choose "Custom order" to drag and sort',
     built_in: 'Built-in',
@@ -253,6 +256,11 @@ function t(key) {
 }
 
 const CHANGELOG = [
+  { zh: '修复：便签内 Ctrl+C / Ctrl+V 无法复制粘贴的问题（含标题），粘贴现可正常插入', en: 'Fix: Ctrl+C/Ctrl+V copy & paste now work in notes (incl. title)' },
+  { zh: '「关于」页新增「检查更新」按钮，可手动检测版本更新', en: 'Added a "Check for updates" button on the About page' },
+  { zh: '数据安全加固：原子写入、版本号与损坏自动回退，断电也不怕数据写坏', en: 'Data safety: atomic writes, versioning & crash recovery' },
+  { zh: '备份自包含：一键备份自动打包图片 / 字体 / 声音等媒体，跨设备迁移不断图', en: 'Self-contained backup: bundles images/fonts/sounds for lossless migration' },
+  { zh: '图片等媒体缺失时显示友好占位提示，一键移除，不再破图', en: 'Graceful placeholder for missing media instead of broken images' },
   { zh: '「贴靠」：窗口拖到屏幕边缘自动调整大小（顶部最大化、左右半屏、四角四分屏）', en: 'Snap windows to screen edges (maximize / half / quarter)' },
   { zh: '便签钉桌面支持 Windows 亚克力玻璃模糊', en: 'Acrylic blur for desktop-pinned notes' },
   { zh: '顶栏亚克力模糊，可自定义顶栏底色与透明度', en: 'Title bar acrylic blur with custom color & opacity' },
@@ -269,7 +277,7 @@ const CHANGELOG = [
   { zh: '新增「关于」页面：版本、作者、更新说明', en: 'New About page: version, author, changelog' }
 ];
 
-const APP_VERSION = '1.2.0';
+const APP_VERSION = '1.2.2';
 
 function renderChangelog() {
   const lang = (state && state.settings && state.settings.language) || 'zh';
@@ -309,27 +317,6 @@ let copiedImage = null;
 
 /* ============ 工具函数 ============ */
 function uid() { return 'n' + Date.now().toString(36) + Math.random().toString(36).slice(2, 7); }
-
-function hexToRgba(hex, alpha) {
-  const h = hex.replace('#', '');
-  const r = parseInt(h.slice(0, 2), 16);
-  const g = parseInt(h.slice(2, 4), 16);
-  const b = parseInt(h.slice(4, 6), 16);
-  return `rgba(${r}, ${g}, ${b}, ${alpha})`;
-}
-
-function isDarkColor(hex) {
-  const h = String(hex || '').replace('#', '');
-  if (h.length < 6) return true;
-  const r = parseInt(h.slice(0, 2), 16);
-  const g = parseInt(h.slice(2, 4), 16);
-  const b = parseInt(h.slice(4, 6), 16);
-  return (0.299 * r + 0.587 * g + 0.114 * b) / 255 < 0.55;
-}
-
-function autoTextColor(bg) {
-  return isDarkColor(bg) ? '#ffffff' : '#2d2f38';
-}
 
 function defaultNoteColor() {
   return state.settings.noteColor || DEFAULT_NOTE_COLOR;
@@ -374,10 +361,6 @@ function resolveFontCss(key) {
   const cf = (state.settings.customFonts || []).find((f) => f.family === key);
   if (cf) return "'" + cf.family + "', sans-serif";
   return FONTS.system;
-}
-
-function escapeHtml(s) {
-  return String(s).replace(/[&<>"']/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
 }
 
 function highlightColor() {
@@ -553,23 +536,6 @@ function readRichContent(root) {
     }
   });
   return out;
-}
-
-function refIdsOf(n) {
-  const ids = new Set();
-  const re = /\[\[(?:img|file|table):([a-zA-Z0-9_-]+)\]\]/g;
-  let m;
-  const s = String(n.content || '');
-  while ((m = re.exec(s)) !== null) ids.add(m[1]);
-  return ids;
-}
-
-function cleanupRefs(n) {
-  if (!n) return;
-  const refs = refIdsOf(n);
-  n.images = (n.images || []).filter((im) => refs.has(im.id));
-  n.files = (n.files || []).filter((f) => refs.has(f.id));
-  n.tables = (n.tables || []).filter((tb) => refs.has(tb.id));
 }
 
 function noteFontSize(n) {
@@ -1176,25 +1142,7 @@ function ensureOrder() {
 }
 
 function getSortedNotes(arr) {
-  const mode = state.settings.sortMode || 'updated';
-  const order = state.settings.noteOrder || [];
-  const a = [...arr];
-  a.sort((x, y) => {
-    if (mode !== 'custom' && x.pinned !== y.pinned) return x.pinned ? -1 : 1;
-    if (mode === 'custom') {
-      const ix = order.indexOf(x.id);
-      const iy = order.indexOf(y.id);
-      if (ix === -1 && iy === -1) return (y.createdAt || 0) - (x.createdAt || 0);
-      if (ix === -1) return 1;
-      if (iy === -1) return -1;
-      return ix - iy;
-    }
-    if (mode === 'created') return (y.createdAt || 0) - (x.createdAt || 0);
-    if (mode === 'title') return (x.title || '').localeCompare(y.title || '', 'zh');
-    if (mode === 'color') return String(x.color).localeCompare(String(y.color));
-    return (y.updatedAt || y.createdAt || 0) - (x.updatedAt || x.createdAt || 0);
-  });
-  return a;
+  return sortNotes(arr, state.settings);
 }
 
 function moveSortBy(id, dir) {
@@ -1536,25 +1484,29 @@ function wireCommon(el, n) {
     });
     content.addEventListener('input', () => { n.content = readRichContent(content); n.updatedAt = Date.now(); save(); });
     content.addEventListener('paste', async (e) => {
-      e.preventDefault();
+      const cd = e.clipboardData || window.clipboardData;
+      const text = cd ? cd.getData('text/plain') : '';
+      const items = (cd && cd.items) ? Array.from(cd.items) : [];
+      const hasImage = items.some((it) => it.type && it.type.indexOf('image') === 0);
       if (copiedImage) {
+        e.preventDefault();
         insertImageReferenceAtCursor(n, copiedImage.src, copiedImage.w);
         return;
       }
-      const cd = e.clipboardData || window.clipboardData;
+      e.preventDefault();
       const files = await window.api.readClipboardFiles();
       if (files && files.length) {
         await insertPastedFilesAtCursor(n, files);
         return;
       }
-      const items = (cd && cd.items) ? Array.from(cd.items) : [];
-      const hasImage = items.some((it) => it.type && it.type.indexOf('image') === 0);
       if (hasImage) {
         await handleImagePaste(cd, n);
         return;
       }
-      const text = cd ? cd.getData('text/plain') : '';
-      if (text) document.execCommand('insertText', false, text);
+      if (text) {
+        if (savedRange && savedNoteId === n.id) restoreSelection();
+        document.execCommand('insertText', false, text);
+      }
     });
     content.addEventListener('drop', async (e) => {
       e.preventDefault();
@@ -1835,6 +1787,19 @@ function wireImages(el, n) {
     const img = $('img', item);
     const del = $('.img-del', item);
     const handle = $('.img-resize', item);
+
+    if (img) {
+      const markMissing = () => {
+        item.classList.add('img-missing');
+        if (handle) handle.remove();
+        const label = document.createElement('div');
+        label.className = 'img-missing-label';
+        label.textContent = t('img_missing');
+        img.replaceWith(label);
+      };
+      img.addEventListener('error', markMissing);
+      if (img.complete && img.naturalWidth === 0) markMissing();
+    }
 
     if (del) del.onclick = (e) => {
       e.stopPropagation();
@@ -2827,16 +2792,19 @@ function wireDocView(n, isTodo) {
   });
   content.addEventListener('input', () => { n.content = readRichContent(content); n.updatedAt = Date.now(); save(); });
   content.addEventListener('paste', async (e) => {
-    e.preventDefault();
-    if (copiedImage) { insertImageReferenceAtCursor(n, copiedImage.src, copiedImage.w); return; }
     const cd = e.clipboardData || window.clipboardData;
-    const files = await window.api.readClipboardFiles();
-    if (files && files.length) { await insertPastedFilesAtCursor(n, files); return; }
+    const text = cd ? cd.getData('text/plain') : '';
     const items = (cd && cd.items) ? Array.from(cd.items) : [];
     const hasImage = items.some((it) => it.type && it.type.indexOf('image') === 0);
+    if (copiedImage) { e.preventDefault(); insertImageReferenceAtCursor(n, copiedImage.src, copiedImage.w); return; }
+    e.preventDefault();
+    const files = await window.api.readClipboardFiles();
+    if (files && files.length) { await insertPastedFilesAtCursor(n, files); return; }
     if (hasImage) { await handleImagePaste(cd, n); return; }
-    const text = cd ? cd.getData('text/plain') : '';
-    if (text) document.execCommand('insertText', false, text);
+    if (text) {
+      if (savedRange && savedNoteId === n.id) restoreSelection();
+      document.execCommand('insertText', false, text);
+    }
   });
   content.addEventListener('drop', async (e) => {
     e.preventDefault();
@@ -3745,6 +3713,16 @@ function bindUI() {
   $('#btnChangelogClose').onclick = closeChangelog;
   $('#changelogOverlay').onclick = (e) => { if (e.target.id === 'changelogOverlay') closeChangelog(); };
 
+  $('#btnCheckUpdate').onclick = async () => {
+    toast(t('checking_update'));
+    const r = await window.api.checkUpdate();
+    if (r && r.ok) {
+      if (!r.isUpdateAvailable) toast(t('up_to_date'));
+    } else {
+      toast(t('check_update_fail') + (r && r.error ? (' ' + r.error) : ''));
+    }
+  };
+
   $$('.sp-nav-item').forEach((b) => { b.onclick = () => switchTab(b.dataset.tab); });
 
   $$('#modeSeg .seg').forEach((b) => {
@@ -3802,6 +3780,13 @@ function bindUI() {
     const r = await window.api.exportData({ settings: state.settings, groups: state.groups, notes: state.notes, trash: state.trash });
     if (r.ok) toast(t('toast_exported') + r.path);
     else if (!r.canceled) toast(t('toast_export_fail') + r.error);
+  };
+  $('#btnCleanupMedia').onclick = async () => {
+    const ok = await confirmModal(t('confirm_cleanup_title'), t('confirm_cleanup_msg'));
+    if (!ok) return;
+    const r = await window.api.cleanupOrphanMedia();
+    if (r.ok) toast(t('toast_cleanup_ok').replace('{n}', r.freedCount).replace('{m}', (r.freedBytes / 1024 / 1024).toFixed(1)));
+    else toast(t('toast_cleanup_fail') + (r.error || ''));
   };
   $('#btnImport').onclick = async () => {
     const r = await window.api.importData();
@@ -4237,6 +4222,17 @@ async function init() {
     const btn = $('#btnMax');
     if (btn) btn.title = flag ? t('restore') : t('maximize');
     document.body.classList.toggle('maximized', !!flag);
+  });
+
+  window.api.onUpdateAvailable(async (info) => {
+    const ver = (info && info.version) || '';
+    const ok = await confirmModal(t('update_available_title'), t('update_available_msg').replace('{v}', ver));
+    if (ok) window.api.downloadUpdate();
+  });
+  window.api.onUpdateDownloaded(async (info) => {
+    const ver = (info && info.version) || '';
+    const ok = await confirmModal(t('update_ready_title'), t('update_ready_msg').replace('{v}', ver));
+    if (ok) window.api.quitAndInstall();
   });
 
   window.api.onReminderFired((id) => {

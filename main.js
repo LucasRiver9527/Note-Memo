@@ -2,6 +2,8 @@ const { app, BrowserWindow, ipcMain, dialog, Notification, Tray, Menu, nativeIma
 const path = require('path');
 const fs = require('fs');
 const { pathToFileURL } = require('url');
+const logic = require('./renderer/logic.js');
+const { autoUpdater } = require('electron-updater');
 
 const isDev = !app.isPackaged;
 
@@ -14,18 +16,120 @@ const recentlyFired = new Set();
 const detachedWindows = new Map();
 
 const dataPath = () => path.join(app.getPath('userData'), 'notes-data.json');
+const backupDataPath = () => dataPath() + '.bak';
+const DEFAULT_DATA_VERSION = 1;
+
+// 数据迁移：按 version 逐级升级到当前版本
+function migrateData(raw) {
+  if (!raw || typeof raw !== 'object' || Array.isArray(raw)) return raw;
+  const data = raw;
+  let v = typeof data.version === 'number' ? data.version : 1;
+
+  // 未来新版本加在此处，例如：
+  // if (v < 2) { /* ...迁移逻辑... */ v = 2; }
+
+  data.version = DEFAULT_DATA_VERSION;
+  return data;
+}
+
+// 原子写：先写临时文件，再原子替换，避免断电/崩溃写下半截文件
+function atomicWrite(filePath, text) {
+  const tmp = filePath + '.tmp';
+  fs.writeFileSync(tmp, text, 'utf-8');
+  fs.renameSync(tmp, filePath);
+}
 
 function readData() {
+  // 1) 主文件
   try {
     const raw = fs.readFileSync(dataPath(), 'utf-8');
-    return JSON.parse(raw);
+    return migrateData(JSON.parse(raw));
+  } catch (e) { /* 损坏或不存在，尝试备份 */ }
+
+  // 2) 主文件损坏，回退到上一版备份
+  try {
+    const raw = fs.readFileSync(backupDataPath(), 'utf-8');
+    return migrateData(JSON.parse(raw));
   } catch (e) {
     return null;
   }
 }
 
 function writeData(data) {
-  fs.writeFileSync(dataPath(), JSON.stringify(data, null, 2), 'utf-8');
+  try {
+    if (typeof data === 'object' && data) {
+      data.version = DEFAULT_DATA_VERSION;
+    }
+    // 写前留一份上一版备份（只保留最近一份）
+    try {
+      if (fs.existsSync(dataPath())) {
+        fs.copyFileSync(dataPath(), backupDataPath());
+      }
+    } catch (e) { /* 备份失败不阻塞写入 */ }
+    atomicWrite(dataPath(), JSON.stringify(data, null, 2));
+  } catch (e) { /* 写失败仅记录，不抛出影响渲染进程 */ }
+}
+
+// 媒体类型对应的 userData 子目录名
+const MEDIA_DIRS = { img: 'images', bg: 'backgrounds', font: 'fonts', sound: 'sounds', images: 'images', backgrounds: 'backgrounds', fonts: 'fonts', sounds: 'sounds' };
+
+// 从 URL 还原媒体文件名
+function mediaFileName(url) {
+  if (typeof url !== 'string') return null;
+  const m = /^note-(img|bg|font|sound):\/\/local\/(.+)$/.exec(url);
+  if (!m) return null;
+  return { kind: MEDIA_DIRS[m[1]], name: decodeURIComponent(m[2]) };
+}
+
+// 收集数据里实际引用的媒体文件，按目录分类
+function collectMedia(data) {
+  const byDir = {};
+  const add = (url) => {
+    const r = mediaFileName(url);
+    if (!r) return;
+    (byDir[r.kind] = byDir[r.kind] || new Set()).add(r.name);
+  };
+  (data.notes || []).forEach((n) => (n.images || []).forEach((im) => add(im.src)));
+  const s = data.settings || {};
+  add(s.backgroundImage);
+  (s.customFonts || []).forEach((f) => add(f.url));
+  add(s.reminderSoundPath);
+  return byDir;
+}
+
+// 把引用的媒体文件复制进备份文件夹
+function copyMediaToBundle(data, bundleDir) {
+  const byDir = collectMedia(data);
+  for (const dirName of Object.keys(byDir)) {
+    if (!byDir[dirName].size) continue;
+    const srcDir = path.join(app.getPath('userData'), dirName);
+    const destDir = path.join(bundleDir, dirName);
+    if (!fs.existsSync(srcDir)) continue;
+    if (!fs.existsSync(destDir)) fs.mkdirSync(destDir, { recursive: true });
+    byDir[dirName].forEach((name) => {
+      const src = path.join(srcDir, name);
+      if (fs.existsSync(src)) {
+        try { fs.copyFileSync(src, path.join(destDir, name)); } catch (e) { /* ignore */ }
+      }
+    });
+  }
+}
+
+// 把备份文件夹里的媒体复制回 userData
+function restoreMediaFromBundle(bundleDir) {
+  const dirs = ['images', 'backgrounds', 'fonts', 'sounds'];
+  for (const dirName of dirs) {
+    const srcDir = path.join(bundleDir, dirName);
+    if (!fs.existsSync(srcDir)) continue;
+    const destDir = path.join(app.getPath('userData'), dirName);
+    if (!fs.existsSync(destDir)) fs.mkdirSync(destDir, { recursive: true });
+    fs.readdirSync(srcDir).forEach((name) => {
+      const src = path.join(srcDir, name);
+      if (fs.statSync(src).isFile()) {
+        try { fs.copyFileSync(src, path.join(destDir, name)); } catch (e) { /* ignore */ }
+      }
+    });
+  }
 }
 
 function clipboardImageToDataUrl() {
@@ -354,6 +458,31 @@ function checkOverdueReminders() {
   scheduleReminders(readDataNotes());
 }
 
+// ---- 自动更新 ----
+function setupAutoUpdate() {
+  // 开发模式不检查；也可通过环境变量强制关闭
+  if (!app.isPackaged) return;
+  if (process.env.MYNOTES_DISABLE_AUTOUPDATE === '1') return;
+  try {
+    autoUpdater.autoDownload = false;
+    autoUpdater.autoInstallOnAppQuit = true;
+    autoUpdater.on('error', (e) => { console.error('[update] error:', e && e.message); });
+    autoUpdater.on('update-available', (info) => {
+      console.log('[update] available:', info && info.version);
+      if (mainWindow && !mainWindow.isDestroyed()) mainWindow.webContents.send('update:available', info);
+    });
+    autoUpdater.on('update-downloaded', (info) => {
+      console.log('[update] downloaded:', info && info.version);
+      if (mainWindow && !mainWindow.isDestroyed()) mainWindow.webContents.send('update:downloaded', info);
+    });
+    // 允许用环境变量覆盖发布地址（否则读打包时的 app-update.yml）
+    if (process.env.MYNOTES_UPDATE_URL) autoUpdater.setFeedURL({ provider: 'generic', url: process.env.MYNOTES_UPDATE_URL });
+    autoUpdater.checkForUpdates().catch((e) => console.error('[update] check failed:', e && e.message));
+  } catch (e) {
+    console.error('[update] init failed:', e);
+  }
+}
+
 // ---- IPC ----
 function setupIpc() {
   ipcMain.handle('data:load', () => {
@@ -374,23 +503,44 @@ function setupIpc() {
       defaultPath: `便签备份-${new Date().toISOString().slice(0, 10)}.json`,
       filters: [
         { name: 'JSON 备份', extensions: ['json'] },
+        { name: 'Markdown', extensions: ['md'] },
         { name: '文本文件', extensions: ['txt'] }
       ]
     });
     if (result.canceled || !result.filePath) return { ok: false, canceled: true };
     try {
-      if (result.filePath.endsWith('.txt')) {
+      const filePath = result.filePath;
+      if (filePath.endsWith('.md')) {
+        // 图片以 data URI 内嵌，导出为自包含 Markdown（跨工具可用）
+        const imageResolver = (src) => {
+          const m = /^note-img:\/\/local\/(.+)$/.exec(String(src || ''));
+          if (!m) return src;
+          const name = decodeURIComponent(m[1]);
+          const file = path.join(app.getPath('userData'), 'images', name);
+          if (!fs.existsSync(file)) return src;
+          const ext = path.extname(name).toLowerCase();
+          const mime = ext === '.jpg' || ext === '.jpeg' ? 'image/jpeg'
+            : ext === '.gif' ? 'image/gif'
+            : ext === '.webp' ? 'image/webp'
+            : ext === '.bmp' ? 'image/bmp'
+            : 'image/png';
+          return 'data:' + mime + ';base64,' + fs.readFileSync(file).toString('base64');
+        };
+        const md = (data.notes || []).map((n) => logic.noteToMarkdown(n, { image: imageResolver })).join('\n\n---\n\n');
+        fs.writeFileSync(filePath, md, 'utf-8');
+      } else if (filePath.endsWith('.txt')) {
         const lines = data.notes.map((n) => {
           const body = n.type === 'todo'
             ? (n.items || []).map((i) => `${i.done ? '[x]' : '[ ]'} ${i.text}`).join('\n')
             : n.content;
           return `◆ ${n.title}\n${body}\n---`;
         }).join('\n\n');
-        fs.writeFileSync(result.filePath, lines, 'utf-8');
+        fs.writeFileSync(filePath, lines, 'utf-8');
       } else {
-        fs.writeFileSync(result.filePath, JSON.stringify(data, null, 2), 'utf-8');
+        if (typeof data === 'object' && data) data.version = DEFAULT_DATA_VERSION;
+        fs.writeFileSync(filePath, JSON.stringify(data, null, 2), 'utf-8');
       }
-      return { ok: true, path: result.filePath };
+      return { ok: true, path: filePath };
     } catch (err) {
       return { ok: false, error: err.message };
     }
@@ -400,12 +550,16 @@ function setupIpc() {
     const result = await dialog.showOpenDialog(mainWindow, {
       title: '导入便签',
       properties: ['openFile'],
-      filters: [{ name: 'JSON 备份', extensions: ['json'] }]
+      filters: [{ name: '备份文件或清单', extensions: ['json'] }]
     });
     if (result.canceled || !result.filePaths.length) return { ok: false, canceled: true };
     try {
-      const raw = fs.readFileSync(result.filePaths[0], 'utf-8');
-      const data = JSON.parse(raw);
+      const filePath = result.filePaths[0];
+      const raw = fs.readFileSync(filePath, 'utf-8');
+      const data = migrateData(JSON.parse(raw));
+      // 若所选 data.json 归属于一个"自包含备份文件夹"，把旁边携带的媒体一并恢复
+      const bundleDir = path.dirname(filePath);
+      restoreMediaFromBundle(bundleDir);
       return { ok: true, data };
     } catch (err) {
       return { ok: false, error: err.message };
@@ -423,15 +577,41 @@ function setupIpc() {
 
   ipcMain.handle('backup:export', async (e, data, dir) => {
     try {
-      let target = dir;
-      if (!target) target = path.join(app.getPath('userData'), 'backups');
-      if (!fs.existsSync(target)) fs.mkdirSync(target, { recursive: true });
+      let parent = dir;
+      if (!parent) parent = path.join(app.getPath('userData'), 'backups');
+      if (!fs.existsSync(parent)) fs.mkdirSync(parent, { recursive: true });
       const stamp = new Date();
       const pad = (x) => String(x).padStart(2, '0');
-      const name = `便签备份-${stamp.getFullYear()}${pad(stamp.getMonth() + 1)}${pad(stamp.getDate())}-${pad(stamp.getHours())}${pad(stamp.getMinutes())}${pad(stamp.getSeconds())}.json`;
-      const file = path.join(target, name);
-      fs.writeFileSync(file, JSON.stringify(data, null, 2), 'utf-8');
-      return { ok: true, path: file };
+      const folder = path.join(parent, `便签备份-${stamp.getFullYear()}${pad(stamp.getMonth() + 1)}${pad(stamp.getDate())}-${pad(stamp.getHours())}${pad(stamp.getMinutes())}${pad(stamp.getSeconds())}`);
+      if (!fs.existsSync(folder)) fs.mkdirSync(folder, { recursive: true });
+      if (typeof data === 'object' && data) data.version = DEFAULT_DATA_VERSION;
+      fs.writeFileSync(path.join(folder, 'data.json'), JSON.stringify(data, null, 2), 'utf-8');
+      copyMediaToBundle(data, folder);
+      return { ok: true, path: folder };
+    } catch (err) {
+      return { ok: false, error: err.message };
+    }
+  });
+
+  ipcMain.handle('media:cleanup-orphans', async () => {
+    try {
+      const data = readData() || { settings: {}, groups: [], notes: [], trash: [] };
+      const refs = logic.referencedMedia(data);
+      let freedCount = 0, freedBytes = 0;
+      for (const dirName of ['images', 'backgrounds', 'fonts', 'sounds']) {
+        const dirPath = path.join(app.getPath('userData'), dirName);
+        if (!fs.existsSync(dirPath)) continue;
+        const keep = refs[dirName] || new Set();
+        for (const name of fs.readdirSync(dirPath)) {
+          if (keep.has(name)) continue;
+          const fp = path.join(dirPath, name);
+          try {
+            const st = fs.statSync(fp);
+            if (st.isFile()) { freedBytes += st.size; fs.unlinkSync(fp); freedCount++; }
+          } catch (e) { /* ignore */ }
+        }
+      }
+      return { ok: true, freedCount, freedBytes };
     } catch (err) {
       return { ok: false, error: err.message };
     }
@@ -744,6 +924,34 @@ function setupIpc() {
     }
   });
 
+  // 自动更新触发
+  ipcMain.handle('update:check', async () => {
+    if (!app.isPackaged) return { ok: false, error: 'dev' };
+    try {
+      const result = await autoUpdater.checkForUpdates();
+      return { ok: true, isUpdateAvailable: !!(result && result.isUpdateAvailable) };
+    } catch (e) { return { ok: false, error: (e && e.message) || String(e) }; }
+  });
+  ipcMain.handle('update:download', async () => {
+    try { autoUpdater.downloadUpdate(); return { ok: true }; }
+    catch (e) { return { ok: false, error: (e && e.message) || String(e) }; }
+  });
+  ipcMain.handle('update:install', async () => {
+    try {
+      // 先置退出标志并真正销毁所有窗口/托盘，
+      // 避免进程仍驻留占用 exe，导致 NSIS 安装器报「便签无法关闭」
+      isQuitting = true;
+      for (const win of detachedWindows.values()) {
+        if (!win.isDestroyed()) win.destroy();
+      }
+      detachedWindows.clear();
+      if (mainWindow && !mainWindow.isDestroyed()) mainWindow.destroy();
+      if (tray) tray.destroy();
+      autoUpdater.quitAndInstall();
+      return { ok: true };
+    } catch (e) { return { ok: false, error: (e && e.message) || String(e) }; }
+  });
+
   // Window controls
   ipcMain.on('window:minimize', () => mainWindow && mainWindow.minimize());
   ipcMain.on('window:hide', () => mainWindow && mainWindow.hide());
@@ -855,6 +1063,7 @@ if (!gotLock) {
     });
 
     setupIpc();
+    setupAutoUpdate();
     createWindow();
     createTray();
 

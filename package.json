@@ -1,13 +1,15 @@
 {
   "name": "mynotes",
-  "version": "1.2.0",
+  "version": "1.2.2",
   "description": "美观可定制的 Windows 桌面便签",
   "main": "main.js",
   "author": "MyNotes",
   "license": "MIT",
   "scripts": {
     "start": "electron .",
-    "dist": "electron-builder --win"
+    "dist": "electron-builder --win --publish never",
+    "dist:publish": "electron-builder --win --publish always",
+    "test": "node --test \"tests/**/*.test.js\""
   },
   "devDependencies": {
     "electron": "^33.2.0",
@@ -35,6 +37,17 @@
       "oneClick": false,
       "allowToChangeInstallationDirectory": true,
       "createDesktopShortcut": true
-    }
+    },
+    "publish": [
+      {
+        "provider": "github",
+        "owner": "LucasRiver9527",
+        "repo": "Note-Memo"
+      }
+    ],
+    "artifactName": "MyNotes-Setup-${version}.${ext}"
+  },
+  "dependencies": {
+    "electron-updater": "^6.8.9"
   }
 }
