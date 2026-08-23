@@ -96,6 +96,11 @@ function t(key) {
 }
 
 const CHANGELOG = [
+  { zh: '文本对齐：便签 / 文档 / 钉桌便签加入左·居中·右对齐（Ctrl+L / Ctrl+E / Ctrl+R），图片也支持独立对齐', en: 'Text alignment: left/center/right for notes, doc & pinned notes (Ctrl+L/E/R); images align independently' },
+  { zh: '批量选中：点选便签多选，支持批量删除、移动分组、拖动整组移动', en: 'Batch select: multi-select notes for batch delete, move to group, drag-group move' },
+  { zh: '「贴靠」恢复：窗口拖到屏幕边缘自动调整（顶部最大化、左右半屏、四角四分屏），并支持 Win11 贴靠布局', en: 'Snap restored: drag to screen edges to maximize/half/quarter, supports Win11 snap layouts' },
+  { zh: '修复 Win11 拖动便签卡顿、钉桌便签玻璃拟态失效、便签粘贴图片失效', en: 'Fix Win11 note-drag stutter, desktop-note glass, and image paste' },
+  { zh: '批量操作栏跟随顶栏外观自定义（颜色 / 透明度 / 亚克力）', en: 'Batch bar follows the title bar appearance customization' },
   { zh: '修复：便签内 Ctrl+C / Ctrl+V 无法复制粘贴的问题（含标题），粘贴现可正常插入', en: 'Fix: Ctrl+C/Ctrl+V copy & paste now work in notes (incl. title)' },
   { zh: '「关于」页新增「检查更新」按钮，可手动检测版本更新', en: 'Added a "Check for updates" button on the About page' },
   { zh: '数据安全加固：原子写入、版本号与损坏自动回退，断电也不怕数据写坏', en: 'Data safety: atomic writes, versioning & crash recovery' },
@@ -140,6 +145,11 @@ let state = {
   notes: [],
   trash: []
 };
+
+// 批量选中：一组被选中的便签 id（Set），multiSelect 开启后点击即切换选中
+let multiSelect = false;
+const selectedNotes = new Set();
+let isBatchDragging = false;
 
 let filter = { group: 'all', query: '' };
 let zCounter = 10;
@@ -238,7 +248,8 @@ function readRichContent(root) {
     } else if (node.nodeType === 1) {
       const tag = node.tagName;
       if (node.classList && node.classList.contains('inline-img')) {
-        out += '[[img:' + node.getAttribute('data-img-id') + ']]';
+        const id = node.getAttribute('data-img-id');
+        out += '[[img:' + id + ']]';
       } else if (node.classList && node.classList.contains('file-link')) {
         out += '[[file:' + node.getAttribute('data-file-id') + ']]';
       } else if (node.classList && node.classList.contains('note-table-block')) {
@@ -362,6 +373,108 @@ function removeHighlightFromSelection() {
 function toggleBold(contentEl) {
   if (contentEl) contentEl.focus();
   document.execCommand('bold');
+}
+
+/* 对齐光标所在「段落/块」或选区覆盖的多个块（含图片），不使用 execCommand，避免杂散 span 或触发高亮 */
+function alignBlock(contentEl, cmd) {
+  const map = { justifyLeft: 'left', justifyCenter: 'center', justifyRight: 'right' };
+  const value = map[cmd] || 'left';
+  if (!contentEl) return;
+  contentEl.focus();
+  const sel = window.getSelection();
+
+  // 若光标/选区聚焦在某张图片上，则只对齐该图片（独立块）
+  const focusedImg = (() => {
+    const selImg = contentEl.querySelector('.inline-img.selected');
+    if (selImg) return selImg;
+    if (!sel || !sel.rangeCount) return null;
+    const range = sel.getRangeAt(0);
+    const candidates = [];
+    [range.startContainer, range.endContainer, sel.anchorNode, sel.focusNode].forEach((node) => {
+      if (node) candidates.push(node);
+      if (node && node.nodeType === 1) node.childNodes.forEach((c) => candidates.push(c));
+    });
+    for (const node of candidates) {
+      let el = node && node.nodeType === 1 ? node : (node && node.parentElement);
+      if (el && el.classList && el.classList.contains('inline-img')) return el;
+      if (el && el.closest) {
+        const im = el.closest('.inline-img');
+        if (im) return im;
+      }
+    }
+    return null;
+  })();
+  const alignImg = (im) => {
+    // 图片保持 inline-block（随宽度收缩，删除/大小按钮不被拉伸），
+    // 用「包裹块」的 text-align 让图片按左/中/右移动，不破坏按钮定位
+    im.style.display = '';
+    im.style.margin = '';
+    const parent = im.parentElement;
+    if (!parent) return;
+    // 若已处在 note-align 块内，直接对齐该块
+    const inBlock = im.closest('.note-align');
+    if (inBlock) { inBlock.style.textAlign = value; return; }
+    // 否则把图片所在行段包进新的 note-align 块（从上一 <br> 到下一 <br>）
+    const wrap = document.createElement('div');
+    wrap.className = 'note-align note-align-' + value;
+    wrap.style.textAlign = value;
+    let startNode = im;
+    let prev = im.previousSibling;
+    while (prev && !(prev.nodeName === 'BR')) { startNode = prev; prev = prev.previousSibling; }
+    let endNode = im;
+    let next = im.nextSibling;
+    while (next && !(next.nodeName === 'BR')) { endNode = next; next = next.nextSibling; }
+    const nodes = [];
+    let cur = startNode;
+    while (cur) {
+      const n = cur;
+      nodes.push(n);
+      if (n === endNode) break;
+      cur = n.nextSibling;
+    }
+    parent.insertBefore(wrap, startNode);
+    nodes.forEach((n) => wrap.appendChild(n));
+    wrap.style.textAlign = value;
+  };
+
+  if (focusedImg) {
+    alignImg(focusedImg);
+    if (sel) sel.removeAllRanges();
+    return;
+  }
+
+  // 收集选区覆盖的块级元素（已有 .note-align div / 内容容器）
+  let blocks = [];
+  const collect = () => {
+    if (sel && sel.rangeCount) {
+      const range = sel.getRangeAt(0);
+      const candidates = contentEl.querySelectorAll('.note-align, div, p');
+      candidates.forEach((bl) => {
+        if (bl.closest('.note-align') && bl !== bl.closest('.note-align')) return; // 只取最外层
+        if (range.intersectsNode(bl) || bl.contains(range.startContainer) || bl.contains(range.endContainer)) {
+          if (!blocks.includes(bl)) blocks.push(bl);
+        }
+      });
+    }
+    if (!blocks.length) blocks = [contentEl];
+  };
+  collect();
+
+  blocks.forEach((bl) => {
+    bl.style.textAlign = value;
+  });
+
+  // 若无独立块（内容未分块），把全部内容包进一个 note-align 块（避免整篇直接设 text-align 导致序列化时嵌套包裹）
+  const onlyContainer = blocks.length === 1 && (blocks[0] === contentEl || /note-content|doc-content|dn-content/.test(blocks[0].className || ''));
+  if (onlyContainer && contentEl.childNodes.length) {
+    const wrap = document.createElement('div');
+    wrap.className = 'note-align note-align-' + value;
+    wrap.style.textAlign = value;
+    while (contentEl.firstChild) wrap.appendChild(contentEl.firstChild);
+    contentEl.appendChild(wrap);
+  }
+
+  if (sel) sel.removeAllRanges();
 }
 
 function toggleHighlight(contentEl) {
@@ -541,6 +654,8 @@ function applyBackground() {
   if (tb) tb.style.backgroundColor = bc;
   const fb = $('#filterbar');
   if (fb) fb.style.backgroundColor = bc;
+  const bb = $('#batchBar');
+  if (bb) bb.style.backgroundColor = bc;
 
   // 明亮/复杂背景下的可读性增强（默认开启）：有背景图或自定义亮底色时自动压暗+提对比
   const brightByImage = !!s.backgroundImage;
@@ -1289,18 +1404,21 @@ function wireCommon(el, n) {
         toggleHighlight(content);
       } else if (e.ctrlKey && (e.key === 'l' || e.key === 'L')) {
         e.preventDefault();
-        document.execCommand('justifyLeft');
+        alignBlock(content, 'justifyLeft');
         n.content = readRichContent(content);
+        n.updatedAt = Date.now();
         save();
       } else if (e.ctrlKey && (e.key === 'e' || e.key === 'E')) {
         e.preventDefault();
-        document.execCommand('justifyCenter');
+        alignBlock(content, 'justifyCenter');
         n.content = readRichContent(content);
+        n.updatedAt = Date.now();
         save();
       } else if (e.ctrlKey && (e.key === 'r' || e.key === 'R')) {
         e.preventDefault();
-        document.execCommand('justifyRight');
+        alignBlock(content, 'justifyRight');
         n.content = readRichContent(content);
+        n.updatedAt = Date.now();
         save();
       } else if (e.ctrlKey && !e.shiftKey && (e.key === 'c' || e.key === 'C')) {
         const imgSrc = getSelectedImageSrc(n);
@@ -2040,6 +2158,13 @@ function wireNoteEvents(el, n) {
     if (e.button !== 0) return;
     if (e.target.closest('button, input, .note-tools')) return;
     e.preventDefault();
+    if (multiSelect) {
+      // 点击未选中的便签：选中；点击已选中的便签：拖动整组
+      if (!selectedNotes.has(n.id)) { toggleSelectNote(n.id); return; }
+      head.setPointerCapture(e.pointerId);
+      startDrag(el, n, e);
+      return;
+    }
     head.setPointerCapture(e.pointerId);
     startDrag(el, n, e);
   });
@@ -2051,7 +2176,13 @@ function wireNoteEvents(el, n) {
     startResize(el, n, e);
   });
 
-  el.addEventListener('mousedown', () => {
+  el.addEventListener('mousedown', (e) => {
+    if (multiSelect) {
+      if (isBatchDragging) return;
+      e.preventDefault();
+      toggleSelectNote(n.id);
+      return;
+    }
     el.style.zIndex = ++zCounter;
     n.z = el.style.zIndex;
     bringToFront(el);
@@ -2061,9 +2192,18 @@ function wireNoteEvents(el, n) {
 function wireMemoEvents(el, n) {
   wireCommon(el, n);
 
+  if (multiSelect) el.classList.toggle('selected', selectedNotes.has(n.id));
+  el.addEventListener('click', (e) => {
+    if (multiSelect && !e.target.closest('button, input, .memo-tools')) {
+      e.preventDefault();
+      toggleSelectNote(n.id);
+    }
+  });
+
   const grip = $('.memo-grip', el);
   if (grip) {
     grip.addEventListener('dragstart', (e) => {
+      if (multiSelect) { e.preventDefault(); return; }
       dragMemoId = n.id;
       e.dataTransfer.effectAllowed = 'move';
     });
@@ -2075,8 +2215,8 @@ function wireMemoEvents(el, n) {
 }
 
 function bringToFront(el) {
-  $$('.note').forEach((x) => x.classList.remove('selected'));
-  el.classList.add('selected');
+  $$('.note').forEach((x) => x.classList.remove('focused'));
+  el.classList.add('focused');
 }
 
 function refreshFoot(el, n) {
@@ -2091,7 +2231,19 @@ function startDrag(el, n, e) {
   const offsetX = e.clientX - rect.left - n.x;
   const offsetY = e.clientY - rect.top - n.y;
 
+  // 批量模式：拖动任意已选便签，其余选中便签同步移动
+  const batch = multiSelect && selectedNotes.has(n.id);
+  const batchIds = Array.from(selectedNotes);
+  isBatchDragging = batch;
+  const batchStart = new Map();
+  if (batch) {
+    state.notes.forEach((nn) => {
+      if (selectedNotes.has(nn.id)) batchStart.set(nn.id, { x: nn.x || 0, y: nn.y || 0 });
+    });
+  }
+
   el.classList.add('dragging');
+  document.body.classList.add('note-dragging');
   el.style.transform = 'translate3d(0,0,0)';
 
   const updateRect = () => { rect = board.getBoundingClientRect(); };
@@ -2106,7 +2258,17 @@ function startDrag(el, n, e) {
     lastEv = null;
     const nx = Math.max(0, Math.round(ev.clientX - rect.left - offsetX));
     const ny = Math.max(0, Math.round(ev.clientY - rect.top - offsetY));
-    el.style.transform = `translate3d(${nx - n.x}px, ${ny - n.y}px, 0)`;
+    const dx = nx - n.x;
+    const dy = ny - n.y;
+    el.style.transform = `translate3d(${dx}px, ${dy}px, 0)`;
+    if (batch) {
+      $$('.note').forEach((other) => {
+        if (other === el) return;
+        const id = other.dataset.id;
+        if (!batchStart.has(id)) return;
+        other.style.transform = `translate3d(${dx}px, ${dy}px, 0)`;
+      });
+    }
   };
   const onMove = (ev) => {
     lastEv = ev;
@@ -2116,20 +2278,43 @@ function startDrag(el, n, e) {
     if (rafId != null) { cancelAnimationFrame(rafId); rafId = null; }
     if (lastEv) applyMove();
     const m = /translate3d\(([-\d.]+)px,\s*([-\d.]+)px/.exec(el.style.transform || '');
+    let dx = 0, dy = 0;
     if (m) {
-      n.x = Math.max(0, Math.round(n.x + parseFloat(m[1])));
-      n.y = Math.max(0, Math.round(n.y + parseFloat(m[2])));
+      dx = Math.round(parseFloat(m[1]));
+      dy = Math.round(parseFloat(m[2]));
+      n.x = Math.max(0, Math.round(n.x + dx));
+      n.y = Math.max(0, Math.round(n.y + dy));
+    }
+    // 批量：更新其余选中便签坐标
+    if (batch && (dx || dy)) {
+      state.notes.forEach((nn) => {
+        if (!batchStart.has(nn.id)) return;
+        nn.x = Math.max(0, Math.round((batchStart.get(nn.id).x) + dx));
+        nn.y = Math.max(0, Math.round((batchStart.get(nn.id).y) + dy));
+      });
+      save();
     }
     el.style.transform = '';
     el.style.left = n.x + 'px';
     el.style.top = n.y + 'px';
+    $$('.note.dragging').forEach((x) => { x.style.transform = ''; x.classList.remove('dragging'); });
+    if (batch) {
+      $$('.note').forEach((other) => {
+        const id = other.dataset.id;
+        const nn = state.notes.find((x) => x.id === id);
+        if (nn && selectedNotes.has(id)) { other.style.left = nn.x + 'px'; other.style.top = nn.y + 'px'; }
+      });
+    }
     canvas.removeEventListener('scroll', updateRect);
     document.removeEventListener('pointermove', onMove);
     document.removeEventListener('pointerup', onUp);
     document.removeEventListener('pointercancel', onUp);
     el.classList.remove('dragging');
+    document.body.classList.remove('note-dragging');
+    isBatchDragging = false;
     n.updatedAt = Date.now();
     save();
+    if (batch) renderAll();
   };
   document.addEventListener('pointermove', onMove);
   document.addEventListener('pointerup', onUp);
@@ -2469,6 +2654,7 @@ function renderAll() {
   $('#noteCount').textContent = state.notes.length;
   const empty = state.notes.length === 0;
   $('#emptyHint').classList.toggle('hidden', !empty || state.settings.viewMode === 'todo' || state.settings.viewMode === 'doc');
+  if (multiSelect) syncSelectedVisual();
 }
 
 function setViewMode(mode) {
@@ -2592,8 +2778,9 @@ function wireDocView(n, isTodo) {
   const setAlign = (cmd) => {
     content.focus();
     if (savedRange && savedNoteId === n.id) restoreSelection();
-    document.execCommand(cmd);
+    alignBlock(content, cmd);
     n.content = readRichContent(content);
+    n.updatedAt = Date.now();
     save();
   };
   const alignLeftBtn = $('#btnDocAlignLeft');
@@ -2674,17 +2861,17 @@ function wireDocView(n, isTodo) {
       toggleHighlight(content);
     } else if (e.ctrlKey && (e.key === 'l' || e.key === 'L')) {
       e.preventDefault();
-      document.execCommand('justifyLeft');
+      alignBlock(content, 'justifyLeft');
       n.content = readRichContent(content);
       save();
     } else if (e.ctrlKey && (e.key === 'e' || e.key === 'E')) {
       e.preventDefault();
-      document.execCommand('justifyCenter');
+      alignBlock(content, 'justifyCenter');
       n.content = readRichContent(content);
       save();
     } else if (e.ctrlKey && (e.key === 'r' || e.key === 'R')) {
       e.preventDefault();
-      document.execCommand('justifyRight');
+      alignBlock(content, 'justifyRight');
       n.content = readRichContent(content);
       save();
     } else if (e.ctrlKey && !e.shiftKey && (e.key === 'c' || e.key === 'C')) {
@@ -2780,6 +2967,143 @@ function deleteNote(id) {
   save();
   renderAll();
   toast(t('toast_removed'));
+}
+
+/* ============ 批量选中 ============ */
+function toggleMultiSelect() {
+  multiSelect = !multiSelect;
+  document.body.classList.toggle('multi-select', multiSelect);
+  const toggle = $('#btnBatchToggle');
+  if (toggle) toggle.classList.toggle('active', multiSelect);
+  if (multiSelect) {
+    selectedNotes.clear();
+    syncSelectedVisual();
+    $('#batchBar').classList.remove('hidden');
+  } else {
+    clearSelection();
+  }
+}
+
+function clearSelection() {
+  selectedNotes.clear();
+  syncSelectedVisual();
+  if (!multiSelect) $('#batchBar').classList.add('hidden');
+  updateBatchCount();
+}
+
+function syncSelectedVisual() {
+  const visibleIds = new Set(visibleNotes().map((n) => n.id));
+  $$('.note, .memo-row').forEach((el) => {
+    el.classList.toggle('selected', selectedNotes.has(el.dataset.id));
+  });
+  // 保持选中集只含可见便签（避免筛选/分组后仍留着看不见的）
+  for (const id of Array.from(selectedNotes)) {
+    if (!visibleIds.has(id)) selectedNotes.delete(id);
+  }
+  updateBatchCount();
+}
+
+function visibleNotes() {
+  const query = filter.query.trim().toLowerCase();
+  return state.notes.filter((n) => {
+    if (n.desktopPin) return false;
+    if (filter.group === 'ungrouped' && n.groupId) return false;
+    if (filter.group !== 'all' && filter.group !== 'ungrouped' && n.groupId !== filter.group) return false;
+    if (query) {
+      const g = state.groups.find((x) => x.id === n.groupId);
+      const hay = ((n.title || '') + ' ' + noteText(n) + ' ' + (g ? g.name : '')).toLowerCase();
+      if (!hay.includes(query)) return false;
+    }
+    return true;
+  });
+}
+
+function toggleSelectNote(id) {
+  if (selectedNotes.has(id)) selectedNotes.delete(id);
+  else selectedNotes.add(id);
+  syncSelectedVisual();
+}
+
+function updateBatchCount() {
+  const el = $('#batchCount');
+  if (el) el.textContent = t('batch_selected_count').replace('{n}', selectedNotes.size);
+}
+
+function selectAllVisible() {
+  visibleNotes().forEach((n) => selectedNotes.add(n.id));
+  syncSelectedVisual();
+}
+
+function batchDeleteSelected() {
+  const ids = Array.from(selectedNotes);
+  if (!ids.length) return;
+  const count = ids.length;
+  const idSet = new Set(ids);
+  const removed = state.notes.filter((n) => idSet.has(n.id));
+  state.notes = state.notes.filter((n) => !idSet.has(n.id));
+  removed.forEach((n) => {
+    if (n.desktopPin) window.api.unpinFromDesktop(n.id);
+    n.desktopPin = false;
+    state.trash.push({ note: n, deletedAt: Date.now() });
+  });
+  clearSelection();
+  save();
+  renderAll();
+  toast(t('toast_batch_deleted').replace('{n}', count));
+}
+
+function batchMoveSelected() {
+  const ids = Array.from(selectedNotes);
+  if (!ids.length) return;
+  openGroupPopForBatch();
+}
+
+function setBatchGroup(groupId) {
+  const count = selectedNotes.size;
+  const idSet = new Set(selectedNotes);
+  state.notes.forEach((n) => {
+    if (idSet.has(n.id)) n.groupId = groupId;
+  });
+  clearSelection();
+  save();
+  renderAll();
+  toast(t('toast_batch_moved').replace('{n}', count));
+}
+
+function openGroupPopForBatch() {
+  closePops();
+  const pop = document.createElement('div');
+  pop.className = 'color-pop ctx-menu';
+  pop.style.gridTemplateColumns = '1fr';
+  pop.style.minWidth = '150px';
+  pop.style.padding = '5px';
+
+  const mkItem = (label, labelColor, onClick, active) => {
+    const b = document.createElement('button');
+    b.style.cssText = 'background:transparent;border:none;color:var(--fg);padding:6px 10px;border-radius:6px;cursor:pointer;text-align:left;font-size:12.5px;font-family:inherit;width:100%;display:flex;align-items:center;gap:8px;';
+    b.innerHTML = `<span class="dot" style="background:${labelColor};width:10px;height:10px;border-radius:50%;flex-shrink:0"></span><span>${label}</span>`;
+    if (active) b.style.background = 'var(--accent-soft)';
+    b.onmouseenter = () => (b.style.background = 'var(--accent-soft)');
+    b.onmouseleave = () => (b.style.background = active ? 'var(--accent-soft)' : 'transparent');
+    b.onclick = () => { closePops(); onClick(); };
+    pop.appendChild(b);
+  };
+
+  mkItem(t('ungrouped'), '#999', () => setBatchGroup(null), false);
+  state.groups.forEach((g) => {
+    mkItem(escapeHtml(g.name), g.color, () => setBatchGroup(g.id), false);
+  });
+
+  const rect = ($('#batchBar') || document.body).getBoundingClientRect();
+  const elW = $('#btnBatchMove');
+  const anchor = (elW || $('#batchBar') || document.body).getBoundingClientRect();
+  document.body.appendChild(pop);
+  const x = Math.max(8, Math.min(anchor.left, window.innerWidth - pop.offsetWidth - 8));
+  const y = Math.max(8, Math.min(anchor.top - pop.offsetHeight - 6, window.innerHeight - pop.offsetHeight - 8));
+  pop.style.left = x + 'px';
+  pop.style.top = y + 'px';
+  activeColorPop = pop;
+  setTimeout(() => document.addEventListener('mousedown', closePopsOnce), 0);
 }
 
 function purgeTrash() {
@@ -2967,15 +3291,17 @@ function showNoteContextMenu(e, n) {
     if (c) {
       c.focus();
       if (savedRange && savedNoteId === n.id) restoreSelection();
-      document.execCommand(cmd);
+      alignBlock(c, cmd);
       n.content = readRichContent(c);
+      n.updatedAt = Date.now();
       save();
+      renderAll();
     }
     clearSavedSelection();
   };
   addItem('⇤', t('align_left'), () => alignNote('justifyLeft'));
   addItem('⇹', t('align_center'), () => alignNote('justifyCenter'));
-  addItem('⇥', t('align_right'), () => alignNote('justifyRight'));
+  addItem('⇥', t('align_right'), () => alignNote('justifyRight'));;
 
   const hlLabel = document.createElement('div');
   hlLabel.style.cssText = 'font-size:11px;color:var(--fg-dim);padding:8px 10px 2px;';
@@ -3546,6 +3872,13 @@ function bindUI() {
     toast(t('toast_arranged'));
   };
 
+  $('#btnBatchToggle').onclick = () => toggleMultiSelect();
+  $('#btnBatchExit').onclick = () => { if (multiSelect) toggleMultiSelect(); };
+  $('#btnBatchSelectAll').onclick = selectAllVisible;
+  $('#btnBatchClear').onclick = () => { selectedNotes.clear(); syncSelectedVisual(); };
+  $('#btnBatchDelete').onclick = batchDeleteSelected;
+  $('#btnBatchMove').onclick = batchMoveSelected;
+
   $('#viewBoard').onclick = () => setViewMode('board');
   $('#viewMemo').onclick = () => setViewMode('memo');
   $('#viewTodo').onclick = () => setViewMode('todo');
@@ -3556,10 +3889,6 @@ function bindUI() {
     applyTheme();
     save();
   };
-
-  $('#btnMin').onclick = () => window.api.minimize();
-  $('#btnMax').onclick = () => window.api.maximize();
-  $('#btnClose').onclick = () => window.api.close();
 
   $('#btnSettings').onclick = () => {
     switchTab('appearance');
@@ -4093,8 +4422,6 @@ async function init() {
   });
 
   window.api.onMaximized((flag) => {
-    const btn = $('#btnMax');
-    if (btn) btn.title = flag ? t('restore') : t('maximize');
     document.body.classList.toggle('maximized', !!flag);
   });
 

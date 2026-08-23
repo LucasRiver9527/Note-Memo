@@ -25,12 +25,10 @@
       <div class="tb-right">
         <button class="tb-btn" id="btnAdd" data-i18n="new_note" data-i18n-title="new_note_tip" title="新建便签 (Ctrl+Shift+N)">＋ 新建</button>
         <button class="tb-btn secondary" id="btnQuickArrange" data-i18n="quick_arrange" data-i18n-title="quick_arrange" title="一键整理">⚡ 一键整理</button>
+        <button class="tb-btn secondary" id="btnBatchToggle" data-i18n="batch_select" data-i18n-title="batch_select" title="批量选中">☑ 批量选中</button>
         <button class="icon-btn" id="btnSettings" data-i18n-title="global_settings" title="全局设置">⚙</button>
         <span class="tb-divider"></span>
         <button class="icon-btn win-btn" id="btnPin" data-i18n-title="always_on_top" title="窗口置顶">📌</button>
-        <button class="wc-btn" id="btnMin" title="最小化"></button>
-        <button class="wc-btn" id="btnMax" title="最大化"></button>
-        <button class="wc-btn" id="btnClose" title="关闭"></button>
       </div>
     </header>
 
@@ -47,6 +45,15 @@
         <button class="view-btn" id="viewDoc" data-i18n-title="doc_view" title="文档模式">▤</button>
       </div>
     </nav>
+
+    <div id="batchBar" class="hidden">
+      <span id="batchCount" class="batch-count"></span>
+      <button class="batch-btn" id="btnBatchSelectAll" data-i18n="batch_select_all">全选</button>
+      <button class="batch-btn" id="btnBatchClear" data-i18n="batch_clear_sel">取消选择</button>
+      <button class="batch-btn" id="btnBatchMove" data-i18n="batch_move">🏷 移动到分组</button>
+      <button class="batch-btn danger" id="btnBatchDelete" data-i18n="batch_delete">🗑 批量删除</button>
+      <button class="batch-btn" id="btnBatchExit" data-i18n="batch_exit">✕ 退出批量</button>
+    </div>
 
     <main id="canvas">
       <div id="board"></div>
@@ -144,6 +151,7 @@
                 <span data-i18n="topbar_acrylic">顶栏亚克力模糊</span>
                 <input type="checkbox" id="topBarAcrylicToggle" />
               </label>
+              <p class="sp-hint" data-i18n="topbar_follow_hint">与批量选中操作栏、筛选栏统一，跟随此处自定义（颜色 / 透明度 / 亚克力模糊）</p>
               <label class="field">
                 <span data-i18n="bg_opacity">背景图片透明度</span>
                 <input type="range" id="bgOpacity" min="0" max="100" value="100" />

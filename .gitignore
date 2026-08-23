@@ -13,8 +13,7 @@ Thumbs.db
 *.tmp
 *.temp
 
-# 本地开发备注文本（.txt 均不共享）
-*.txt
+
 node_modules/
 release/
 *.exe

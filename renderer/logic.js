@@ -79,6 +79,7 @@
     "topbar_opacity": "顶栏透明度",
     "bg_opacity": "背景图片透明度",
     "topbar_acrylic": "顶栏亚克力模糊",
+    "topbar_follow_hint": "与批量选中操作栏、筛选栏统一，跟随此处自定义（颜色 / 透明度 / 亚克力模糊）",
     "todo_area": "待办区",
     "todo_area_hint": "待办区各区域底色默认跟随主题，可自定义颜色与透明度。",
     "search_bg": "搜索框底色",
@@ -136,6 +137,15 @@
     "new_note": "＋ 新建",
     "new_note_tip": "新建便签 (Ctrl+Shift+N)",
     "quick_arrange": "⚡ 一键整理",
+    "batch_select": "☑ 批量选中",
+    "batch_exit": "✕ 退出批量",
+    "batch_delete": "🗑 批量删除",
+    "batch_move": "🏷 移动到分组",
+    "batch_select_all": "全选",
+    "batch_clear_sel": "取消选择",
+    "batch_selected_count": "已选 {n} 项",
+    "toast_batch_deleted": "已删除 {n} 张便签",
+    "toast_batch_moved": "已移动 {n} 张便签",
     "global_settings": "全局设置",
     "always_on_top": "窗口置顶",
     "minimize": "最小化",
@@ -380,6 +390,7 @@
     "topbar_opacity": "Title bar opacity",
     "bg_opacity": "Background image opacity",
     "topbar_acrylic": "Title bar acrylic blur",
+    "topbar_follow_hint": "Shared by the batch-select bar and filter bar; follows this customization (color / opacity / acrylic blur)",
     "todo_area": "Todo area",
     "todo_area_hint": "Todo area backgrounds follow the theme by default; you can customize color and opacity.",
     "search_bg": "Search box bg",
@@ -437,6 +448,15 @@
     "new_note": "＋ New",
     "new_note_tip": "New note (Ctrl+Shift+N)",
     "quick_arrange": "⚡ Arrange",
+    "batch_select": "☑ Batch select",
+    "batch_exit": "✕ Exit batch",
+    "batch_delete": "🗑 Delete selected",
+    "batch_move": "🏷 Move to group",
+    "batch_select_all": "Select all",
+    "batch_clear_sel": "Clear selection",
+    "batch_selected_count": "{n} selected",
+    "toast_batch_deleted": "Deleted {n} notes",
+    "toast_batch_moved": "Moved {n} notes",
     "global_settings": "Global Settings",
     "always_on_top": "Always on top",
     "minimize": "Minimize",
@@ -684,6 +704,7 @@
     "topbar_opacity": "顶栏透明度",
     "bg_opacity": "背景图片透明度",
     "topbar_acrylic": "顶栏亚克力模糊",
+    "topbar_follow_hint": "与批量选中操作栏、筛选栏统一，跟随此处自定义（颜色 / 透明度 / 亚克力模糊）",
     "todo_area": "待办区",
     "todo_area_hint": "待办区各区域底色默认跟随主题，可自定义颜色与透明度。",
     "search_bg": "搜索框底色",
@@ -741,6 +762,15 @@
     "new_note": "＋ 新建",
     "new_note_tip": "新建便签 (Ctrl+Shift+N)",
     "quick_arrange": "⚡ 一键整理",
+    "batch_select": "☑ 批量选中",
+    "batch_exit": "✕ 退出批量",
+    "batch_delete": "🗑 批量删除",
+    "batch_move": "🏷 移动到分组",
+    "batch_select_all": "全选",
+    "batch_clear_sel": "取消选择",
+    "batch_selected_count": "已选 {n} 项",
+    "toast_batch_deleted": "已删除 {n} 张便签",
+    "toast_batch_moved": "已移动 {n} 张便签",
     "global_settings": "全局设置",
     "always_on_top": "窗口置顶",
     "minimize": "最小化",
@@ -988,6 +1018,7 @@
     "topbar_opacity": "Title bar opacity",
     "bg_opacity": "Background image opacity",
     "topbar_acrylic": "Title bar acrylic blur",
+    "topbar_follow_hint": "Shared by the batch-select bar and filter bar; follows this customization (color / opacity / acrylic blur)",
     "todo_area": "Todo area",
     "todo_area_hint": "Todo area backgrounds follow the theme by default; you can customize color and opacity.",
     "search_bg": "Search box bg",
@@ -1045,6 +1076,15 @@
     "new_note": "＋ New",
     "new_note_tip": "New note (Ctrl+Shift+N)",
     "quick_arrange": "⚡ Arrange",
+    "batch_select": "☑ Batch select",
+    "batch_exit": "✕ Exit batch",
+    "batch_delete": "🗑 Delete selected",
+    "batch_move": "🏷 Move to group",
+    "batch_select_all": "Select all",
+    "batch_clear_sel": "Clear selection",
+    "batch_selected_count": "{n} selected",
+    "toast_batch_deleted": "Deleted {n} notes",
+    "toast_batch_moved": "Moved {n} notes",
     "global_settings": "Global Settings",
     "always_on_top": "Always on top",
     "minimize": "Minimize",
@@ -1569,13 +1609,18 @@
     (n.files || []).forEach((f) => { fileMap[f.id] = f; });
     const tableMap = {};
     (n.tables || []).forEach((tb) => { tableMap[tb.id] = tb; });
+    const stripAlignMarkers = (s) => String(s || '')
+      .replace(/\[\[alignimg:(left|center|right)\]\]/g, '')
+      .replace(/\[\[\/alignimg\]\]/g, '')
+      .replace(/\[\[align:(left|center|right)\]\]/g, '')
+      .replace(/\[\[\/align\]\]/g, '');
     const renderSeg = (seg) => {
       const re = /\[\[(img|file|table):([a-zA-Z0-9_-]+)\]\]/g;
       let segOut = '';
       let segLast = 0;
       let sm;
       while ((sm = re.exec(seg)) !== null) {
-        segOut += formatInlineText(seg.slice(segLast, sm.index), opts);
+        segOut += formatInlineText(stripAlignMarkers(seg.slice(segLast, sm.index)), opts);
         if (sm[1] === 'img') {
           const im = imgMap[sm[2]];
           if (im) segOut += inlineImgHtml(im, opts);
@@ -1588,7 +1633,7 @@
         }
         segLast = sm.index + sm[0].length;
       }
-      segOut += formatInlineText(seg.slice(segLast), opts);
+      segOut += formatInlineText(stripAlignMarkers(seg.slice(segLast)), opts);
       return segOut;
     };
     const s = String(text || '');

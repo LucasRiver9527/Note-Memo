@@ -166,6 +166,10 @@ function readRichContent(root) {
       }
     }
   });
+  if (root && root.style && root.style.textAlign && root.style.textAlign !== '' && root.style.textAlign !== 'start' &&
+      /dn-content/.test(root.className || '')) {
+    return '[[align:' + root.style.textAlign + ']]' + out + '[[/align]]';
+  }
   return out;
 }
 
@@ -897,8 +901,31 @@ function showCtxMenu(e) {
     if (c) {
       c.focus();
       if (savedRange) restoreSelection();
-      document.execCommand(cmd);
+      const map = { justifyLeft: 'left', justifyCenter: 'center', justifyRight: 'right' };
+      const value = map[cmd] || 'left';
+      let block = null;
+      const sel = window.getSelection();
+      if (sel && sel.rangeCount) {
+        let node = sel.getRangeAt(0).startContainer;
+        if (node.nodeType === 3) node = node.parentElement;
+        block = node && node.closest ? node.closest('.note-align, .dn-content') : null;
+      }
+      if (!block) block = c;
+      const isContainer = block === c || /dn-content/.test(block.className || '');
+      if (isContainer) {
+        // 整篇对齐：把全部内容包进一个 note-align 块（避免容器 text-align 不持久）
+        const wrap = document.createElement('div');
+        wrap.className = 'note-align note-align-' + value;
+        wrap.style.textAlign = value;
+        while (c.firstChild) wrap.appendChild(c.firstChild);
+        c.appendChild(wrap);
+      } else {
+        block.style.textAlign = value;
+      }
+      c.querySelectorAll('.inline-img').forEach((im) => { im.style.display = ''; im.style.margin = ''; });
+      if (sel) sel.removeAllRanges();
       note.content = readRichContent(c);
+      note.updatedAt = Date.now();
       save();
     }
     clearSavedSelection();
