@@ -21,6 +21,25 @@
     return `rgba(${r}, ${g}, ${b}, ${alpha})`;
   }
 
+  // 相对亮度（WCAG）0~1：颜色越亮越接近 1
+  function luminance(hex) {
+    const h = String(hex || '').replace('#', '');
+    if (h.length < 6) return 0;
+    const lin = (c) => {
+      const v = parseInt(c, 16) / 255;
+      return v <= 0.03928 ? v / 12.92 : Math.pow((v + 0.055) / 1.055, 2.4);
+    };
+    const r = lin(h.slice(0, 2)), g = lin(h.slice(2, 4)), b = lin(h.slice(4, 6));
+    return 0.2126 * r + 0.7152 * g + 0.0722 * b;
+  }
+
+  // WCAG 对比度 1~21（两种颜色）
+  function contrastRatio(a, b) {
+    const l1 = luminance(a), l2 = luminance(b);
+    const hi = Math.max(l1, l2), lo = Math.min(l1, l2);
+    return (hi + 0.05) / (lo + 0.05);
+  }
+
   // ---- 国际化单一来源（由脚本从 app.js/note.js 提取并合并，勿手改键值） ----
   const I18N = {
   "zh": {
@@ -46,6 +65,8 @@
     "canvas_bg": "画布背景",
     "bg_color": "背景色",
     "bg_image": "背景图片",
+    "bg_readability": "背景可读性增强",
+    "bg_readability_hint": "背景偏亮或较复杂时提升对比保证界面与便签文字清晰，尽量保留背景原色。",
     "bg_fill": "填充",
     "bg_fit": "适应",
     "bg_stretch": "拉伸",
@@ -276,6 +297,9 @@
     "highlight": "高亮",
     "unbold": "取消加粗",
     "unhighlight": "取消高亮",
+    "align_left": "左对齐",
+    "align_center": "居中",
+    "align_right": "右对齐",
     "insert_table": "插入表格",
     "table_rows": "行数",
     "table_cols": "列数",
@@ -342,6 +366,8 @@
     "canvas_bg": "Canvas background",
     "bg_color": "Background color",
     "bg_image": "Background image",
+    "bg_readability": "Background readability",
+    "bg_readability_hint": "Boosts contrast on bright or busy backgrounds to keep UI & note text readable while preserving the background colors.",
     "bg_fill": "Fill",
     "bg_fit": "Fit",
     "bg_stretch": "Stretch",
@@ -572,6 +598,9 @@
     "highlight": "Highlight",
     "unbold": "Unbold",
     "unhighlight": "Remove highlight",
+    "align_left": "Align left",
+    "align_center": "Center",
+    "align_right": "Align right",
     "insert_table": "Insert table",
     "table_rows": "Rows",
     "table_cols": "Cols",
@@ -641,6 +670,8 @@
     "canvas_bg": "画布背景",
     "bg_color": "背景色",
     "bg_image": "背景图片",
+    "bg_readability": "背景可读性增强",
+    "bg_readability_hint": "背景偏亮或较复杂时提升对比保证界面与便签文字清晰，尽量保留背景原色。",
     "bg_fill": "填充",
     "bg_fit": "适应",
     "bg_stretch": "拉伸",
@@ -871,6 +902,9 @@
     "highlight": "高亮",
     "unbold": "取消加粗",
     "unhighlight": "取消高亮",
+    "align_left": "左对齐",
+    "align_center": "居中",
+    "align_right": "右对齐",
     "insert_table": "插入表格",
     "table_rows": "行数",
     "table_cols": "列数",
@@ -940,6 +974,8 @@
     "canvas_bg": "Canvas background",
     "bg_color": "Background color",
     "bg_image": "Background image",
+    "bg_readability": "Background readability",
+    "bg_readability_hint": "Boosts contrast on bright or busy backgrounds to keep UI & note text readable while preserving the background colors.",
     "bg_fill": "Fill",
     "bg_fit": "Fit",
     "bg_stretch": "Stretch",
@@ -1170,6 +1206,9 @@
     "highlight": "Highlight",
     "unbold": "Unbold",
     "unhighlight": "Remove highlight",
+    "align_left": "Align left",
+    "align_center": "Center",
+    "align_right": "Align right",
     "insert_table": "Insert table",
     "table_rows": "Rows",
     "table_cols": "Cols",
@@ -1530,28 +1569,44 @@
     (n.files || []).forEach((f) => { fileMap[f.id] = f; });
     const tableMap = {};
     (n.tables || []).forEach((tb) => { tableMap[tb.id] = tb; });
-    const re = /\[\[(img|file|table):([a-zA-Z0-9_-]+)\]\]/g;
+    const renderSeg = (seg) => {
+      const re = /\[\[(img|file|table):([a-zA-Z0-9_-]+)\]\]/g;
+      let segOut = '';
+      let segLast = 0;
+      let sm;
+      while ((sm = re.exec(seg)) !== null) {
+        segOut += formatInlineText(seg.slice(segLast, sm.index), opts);
+        if (sm[1] === 'img') {
+          const im = imgMap[sm[2]];
+          if (im) segOut += inlineImgHtml(im, opts);
+        } else if (sm[1] === 'file') {
+          const f = fileMap[sm[2]];
+          if (f) segOut += fileLinkHtml(f);
+        } else {
+          const tb = tableMap[sm[2]];
+          if (tb) segOut += tableBlockHtml(tb, opts);
+        }
+        segLast = sm.index + sm[0].length;
+      }
+      segOut += formatInlineText(seg.slice(segLast), opts);
+      return segOut;
+    };
+    const s = String(text || '');
+    const alignRe = /\[\[align:(left|center|right)\]\]/g;
     let out = '';
     let last = 0;
     let m;
-    const s = String(text || '');
-    while ((m = re.exec(s)) !== null) {
-      out += formatInlineText(s.slice(last, m.index), opts);
-      if (m[1] === 'img') {
-        const im = imgMap[m[2]];
-        if (im) out += inlineImgHtml(im, opts);
-      } else if (m[1] === 'file') {
-        const f = fileMap[m[2]];
-        if (f) out += fileLinkHtml(f);
-      } else {
-        const tb = tableMap[m[2]];
-        if (tb) out += tableBlockHtml(tb, opts);
-      }
-      last = m.index + m[0].length;
+    while ((m = alignRe.exec(s)) !== null) {
+      const closeIdx = s.indexOf('[[/align]]', m.index + m[0].length);
+      if (closeIdx < 0) break;
+      out += renderSeg(s.slice(last, m.index));
+      out += '<div class="note-align note-align-' + m[1] + '" style="text-align:' + m[1] + '">' + renderSeg(s.slice(m.index + m[0].length, closeIdx)) + '</div>';
+      last = closeIdx + '[[/align]]'.length;
+      alignRe.lastIndex = last;
     }
-    out += formatInlineText(s.slice(last), opts);
+    out += renderSeg(s.slice(last));
     return out;
   }
 
-  return { hexToRgba, isDarkColor, autoTextColor, escapeHtml, refIdsOf, cleanupRefs, sortNotes, tableToMarkdown, noteToMarkdown, referencedMedia, parseNullSeparated, hdropString, setRenderLocale, formatInlineText, inlineImgHtml, fileLinkHtml, tableBlockHtml, renderRichContent, sanitizeCss, I18N, I18N_MERGED, T, mergeI18n };
+  return { hexToRgba, luminance, contrastRatio, isDarkColor, autoTextColor, escapeHtml, refIdsOf, cleanupRefs, sortNotes, tableToMarkdown, noteToMarkdown, referencedMedia, parseNullSeparated, hdropString, setRenderLocale, formatInlineText, inlineImgHtml, fileLinkHtml, tableBlockHtml, renderRichContent, sanitizeCss, I18N, I18N_MERGED, T, mergeI18n };
 });

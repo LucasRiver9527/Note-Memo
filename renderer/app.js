@@ -57,6 +57,7 @@ const DEFAULT_SETTINGS = {
   alwaysOnTop: false,
   backgroundImage: null,
   backgroundMode: 'cover',
+  backgroundReadability: true,
   noteTextColor: null,
   viewMode: 'board',
   bgOpacity: 100,
@@ -157,6 +158,22 @@ let copiedImage = null;
 // 富文本 HTML 缓存：键为内容/媒体/语言/markdown 的指纹，内容不变则不重复解析
 const richCache = new Map(); // noteId -> { key, html }
 
+// 画布增量渲染：记上一次视图与已建卡片，便于复用未变化的卡片、避免全量重建
+let lastRenderView = null;
+const boardEls = new Map(); // noteId -> 卡片 Element
+
+// 便签卡片渲染指纹：任一影响卡片的属性变化都会导致该卡片重建
+function noteFingerprint(n) {
+  return [
+    n.id, n.title || '', n.content || '',
+    n.color || '', n.textColor || '', n.fontSize || '', n.fontFamily || '',
+    n.pinned ? 1 : 0, n.groupId || '', n.type || '',
+    n.x || 0, n.y || 0, n.w || 0, n.h || 0, n.z || 0,
+    n.reminder ? (n.reminder.time || '') + '/' + (n.reminder.fired ? 1 : 0) : '',
+    JSON.stringify(n.images || []), JSON.stringify(n.files || []), JSON.stringify(n.tables || [])
+  ].join('|');
+}
+
 /* ============ 工具函数 ============ */
 function uid() { return 'n' + Date.now().toString(36) + Math.random().toString(36).slice(2, 7); }
 
@@ -247,6 +264,8 @@ function readRichContent(root) {
         } else {
           out += readRichContent(node);
         }
+      } else if ((tag === 'DIV' || tag === 'P') && node.style && node.style.textAlign && node.style.textAlign !== '' && node.style.textAlign !== 'start') {
+        out += '[[align:' + node.style.textAlign + ']]' + readRichContent(node) + '[[/align]]';
       } else {
         out += readRichContent(node);
       }
@@ -522,6 +541,11 @@ function applyBackground() {
   if (tb) tb.style.backgroundColor = bc;
   const fb = $('#filterbar');
   if (fb) fb.style.backgroundColor = bc;
+
+  // 明亮/复杂背景下的可读性增强（默认开启）：有背景图或自定义亮底色时自动压暗+提对比
+  const brightByImage = !!s.backgroundImage;
+  const brightByColor = !!s.canvasColor && luminance(s.canvasColor) > 0.65;
+  document.body.classList.toggle('bright-bg', s.backgroundReadability !== false && (brightByImage || brightByColor));
 }
 
 function renderThemePanel() {
@@ -683,6 +707,7 @@ function syncSettingsInputs() {
   $('#backgroundMode').value = state.settings.backgroundMode || 'cover';
   $('#noteTextColor').value = state.settings.noteTextColor || (isLightTheme() ? '#2d2f38' : '#ececf1');
   $('#bgOpacity').value = state.settings.bgOpacity != null ? state.settings.bgOpacity : 100;
+  const br = $('#bgReadabilityToggle'); if (br) br.checked = state.settings.backgroundReadability !== false;
   $('#topBarOpacity').value = state.settings.topBarOpacity != null ? state.settings.topBarOpacity : 100;
   const ta = $('#topBarAcrylicToggle'); if (ta) ta.checked = !!state.settings.topBarAcrylic;
   $('#topBarColor').value = state.settings.topBarColor || (isLightTheme() ? '#ffffff' : '#000000');
@@ -1063,6 +1088,7 @@ function buildNoteEl(n) {
   let textColor = n.textColor || state.settings.noteTextColor;
   if (!textColor) textColor = autoTextColor(n.color);
   el.style.color = textColor;
+  el.classList.toggle('note-text-light', !isDarkColor(textColor));
   if (n.fontFamily && n.fontFamily !== 'system') el.style.fontFamily = FONTS[n.fontFamily] || n.fontFamily;
 
   const group = state.groups.find((g) => g.id === n.groupId);
@@ -1089,14 +1115,14 @@ function buildNoteEl(n) {
       <span class="note-grip">⠿</span>
       <input class="note-title" value="${escapeHtml(n.title || '')}" placeholder="${t('note_title')}" />
       <div class="note-tools">
-        <button class="t-pin ${n.pinned ? 'active' : ''}" title="${t('pin')}">📌</button>
+        <button class="t-desktop" title="${t('desktop')}">📌</button>
         <button class="t-todo ${isTodo ? 'active' : ''}" title="${t('todo_mode')}">☑</button>
         <button class="t-group ${n.groupId ? 'active' : ''}" title="${n.groupId ? t('remove_from_group') : t('add_to_group')}">🏷</button>
-        <button class="t-desktop" title="${t('desktop')}">🖥️</button>
         <button class="t-image" title="${t('insert_image')}">🖼️</button>
         <button class="t-table" title="${t('insert_table')}">▦</button>
         <button class="t-remind" title="${t('todo_remind')}">⏰</button>
         <button class="t-color" title="${t('color')}">🎨</button>
+        <button class="t-pin ${n.pinned ? 'active' : ''}" title="${t('pin')}">🔝</button>
         <button class="t-del" title="${t('delete')}">🗑</button>
       </div>
     </div>
@@ -1122,6 +1148,7 @@ function buildMemoEl(n) {
   let textColor = n.textColor || state.settings.noteTextColor;
   if (!textColor) textColor = autoTextColor(n.color);
   el.style.color = textColor;
+  el.classList.toggle('note-text-light', !isDarkColor(textColor));
   if (n.fontFamily && n.fontFamily !== 'system') el.style.fontFamily = FONTS[n.fontFamily] || n.fontFamily;
 
   const group = state.groups.find((g) => g.id === n.groupId);
@@ -1149,14 +1176,14 @@ function buildMemoEl(n) {
         <span class="memo-grip" draggable="true" title="${t('drag_sort')}">⠿</span>
         <input class="note-title" value="${escapeHtml(n.title || '')}" placeholder="${t('note_title')}" />
         <div class="memo-tools">
-          <button class="t-pin ${n.pinned ? 'active' : ''}" title="${t('pin')}">📌</button>
+          <button class="t-desktop" title="${t('desktop')}">📌</button>
           <button class="t-todo ${isTodo ? 'active' : ''}" title="${t('todo_mode')}">☑</button>
           <button class="t-group ${n.groupId ? 'active' : ''}" title="${n.groupId ? t('remove_from_group') : t('add_to_group')}">🏷</button>
-          <button class="t-desktop" title="${t('desktop')}">🖥️</button>
           <button class="t-image" title="${t('insert_image')}">🖼️</button>
           <button class="t-table" title="${t('insert_table')}">▦</button>
           <button class="t-remind" title="${t('todo_remind')}">⏰</button>
           <button class="t-color" title="${t('color')}">🎨</button>
+          <button class="t-pin ${n.pinned ? 'active' : ''}" title="${t('pin')}">🔝</button>
           <button class="t-del" title="${t('delete')}">🗑</button>
         </div>
       </div>
@@ -1260,6 +1287,21 @@ function wireCommon(el, n) {
       } else if (e.ctrlKey && (e.key === 'h' || e.key === 'H')) {
         e.preventDefault();
         toggleHighlight(content);
+      } else if (e.ctrlKey && (e.key === 'l' || e.key === 'L')) {
+        e.preventDefault();
+        document.execCommand('justifyLeft');
+        n.content = readRichContent(content);
+        save();
+      } else if (e.ctrlKey && (e.key === 'e' || e.key === 'E')) {
+        e.preventDefault();
+        document.execCommand('justifyCenter');
+        n.content = readRichContent(content);
+        save();
+      } else if (e.ctrlKey && (e.key === 'r' || e.key === 'R')) {
+        e.preventDefault();
+        document.execCommand('justifyRight');
+        n.content = readRichContent(content);
+        save();
       } else if (e.ctrlKey && !e.shiftKey && (e.key === 'c' || e.key === 'C')) {
         const imgSrc = getSelectedImageSrc(n);
         if (imgSrc) {
@@ -2371,6 +2413,7 @@ function renderAll() {
     board.innerHTML = '';
     memoList.innerHTML = '';
     docList.innerHTML = '';
+    lastRenderView = 'todo';
     renderTodoView();
   } else if (state.settings.viewMode === 'memo') {
     board.classList.add('hidden');
@@ -2380,6 +2423,7 @@ function renderAll() {
     board.innerHTML = '';
     memoList.innerHTML = '';
     docList.innerHTML = '';
+    lastRenderView = 'memo';
     getSortedNotes(visible).forEach((n) => memoList.appendChild(buildMemoEl(n)));
   } else if (state.settings.viewMode === 'doc') {
     board.classList.add('hidden');
@@ -2389,6 +2433,7 @@ function renderAll() {
     board.innerHTML = '';
     memoList.innerHTML = '';
     todoList.innerHTML = '';
+    lastRenderView = 'doc';
     renderDocView(visible);
   } else {
     board.classList.remove('hidden');
@@ -2398,8 +2443,27 @@ function renderAll() {
     memoList.innerHTML = '';
     todoList.innerHTML = '';
     docList.innerHTML = '';
-    board.innerHTML = '';
-    visible.forEach((n) => board.appendChild(buildNoteEl(n)));
+
+    // 进入画布视图：全量重建；保持在画布：增量复用未变化卡片
+    if (lastRenderView !== 'board') {
+      board.innerHTML = '';
+      boardEls.clear();
+    }
+    lastRenderView = 'board';
+
+    const visibleIds = new Set(visible.map((n) => n.id));
+    for (const [id, el] of boardEls) {
+      if (!visibleIds.has(id)) { el.remove(); boardEls.delete(id); }
+    }
+    visible.forEach((n) => {
+      const existing = boardEls.get(n.id);
+      const snap = noteFingerprint(n);
+      if (existing && existing.__snap === snap) return;
+      const el = buildNoteEl(n);
+      el.__snap = snap;
+      if (existing) existing.replaceWith(el); else board.appendChild(el);
+      boardEls.set(n.id, el);
+    });
   }
 
   $('#noteCount').textContent = state.notes.length;
@@ -2453,20 +2517,24 @@ function renderDocView(visible) {
       <button class="doc-back" id="btnDocBack">${t('doc_back')}</button>
       ${!isTodo ? `<button class="doc-fmt-btn" id="btnDocBold" title="${t('bold')}"><b>B</b></button>
       <button class="doc-fmt-btn" id="btnDocHighlight" title="${t('highlight')}">🖍</button>
-      <input type="color" id="btnDocHlColor" class="doc-hl-color" title="${t('highlight_color')}" value="${highlightColor()}" />` : ''}
+      <input type="color" id="btnDocHlColor" class="doc-hl-color" title="${t('highlight_color')}" value="${highlightColor()}" />
       <span class="doc-tb-sep"></span>
-      <button class="doc-fmt-btn" id="btnDocPin" title="${t('pin')}">📌</button>
+      <button class="doc-fmt-btn" id="btnDocAlignLeft" title="${t('align_left')}">⇤</button>
+      <button class="doc-fmt-btn" id="btnDocAlignCenter" title="${t('align_center')}">⇹</button>
+      <button class="doc-fmt-btn" id="btnDocAlignRight" title="${t('align_right')}">⇥</button>` : ''}
+      <span class="doc-tb-sep"></span>
+      <button class="doc-fmt-btn" id="btnDocDesktop" title="${t('desktop')}">📌</button>
       <button class="doc-fmt-btn" id="btnDocTodo" title="${t('todo_mode')}">☑</button>
       <button class="doc-fmt-btn" id="btnDocGroup" title="${t('add_to_group')}">🏷</button>
-      <button class="doc-fmt-btn" id="btnDocDesktop" title="${t('desktop')}">🖥️</button>
       <button class="doc-fmt-btn" id="btnDocImage" title="${t('insert_image')}">🖼️</button>
       <button class="doc-fmt-btn" id="btnDocTable" title="${t('insert_table')}">▦</button>
       <button class="doc-fmt-btn" id="btnDocRemind" title="${t('todo_remind')}">⏰</button>
       <button class="doc-fmt-btn" id="btnDocColor" title="${t('color')}">🎨</button>
+      <button class="doc-fmt-btn" id="btnDocPin" title="${t('pin')}">🔝</button>
       <button class="doc-fmt-btn" id="btnDocDel" title="${t('delete')}">🗑</button>
       <span class="doc-hint">${t('doc_hint')}</span>
     </div>
-    <div class="doc-editor" style="--note-color:${n.color};${n.fontSize ? '--note-font-size:' + n.fontSize + 'px;' : ''}color:${textColor}">
+    <div class="doc-editor ${isDarkColor(textColor) ? '' : 'note-text-light'}" style="--note-color:${n.color};${n.fontSize ? '--note-font-size:' + n.fontSize + 'px;' : ''}color:${textColor}">
       <input id="docTitle" class="doc-title-input" value="${escapeHtml(n.title || '')}" placeholder="${t('note_title')}" />
       ${isTodo ? todoHtml : `<div id="docContent" class="doc-content" contenteditable="true" spellcheck="false" data-placeholder="${t('note_content')}">${renderRichCached(n)}</div>`}
     </div>`;
@@ -2521,6 +2589,30 @@ function wireDocView(n, isTodo) {
   if (!content) return;
   if (boldBtn) boldBtn.onclick = () => { content.focus(); if (savedRange && savedNoteId === n.id) restoreSelection(); toggleBold(content); };
   if (hlBtn) hlBtn.onclick = () => { content.focus(); if (savedRange && savedNoteId === n.id) restoreSelection(); toggleHighlight(content); };
+  const setAlign = (cmd) => {
+    content.focus();
+    if (savedRange && savedNoteId === n.id) restoreSelection();
+    document.execCommand(cmd);
+    n.content = readRichContent(content);
+    save();
+  };
+  const alignLeftBtn = $('#btnDocAlignLeft');
+  const alignCenterBtn = $('#btnDocAlignCenter');
+  const alignRightBtn = $('#btnDocAlignRight');
+  if (alignLeftBtn) alignLeftBtn.onclick = () => setAlign('justifyLeft');
+  if (alignCenterBtn) alignCenterBtn.onclick = () => setAlign('justifyCenter');
+  if (alignRightBtn) alignRightBtn.onclick = () => setAlign('justifyRight');
+  const updateAlignState = () => {
+    const state = { justifyLeft: false, justifyCenter: false, justifyRight: false };
+    ['justifyLeft', 'justifyCenter', 'justifyRight'].forEach((c) => { try { state[c] = document.queryCommandState(c); } catch (_) {} });
+    if (alignLeftBtn) alignLeftBtn.classList.toggle('align-active', state.justifyLeft);
+    if (alignCenterBtn) alignCenterBtn.classList.toggle('align-active', state.justifyCenter);
+    if (alignRightBtn) alignRightBtn.classList.toggle('align-active', state.justifyRight);
+  };
+  content.addEventListener('keyup', updateAlignState);
+  content.addEventListener('mouseup', updateAlignState);
+  content.addEventListener('input', updateAlignState);
+  updateAlignState();
   const hlColor = $('#btnDocHlColor');
   if (hlColor) hlColor.addEventListener('input', (e) => setHighlightColor(e.target.value));
 
@@ -2580,6 +2672,21 @@ function wireDocView(n, isTodo) {
     } else if (e.ctrlKey && (e.key === 'h' || e.key === 'H')) {
       e.preventDefault();
       toggleHighlight(content);
+    } else if (e.ctrlKey && (e.key === 'l' || e.key === 'L')) {
+      e.preventDefault();
+      document.execCommand('justifyLeft');
+      n.content = readRichContent(content);
+      save();
+    } else if (e.ctrlKey && (e.key === 'e' || e.key === 'E')) {
+      e.preventDefault();
+      document.execCommand('justifyCenter');
+      n.content = readRichContent(content);
+      save();
+    } else if (e.ctrlKey && (e.key === 'r' || e.key === 'R')) {
+      e.preventDefault();
+      document.execCommand('justifyRight');
+      n.content = readRichContent(content);
+      save();
     } else if (e.ctrlKey && !e.shiftKey && (e.key === 'c' || e.key === 'C')) {
       const imgSrc = getSelectedImageSrc(n);
       if (imgSrc) {
@@ -2855,6 +2962,21 @@ function showNoteContextMenu(e, n) {
     clearSavedSelection();
   });
 
+  const alignNote = (cmd) => {
+    const c = focusNoteContent(n);
+    if (c) {
+      c.focus();
+      if (savedRange && savedNoteId === n.id) restoreSelection();
+      document.execCommand(cmd);
+      n.content = readRichContent(c);
+      save();
+    }
+    clearSavedSelection();
+  };
+  addItem('⇤', t('align_left'), () => alignNote('justifyLeft'));
+  addItem('⇹', t('align_center'), () => alignNote('justifyCenter'));
+  addItem('⇥', t('align_right'), () => alignNote('justifyRight'));
+
   const hlLabel = document.createElement('div');
   hlLabel.style.cssText = 'font-size:11px;color:var(--fg-dim);padding:8px 10px 2px;';
   hlLabel.textContent = t('highlight_color');
@@ -2905,7 +3027,7 @@ function showNoteContextMenu(e, n) {
     if (n.groupId) { n.groupId = null; n.updatedAt = Date.now(); save(); renderAll(); }
     else openGroupPop(noteAnchor(n), n);
   });
-  addItem('🖥️', t('desktop'), () => {
+  addItem('📌', t('desktop'), () => {
     n.desktopPin = true;
     n.updatedAt = Date.now();
     saveNow();
@@ -3349,32 +3471,24 @@ function confirmModal(title, message) {
 function arrangeNotes() {
   const margin = 20;
   const gap = 18;
-  const colW = 260;
-  const rowH = 230;
-  const cols = Math.max(1, Math.floor(($('#canvas').clientWidth - margin * 2 + gap) / colW));
+  const boardEl = $('#board');
+  const maxX = (boardEl && boardEl.clientWidth) ? boardEl.clientWidth - margin : ($('#canvas').clientWidth - margin);
   const sorted = getSortedNotes(state.notes.filter((n) => !n.desktopPin));
-  const placed = [];
-  const overlaps = (x, y, w, h) => placed.some((p) => (x < p.x + p.w + gap) && (x + w + gap > p.x) && (y < p.y + p.h + gap) && (y + h + gap > p.y));
+  let x = margin;
+  let y = margin;
+  let rowMaxH = margin;
   sorted.forEach((n) => {
     const w = n.w || 240;
     const h = n.h || 180;
-    let pos = null;
-    outer:
-    for (let i = 0; i < 10000; i++) {
-      const row = Math.floor(i / cols);
-      const col = i % cols;
-      const x = margin + col * colW;
-      const y = margin + row * rowH;
-      if (!overlaps(x, y, w, h)) { pos = { x, y }; break outer; }
+    if (x > margin && x + w > maxX) {
+      x = margin;
+      y += rowMaxH + gap;
+      rowMaxH = 0;
     }
-    if (!pos) {
-      let maxBottom = margin;
-      placed.forEach((p) => { maxBottom = Math.max(maxBottom, p.y + p.h); });
-      pos = { x: margin, y: maxBottom + gap };
-    }
-    n.x = pos.x;
-    n.y = pos.y;
-    placed.push({ x: pos.x, y: pos.y, w, h });
+    n.x = x;
+    n.y = y;
+    x += w + gap;
+    rowMaxH = Math.max(rowMaxH, h);
   });
   save();
   renderAll();
@@ -3655,9 +3769,10 @@ function bindUI() {
   $('#customAccent').addEventListener('change', save);
   $('#canvasColor').addEventListener('input', (e) => { state.settings.canvasColor = e.target.value; applyTheme(); });
   $('#canvasColor').addEventListener('change', save);
-  $('#backgroundMode').addEventListener('change', (e) => { state.settings.backgroundMode = e.target.value; applyBackground(); save(); });
-  $('#bgOpacity').addEventListener('input', (e) => { state.settings.bgOpacity = Number(e.target.value); applyBackground(); });
+  $('#backgroundMode').addEventListener('change', (e) => { state.settings.backgroundMode = e.target.value; applyBackground(); applyTheme(); save(); });
+  $('#bgOpacity').addEventListener('input', (e) => { state.settings.bgOpacity = Number(e.target.value); applyBackground(); applyTheme(); });
   $('#bgOpacity').addEventListener('change', save);
+  $('#bgReadabilityToggle').addEventListener('change', (e) => { state.settings.backgroundReadability = e.target.checked; applyTheme(); save(); });
   $('#topBarOpacity').addEventListener('input', (e) => { state.settings.topBarOpacity = Number(e.target.value); applyBackground(); });
   $('#topBarOpacity').addEventListener('change', save);
   $('#topBarAcrylicToggle').addEventListener('change', (e) => {

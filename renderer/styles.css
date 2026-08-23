@@ -219,7 +219,9 @@ body.topbar-acrylic .icon-btn:hover { color: var(--accent); }
 .view-toggle {
   flex: 0 0 auto; margin-left: auto;
   display: flex; gap: 2px; padding: 2px;
-  background: var(--bg-soft); border: 1px solid var(--border); border-radius: 8px;
+  background: color-mix(in srgb, var(--bg-soft) 65%, transparent);
+  border: 1px solid color-mix(in srgb, var(--border) 45%, transparent);
+  border-radius: 10px;
 }
 .view-btn {
   background: transparent; border: none; color: var(--fg-dim);
@@ -285,8 +287,8 @@ body.topbar-acrylic .icon-btn:hover { color: var(--accent); }
 }
 .note:hover .note-tools { opacity: 1; }
 .note-tools button {
-  background: rgba(127,127,127,0.22); border: none; cursor: pointer;
-  width: 20px; height: 20px; border-radius: 6px; font-size: 10px; line-height: 1;
+  background: rgba(127,127,127,0.26); border: none; cursor: pointer;
+  width: 22px; height: 22px; border-radius: 6px; font-size: 13px; line-height: 1;
   color: inherit; display: inline-flex; align-items: center; justify-content: center;
   transition: background 0.12s;
 }
@@ -309,6 +311,10 @@ body.topbar-acrylic .icon-btn:hover { color: var(--accent); }
 .note-content a.note-link {
   color: inherit; text-decoration: underline;
   cursor: pointer; word-break: break-all;
+}
+
+.note-content .note-align {
+  white-space: pre-wrap;
 }
 
 .todo-list { list-style: none; }
@@ -426,8 +432,8 @@ body.topbar-acrylic .icon-btn:hover { color: var(--accent); }
 .memo-tools { display: flex; gap: 2px; flex-shrink: 0; opacity: 0.85; transition: opacity 0.15s; }
 .memo-row:hover .memo-tools { opacity: 1; }
 .memo-tools button {
-  background: rgba(127,127,127,0.22); border: none; cursor: pointer;
-  width: 24px; height: 24px; border-radius: 6px; font-size: 12px; line-height: 1;
+  background: rgba(127,127,127,0.26); border: none; cursor: pointer;
+  width: 24px; height: 24px; border-radius: 6px; font-size: 14px; line-height: 1;
   color: inherit; display: inline-flex; align-items: center; justify-content: center;
   transition: background 0.12s, color 0.12s;
 }
@@ -901,6 +907,10 @@ body.glass .memo-row:hover { box-shadow: 0 12px 40px rgba(0, 0, 0, 0.32); }
 }
 .doc-content:empty::before { content: attr(data-placeholder); color: var(--fg-dim); }
 .doc-content a.note-link { color: var(--accent); text-decoration: underline; cursor: pointer; word-break: break-all; }
+.doc-content .note-align { white-space: pre-wrap; }
+
+/* ---------- 对齐按钮（文档模式工具栏） ---------- */
+.doc-toolbar .doc-fmt-btn.align-active { background: var(--accent-soft); color: var(--accent); }
 
 /* ---------- 关于 ---------- */
 .about-card { text-align: center; padding: 8px 0 16px; border-bottom: 1px solid var(--border); margin-bottom: 8px; }
@@ -978,6 +988,48 @@ body.glass .todo-section.remind {
 }
 body.glass .todo-add-box input {
   background-color: color-mix(in srgb, var(--todo-search-bg, var(--bg-soft)) 62%, transparent) !important;
+}
+
+/* ---------- 明亮/复杂背景下的可读性增强（body.bright-bg） ---------- */
+/* 不整图压暗：仅轻微提升饱和/对比，保住背景亮度与色彩；可读性由下方控件底/文字投影保证 */
+body.bright-bg #bgLayer {
+  filter: saturate(1.06) contrast(1.02);
+}
+/* 全局 UI 文字与控件提升对比 */
+body.bright-bg .brand-name,
+body.bright-bg .note-count,
+body.bright-bg .search-icon,
+body.bright-bg .view-btn:not(.active),
+body.bright-bg .chip:not(.active),
+body.bright-bg .doc-hint {
+  color: var(--fg);
+}
+body.bright-bg .chip:not(.active),
+body.bright-bg .view-btn:not(.active),
+body.bright-bg .tb-btn.secondary,
+body.bright-bg .doc-fmt-btn,
+body.bright-bg .doc-back {
+  background: color-mix(in srgb, var(--bg-soft) 78%, transparent);
+  border-color: rgba(127, 127, 127, 0.5);
+  box-shadow: 0 1px 6px rgba(0, 0, 0, 0.3);
+}
+/* 便签正文在复杂背景下：仅当文字为浅色时加投影提升可读性，深色文字保持锐利 */
+body.bright-bg .note.note-text-light .note-content,
+body.bright-bg .memo-row.note-text-light .note-content,
+body.bright-bg .doc-editor.note-text-light .doc-content {
+  text-shadow: 0 1px 2px rgba(0, 0, 0, 0.38), 0 0 1px rgba(0, 0, 0, 0.22);
+}
+/* 空态提示：字幕式——亮字 + 柔暗投影（无胶囊边框，自然融入背景），图标加投影更清晰 */
+body.bright-bg .empty-hint {
+  color: rgba(255, 255, 255, 0.96);
+  text-shadow: 0 1px 3px rgba(0, 0, 0, 0.55), 0 0 6px rgba(0, 0, 0, 0.35);
+}
+body.bright-bg .empty-icon {
+  opacity: 0.92;
+  filter: drop-shadow(0 2px 5px rgba(0, 0, 0, 0.45));
+}
+body.bright-bg .empty-hint .sub {
+  opacity: 0.95;
 }
 
 /* ---------- 备忘录拖动排序指示 ---------- */

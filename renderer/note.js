@@ -159,6 +159,8 @@ function readRichContent(root) {
         } else {
           out += readRichContent(node);
         }
+      } else if ((tag === 'DIV' || tag === 'P') && node.style && node.style.textAlign && node.style.textAlign !== '' && node.style.textAlign !== 'start') {
+        out += '[[align:' + node.style.textAlign + ']]' + readRichContent(node) + '[[/align]]';
       } else {
         out += readRichContent(node);
       }
@@ -889,6 +891,21 @@ function showCtxMenu(e) {
     clearSavedSelection();
   });
   addItem('🎨', tr('text_color'), () => { hideCtx(); showTextColorMenu(); });
+
+  const alignNote = (cmd) => {
+    const c = $('#dnText');
+    if (c) {
+      c.focus();
+      if (savedRange) restoreSelection();
+      document.execCommand(cmd);
+      note.content = readRichContent(c);
+      save();
+    }
+    clearSavedSelection();
+  };
+  addItem('⇤', tr('align_left'), () => alignNote('justifyLeft'));
+  addItem('⇹', tr('align_center'), () => alignNote('justifyCenter'));
+  addItem('⇥', tr('align_right'), () => alignNote('justifyRight'));
 
   menu.classList.remove('hidden');
   const x = Math.max(4, Math.min(e.clientX, window.innerWidth - menu.offsetWidth - 4));

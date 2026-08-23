@@ -1,7 +1,7 @@
 # 📝 便签 MyNotes
 
-> 美观可定制的 Windows 桌面便签工具，帮你随手记录、高效管理待办。
-> 一个用于学习 Electron 的练手项目，功能持续完善中。
+> 一款美观可定制的 Windows 桌面便签工具：随手记录、高效管理待办、一键整理分类。
+> 数据保存在本机，无需联网，隐私安全；支持自动更新，持续改进。
 
 ## ✨ 功能特点
 
@@ -19,6 +19,7 @@
 - **一键搜索**：输入关键词快速定位任意便签
 - **智能排序**：自定义顺序 / 更新时间 / 创建时间 / 标题 / 颜色
 - **便签个性化**：15 种便签颜色、自定义文字颜色、便签独立字体
+- **文本对齐**：右键菜单对选中内容一键左 / 居中 / 右对齐（`Ctrl+L` / `Ctrl+E` / `Ctrl+R`）
 - **备忘录拖动排序**：列表内直接拖拽调整上下顺序
 
 ### 📊 表格
@@ -33,13 +34,14 @@
 
 - **文档式阅读编辑**：让便签像文档一样排版查看与编辑，支持 Markdown
 - **Markdown 快捷输入**：`Ctrl+B` 加粗、`Ctrl+H` 高亮，所见即所得
+- **文本对齐**：左 / 居中 / 右对齐（工具栏按钮，或 `Ctrl+L` / `Ctrl+E` / `Ctrl+R`）
 - **编辑时 Ctrl+滚轮**：快捷放大 / 缩小正文字号
 
 ### 🖥️ 桌面集成
 
 - **常驻系统托盘**：最小化不占任务栏，点击托盘图标快速显示 / 隐藏
 - **钉在桌面**：把便签变成置顶的独立小窗口，始终可见
-- **桌面亚克力玻璃**：钉在桌面的便签可启用 Windows 亚克力模糊效果
+- **桌面亚克力玻璃**：钉在桌面的便签可启用 Windows 亚克力模糊效果（磨砂玻璃质感）
 - **桌面右键菜单**：钉桌面后右键唤出快捷菜单，集成常用操作与透明度调节
 - **窗口置顶**：一键让主窗口悬浮在其他窗口之上
 - **透明度调节**：窗口与便签透明度随意调整
@@ -86,65 +88,31 @@
 - **检查更新**：「关于」页可手动检查新版本，自动更新走弹窗下载 + 重启安装
 - **关于页**：查看版本号、作者与完整更新说明
 
-## 🚀 快速开始
+## 📥 安装与使用
 
-### 环境要求
+- 下载并运行 `MyNotes-Setup-*.exe` 安装包即可使用，**无需安装任何环境**；支持选择安装目录与创建桌面快捷方式。
+- 数据保存在本机用户目录（无需联网），首次启动会展示更新说明。
+- 在设置（⚙，右上角）里可自定义主题、画布背景、字体、提醒、语言、开机自启动等。
 
-- Windows 系统
-- Node.js（仅开发与构建时需要）
+## 🔧 开发者
 
-### 运行（开发）
+> 以下供参与开发 / 构建参考，日常使用无需理会。
 
-```bash
-npm install
-npm start
-```
-
-### 运行测试
+**环境**：Windows + Node.js（本项目为 Electron 应用，端到端测试用 Playwright）。
 
 ```bash
-npm test            # 单元测试（Node 内置框架，无需额外安装）
-npm run test:e2e    # 端到端测试（Playwright，真实 Electron 链路）
+npm install          # 安装依赖
+npm start            # 本地运行
+npm test             # 单元测试（Node 内置框架）
+npm run test:e2e     # 端到端测试（Playwright）
+npm run dist         # 打包生成安装包（输出到 release/）
+npm run dist:publish # 打包并上传到 GitHub Releases（需 GH_TOKEN）
 ```
 
-> 单测覆盖排序、引用清理、Markdown 导出、颜色与转义等核心逻辑；e2e 用 Playwright 启动真实应用，验证启动 / 编辑 / 钉窗 / 置顶高亮 / 玻璃拟态 / 渲染缓存 / 开机自启动开关等。
-
-### 打包（生成安装包）
-
-```bash
-npm run dist
-```
-
-> 打包产物位于 `release/` 目录，NSIS 安装包支持选择安装目录与创建桌面快捷方式。
-
-## 🛠️ 技术栈
-
-- [Electron](https://www.electronjs.org/) 33
-- [electron-builder](https://www.electron.build/) 25
-- [electron-updater](https://www.electron.build/auto-update) 6（自动更新）
-- [Playwright](https://playwright.dev/)（端到端测试）
-- 原生 HTML / CSS / JavaScript，无框架依赖
-
-## 🚚 发布与签名
-
-### 自动更新（GitHub Releases）
-
-- 更新链路已用 `electron-updater` 接通：启动后自动检查 → 弹窗询问下载 → 下载完询问重启安装。
-- 发布方式为 **GitHub Releases**，仓库：`LucasRiver9527/Note-Memo`（`package.json` 的 `build.publish` 已配好）。
-- 发布前需设置一个 GitHub Token（仓库 `Repo` 写权限）：
-  ```bash
-  set GH_TOKEN=你的github_token
-  ```
-- 每次发布版本号要高于已装版本（仅需改 `package.json` 的 `version`，应用内版本号统一由 `app.getVersion()` 注入，无需再改其他地方），然后：
-  ```bash
-  npm run dist:publish   # 构建并自动上传到 GitHub Release
-  ```
-- 也可临时覆盖 / 禁用：`MYNOTES_UPDATE_URL`、`MYNOTES_DISABLE_AUTOUPDATE=1`。
-
-### 代码签名
-
-- 工程已支持自动签名：设置 `CSC_LINK`（证书路径或 base64）与 `CSC_KEY_PASSWORD`（证书密码）后，`npm run dist` 会自动签名。未提供证书时会跳过签名（默认）——此时会触发 Windows SmartScreen「未知发布者」提示。
-- 免费个人项目可用自签证书；正式分发建议购买 OV / EV 证书。
+- **技术栈**：Electron 33 · electron-builder 25 · electron-updater 6 · Playwright · 原生 HTML / CSS / JS
+- **版本管理**：仅改 `package.json` 的 `version`，应用内由 `app.getVersion()` 统一注入。
+- **自动更新**：经 `electron-updater` 接通 GitHub Releases（`package.json` 的 `build.publish` 已配好）。
+- **代码签名**：设 `CSC_LINK`（证书路径/base64）与 `CSC_KEY_PASSWORD` 即自动签名；正式分发建议 OV / EV 证书或 Azure Trusted Signing（未签时会触发 SmartScreen「未知发布者」）。
 
 ## 📄 更新日志
 

@@ -13,6 +13,8 @@ html, body {
 }
 body.glass #note {
   background-color: color-mix(in srgb, var(--note-color, #f7d65a) 35%, transparent) !important;
+  -webkit-backdrop-filter: blur(11px) saturate(1.2);
+  backdrop-filter: blur(11px) saturate(1.2);
   border: 1px solid rgba(255, 255, 255, 0.22);
 }
 
@@ -49,6 +51,7 @@ body.glass #note {
   color: inherit; text-decoration: underline;
   cursor: pointer; word-break: break-all;
 }
+.dn-content .note-align { white-space: pre-wrap; }
 
 .todo-list { list-style: none; }
 .todo-item { display: flex; align-items: flex-start; gap: 8px; padding: 3px 0; }

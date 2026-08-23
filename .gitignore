@@ -12,9 +12,18 @@ Thumbs.db
 # 临时文件
 *.tmp
 *.temp
+
+# 本地开发备注文本（.txt 均不共享）
+*.txt
 node_modules/
 release/
 *.exe
 test-results/
 playwright-report/
 blob-report/
+
+# 签名证书（私密材料，绝不提交）
+cert/
+*.pfx
+*.p12
+*.key

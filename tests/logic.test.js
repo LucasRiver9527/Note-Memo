@@ -1,7 +1,7 @@
 const { test } = require('node:test');
 const assert = require('node:assert');
 const {
-  hexToRgba, isDarkColor, autoTextColor, escapeHtml,
+  hexToRgba, isDarkColor, autoTextColor, escapeHtml, luminance, contrastRatio,
   refIdsOf, cleanupRefs, sortNotes, tableToMarkdown, noteToMarkdown, referencedMedia, parseNullSeparated, hdropString,
   setRenderLocale, formatInlineText, tableBlockHtml, renderRichContent, sanitizeCss,
   I18N, I18N_MERGED, T, mergeI18n
@@ -11,6 +11,22 @@ test('hexToRgba 解析颜色', () => {
   assert.strictEqual(hexToRgba('#ff0000', 0.5), 'rgba(255, 0, 0, 0.5)');
   assert.strictEqual(hexToRgba('#00ff00', 1), 'rgba(0, 255, 0, 1)');
   assert.strictEqual(hexToRgba('336699', 0.25), 'rgba(51, 102, 153, 0.25)');
+});
+
+test('luminance 相对亮度', () => {
+  assert.ok(luminance('#ffffff') > 0.95);
+  assert.ok(luminance('#000000') < 0.01);
+  assert.ok(luminance('#ffffff') > luminance('#111111'));
+  assert.strictEqual(luminance(''), 0);
+});
+
+test('contrastRatio WCAG 对比度', () => {
+  // 黑白对比接近 21
+  const bw = contrastRatio('#000000', '#ffffff');
+  assert.ok(bw > 20 && bw <= 21);
+  assert.strictEqual(contrastRatio('#ffffff', '#ffffff'), 1);
+  // 深字浅底 vs 浅字浅底
+  assert.ok(contrastRatio('#2d2f38', '#f4f5fa') > contrastRatio('#ffffff', '#f4f5fa'));
 });
 
 test('isDarkColor 判断明暗', () => {

@@ -7,8 +7,12 @@ const ROOT = path.join(__dirname, '..', '..');
 const EXPECTED_VERSION = require(path.join(ROOT, 'package.json')).version;
 
 // 启动应用：独立临时 userData，首启关闭「更新说明」弹窗，返回可交互句柄
-async function openApp() {
+// opts.seed：可选，写入 notes-data.json 作为初始数据（用于多便签/预置场景）
+async function openApp(opts) {
   const userDataDir = await fs.mkdtemp(path.join(os.tmpdir(), 'mynotes-e2e-'));
+  if (opts && opts.seed) {
+    await fs.writeFile(path.join(userDataDir, 'notes-data.json'), JSON.stringify(opts.seed));
+  }
   const electronApp = await electron.launch({
     args: ['.'],
     cwd: ROOT,
@@ -200,6 +204,153 @@ test('全局设置：数据页含「开机自启动」开关（默认可见）',
     // 该开关为系统级设置，此处只校验 UI 存在，不触发真实写注册表
   } finally { await closeApp(ctx); }
 });
+
+// —— 任务3：补齐 e2e 覆盖 ——
+test('英文语言：切换到 en 后关键 UI 文案为英文', async () => {
+  const ctx = await openApp();
+  try {
+    await ctx.win.locator('#btnSettings').click();
+    await ctx.win.locator('.sp-nav-item[data-tab="data"]').click();
+    await ctx.win.locator('#languageSelect').selectOption('en');
+    await ctx.win.locator('#btnCloseSettings').click();
+
+    await expect(ctx.win.locator('#btnAdd')).toHaveText(/New/);       // new_note: ＋ New
+    await expect(ctx.win.locator('#searchInput')).toHaveAttribute('placeholder', /Search notes/);
+  } finally { await closeApp(ctx); }
+});
+
+test('钉窗深度编辑：改标题同步持久化到数据', async () => {
+  const ctx = await openApp();
+  try {
+    await ctx.win.locator('#btnAdd').click();
+    await ctx.win.locator('#board .note .note-title').first().fill('钉窗原始标题');
+
+    const noteWinPromise = ctx.electronApp.waitForEvent('window');
+    await ctx.win.locator('#board .note .t-desktop').first().click();
+    const noteWin = await noteWinPromise;
+    await noteWin.waitForLoadState('domcontentloaded');
+    await expect(noteWin.locator('#dnTitle')).toHaveValue('钉窗原始标题');
+
+    // 在钉窗改标题 → noteUpdate → 主进程数据 + 防抖落盘
+    await noteWin.locator('#dnTitle').fill('钉窗新标题');
+    await ctx.win.waitForTimeout(700);
+
+    // 校验数据层：持久化的 notes-data.json 中该便签标题已更新
+    const data = JSON.parse(await fs.readFile(path.join(ctx.userDataDir, 'notes-data.json'), 'utf-8'));
+    const note = (data.notes || []).find((n) => n.id && n.title === '钉窗新标题');
+    expect(note).toBeTruthy();
+  } finally { await closeApp(ctx); }
+});
+
+test('多便签：预置 80 张便签可完整渲染并可编辑', async () => {
+  const notes = [];
+  const now = Date.now();
+  for (let i = 1; i <= 80; i++) {
+    notes.push({
+      id: 'perf-n' + i, title: '性能便签' + i, content: '第' + i + '张内容', type: 'note',
+      color: i % 2 ? '#93f1ce' : '#a0d8ff', textColor: null,
+      x: 40 + (i % 5) * 12, y: 40 + Math.floor(i / 5) * 16, w: 220, h: 130, z: i,
+      updatedAt: now, createdAt: now
+    });
+  }
+  const seed = { version: 1, settings: { viewMode: 'board' }, groups: [], trash: [], notes };
+  const ctx = await openApp({ seed });
+  try {
+    await expect(ctx.win.locator('#noteCount')).toHaveText('80');
+    // 至少首张便签可见且可编辑（验证批量渲染后事件仍正常）
+    const firstCard = ctx.win.locator('#board .note').first();
+    await expect(firstCard).toBeVisible();
+    await firstCard.locator('.note-title').fill('修改后的标题');
+    await expect(firstCard.locator('.note-title')).toHaveValue('修改后的标题');
+  } finally { await closeApp(ctx); }
+});
+
+// —— 任务6：外观可读性兜底 ——
+test('外观可读性：亮底色自动启用 bright-bg，关闭开关后取消', async () => {
+  const seed = {
+    version: 1,
+    settings: { canvasColor: '#ffffff', backgroundReadability: true },
+    groups: [], notes: [], trash: []
+  };
+  const ctx = await openApp({ seed });
+  try {
+    // 白色亮底 + 开启可读性 → 自动压暗/提对比
+    await expect(ctx.win.locator('body')).toHaveClass(/\bbright-bg\b/);
+    // 关闭开关后取消
+    await ctx.win.locator('#btnSettings').click();
+    await ctx.win.locator('#bgReadabilityToggle').uncheck();
+    await expect(ctx.win.locator('body')).not.toHaveClass(/\bbright-bg\b/);
+  } finally { await closeApp(ctx); }
+});
+
+test('外观可读性：设背景图自动 bright-bg，清除后取消', async () => {
+  const seed = {
+    version: 1,
+    settings: { backgroundImage: 'note-bg://local/x.png', backgroundReadability: true },
+    groups: [], notes: [], trash: []
+  };
+  const ctx = await openApp({ seed });
+  try {
+    // 有背景图 → 自动压暗/提对比
+    await expect(ctx.win.locator('body')).toHaveClass(/\bbright-bg\b/);
+    // 清除背景图 → 取消
+    await ctx.win.locator('#btnSettings').click();
+    await ctx.win.locator('#btnClearImage').click();
+    await expect(ctx.win.locator('body')).not.toHaveClass(/\bbright-bg\b/);
+  } finally { await closeApp(ctx); }
+});
+
+// —— P5 增量渲染：画布内只更新变化卡片，其余保留 ——
+test('P5 增量渲染：画布内切换置顶后其余便签内容保留', async () => {
+  const ctx = await openApp();
+  try {
+    // 建两张便签并各输入内容
+    for (let i = 1; i <= 2; i++) {
+      await ctx.win.locator('#btnAdd').click();
+      await ctx.win.locator('#board .note .note-title').last().fill('便签' + i);
+      const c = ctx.win.locator('#board .note .note-content').last();
+      await c.click();
+      await ctx.win.keyboard.type('内容' + i);
+    }
+    await expect(ctx.win.locator('#noteCount')).toHaveText('2');
+
+    // 触发画布重排：给第一张切置顶
+    await ctx.win.locator('#board .note .t-pin').first().click();
+
+    await expect(ctx.win.locator('#board .note').first()).toHaveClass(/\bpinned\b/);
+    // 两张便签内容都保留（未变化卡片被复用、未丢失）
+    await expect(ctx.win.locator('#board .note .note-content').nth(0)).toContainText('内容1');
+    await expect(ctx.win.locator('#board .note .note-content').nth(1)).toContainText('内容2');
+    await expect(ctx.win.locator('#noteCount')).toHaveText('2');
+  } finally { await closeApp(ctx); }
+});
+
+
+
+// —— 任务4 安全网：编辑器加粗（Ctrl+B）在现有实现下应工作 ——
+test('编辑器：选中文字 Ctrl+B 加粗', async () => {
+  const ctx = await openApp();
+  try {
+    await ctx.win.locator('#btnAdd').click();
+    const content = ctx.win.locator('#board .note .note-content').first();
+    await content.click();
+    await ctx.win.keyboard.type('加粗文字');
+    // 选中内容区全部文本
+    await ctx.win.evaluate(() => {
+      const c = document.querySelector('#board .note .note-content');
+      const r = document.createRange();
+      r.selectNodeContents(c);
+      const sel = window.getSelection();
+      sel.removeAllRanges();
+      sel.addRange(r);
+    });
+    await content.press('Control+b');
+    await expect(content.locator('b, strong').first()).toHaveText('加粗文字');
+  } finally { await closeApp(ctx); }
+});
+
+
+
 
 
 
