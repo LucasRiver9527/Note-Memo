@@ -15,3 +15,6 @@ Thumbs.db
 node_modules/
 release/
 *.exe
+test-results/
+playwright-report/
+blob-report/

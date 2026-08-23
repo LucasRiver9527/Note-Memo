@@ -1,6 +1,6 @@
 {
   "name": "mynotes",
-  "version": "1.2.2",
+  "version": "1.2.3",
   "description": "美观可定制的 Windows 桌面便签",
   "main": "main.js",
   "author": "MyNotes",
@@ -9,9 +9,12 @@
     "start": "electron .",
     "dist": "electron-builder --win --publish never",
     "dist:publish": "electron-builder --win --publish always",
-    "test": "node --test \"tests/**/*.test.js\""
+    "test": "node --test \"tests/**/*.test.js\"",
+    "test:e2e": "playwright test",
+    "test:all": "npm test && npm run test:e2e"
   },
   "devDependencies": {
+    "@playwright/test": "^1.62.1",
     "electron": "^33.2.0",
     "electron-builder": "^25.1.8"
   },

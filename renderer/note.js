@@ -5,14 +5,8 @@ const NOTE_COLORS = ['#000000', '#1e1e28', '#2d2f38', '#24344d', '#3a2a4d', '#1f
 const TEXT_COLORS = ['#2d2f38', '#000000', '#444444', '#ffffff', '#c0392b', '#b8860b', '#1e5a8a', '#1e7d5a', '#5b2d8f', '#7f8c8d'];
 
 function uid() { return 'i' + Date.now().toString(36) + Math.random().toString(36).slice(2, 6); }
-function isDark(hex) {
-  const h = String(hex || '').replace('#', '');
-  if (h.length < 6) return true;
-  const r = parseInt(h.slice(0, 2), 16);
-  const g = parseInt(h.slice(2, 4), 16);
-  const b = parseInt(h.slice(4, 6), 16);
-  return (0.299 * r + 0.587 * g + 0.114 * b) / 255 < 0.55;
-}
+// 复用 logic.js 的 isDarkColor，避免两窗口各自实现同一算法
+const isDark = isDarkColor;
 
 const noteId = new URLSearchParams(location.search).get('id');
 let note = null;
@@ -25,32 +19,7 @@ let savedImageSrc = null;
 let copiedImage = null;
 
 function tr(key) {
-  const D = {
-    zh: {
-      note_title: '标题', note_content: '写点什么…', todo_ph: '待办…', add_todo: '＋ 添加待办', notfound: '便签不存在',
-      unpin: '取消钉住（回到列表）', delete: '删除', delete_image: '删除图片', img_missing: '图片已丢失', resize_image: '拖动调整大小', open_link: '打开链接',
-      copy: '复制', cut: '剪切', paste: '粘贴', select_all: '全选', bold: '加粗', highlight: '高亮', unbold: '取消加粗', unhighlight: '取消高亮',
-      insert_image: '插入图片', todo_mode: '待办模式', color: '改变颜色', opacity: '不透明度', save: '保存', text_color: '文字颜色',
-      insert_table: '插入表格', table_rows: '行数', table_cols: '列数', add_row: '添加行', add_col: '添加列', del_row: '删除行', del_col: '删除列',
-      merge_cells: '合并单元格', split_cell: '拆分单元格', diag_line: '斜分线', del_table: '删除表格',
-      table_settings: '表格设置', tbl_border_color: '边框颜色', tbl_border_width: '边框粗细',
-      diag_t_color: '文字颜色', diag_t_size: '文字大小', tbl_text_color: '文字颜色', tbl_text_size: '文字大小', follow_global: '跟随全局',
-      diag_tlbr: '左上→右下', diag_trbl: '右上→左下', diag_t1: '上文字', diag_t2: '下文字', diag_remove: '移除斜线'
-    },
-    en: {
-      note_title: 'Title', note_content: 'Write something…', todo_ph: 'Todo…', add_todo: '＋ Add todo', notfound: 'Note not found',
-      unpin: 'Unpin (back to list)', delete: 'Delete', delete_image: 'Delete image', img_missing: 'Image missing', resize_image: 'Drag to resize', open_link: 'Open link',
-      copy: 'Copy', cut: 'Cut', paste: 'Paste', select_all: 'Select all', bold: 'Bold', highlight: 'Highlight', unbold: 'Unbold', unhighlight: 'Remove highlight',
-      insert_image: 'Insert image', todo_mode: 'Todo mode', color: 'Change color', opacity: 'Opacity', save: 'Save', text_color: 'Text color',
-      insert_table: 'Insert table', table_rows: 'Rows', table_cols: 'Cols', add_row: 'Add row', add_col: 'Add col', del_row: 'Delete row', del_col: 'Delete col',
-      merge_cells: 'Merge cells', split_cell: 'Split cell', diag_line: 'Diagonal line', del_table: 'Delete table',
-      table_settings: 'Table settings', tbl_border_color: 'Border color', tbl_border_width: 'Border width',
-      diag_t_color: 'Text color', diag_t_size: 'Text size', tbl_text_color: 'Text color', tbl_text_size: 'Text size', follow_global: 'Follow global',
-      diag_tlbr: 'TL→BR', diag_trbl: 'TR→BL', diag_t1: 'Top text', diag_t2: 'Bottom text', diag_remove: 'Remove'
-    }
-  };
-  const d = D[lang] || D.zh;
-  return d[key] || key;
+  return T(key, lang, I18N_MERGED);
 }
 
 function markdownOn() { return settings.markdown !== false; }
@@ -152,133 +121,9 @@ function save() {
   }, 300);
 }
 
-function formatInlineText(text) {
-  const mdOn = markdownOn();
-  const urlRe = /^(https?:\/\/[^\s<>"']+|www\.[^\s<>"']+)/i;
-  let out = '';
-  let i = 0;
-  while (i < text.length) {
-    const rest = text.slice(i);
-    let handled = false;
-    const cm = rest.match(/^\[\[c:([^\]]+)\]\]/);
-    if (cm) {
-      const closeIdx = text.indexOf('[[/c]]', i + cm[0].length);
-      if (closeIdx >= 0) {
-        const inner = text.slice(i + cm[0].length, closeIdx);
-        out += '<span style="color:' + cm[1] + '">' + formatInlineText(inner) + '</span>';
-        i = closeIdx + 6;
-        handled = true;
-      }
-    }
-    if (!handled && mdOn) {
-      let m = rest.match(/^==([^=\n]+)==/);
-      if (m) {
-        out += '<mark class="hl">' + escapeHtml(m[1]) + '</mark>';
-        i += m[0].length; handled = true;
-      } else {
-        m = rest.match(/^\*\*([^*\n]+)\*\*/);
-        if (m) {
-          out += '<b>' + escapeHtml(m[1]) + '</b>';
-          i += m[0].length; handled = true;
-        }
-      }
-    }
-    if (!handled) {
-      const um = rest.match(urlRe);
-      if (um) {
-        const url = um[0];
-        const href = /^www\./i.test(url) ? 'http://' + url : url;
-        out += `<a class="note-link" contenteditable="false" data-url="${escapeHtml(href)}" title="${tr('open_link')}">${escapeHtml(url)}</a>`;
-        i += url.length;
-      } else {
-        out += escapeHtml(text[i]);
-        i += 1;
-      }
-    }
-  }
-  return out;
-}
-
-function inlineImgHtml(img) {
-  return `<span class="inline-img" data-img-id="${img.id}" contenteditable="false" tabindex="0"><img src="${escapeHtml(img.src)}" style="width:${img.w || 200}px" /><button class="img-del" title="${tr('delete_image')}">✕</button><div class="img-resize" title="${tr('resize_image')}"></div></span>`;
-}
-
-function fileLinkHtml(f) {
-  const name = (f.path || '').replace(/[\\/]+$/, '').split(/[\\/]/).pop();
-  const icon = f.isDir ? '📁' : '📄';
-  return `<span class="file-link" contenteditable="false" data-file-id="${f.id}" data-path="${escapeHtml(f.path)}" data-is-dir="${f.isDir ? '1' : '0'}" title="${escapeHtml(f.path)}">${icon} ${escapeHtml(name || f.path)}</span>`;
-}
-
-function tableBlockHtml(tbl) {
-  const rows = tbl.rows, cols = tbl.cols;
-  const cells = tbl.cells || [];
-  const merges = tbl.merges || [];
-  const diagonals = tbl.diagonals || [];
-  const occupied = [];
-  for (let r = 0; r < rows; r++) occupied.push(new Array(cols).fill(false));
-  let html = '';
-  for (let r = 0; r < rows; r++) {
-    html += '<tr>';
-    for (let c = 0; c < cols; c++) {
-      if (occupied[r][c]) continue;
-      const mg = merges.find((m) => m.r === r && m.c === c);
-      const diag = diagonals.find((d) => d.r === r && d.c === c);
-      const text = (cells[r] && cells[r][c]) || '';
-      let attrs = '';
-      let inner = formatInlineText(text).replace(/\n/g, '<br>');
-      if (mg) {
-        attrs = ` rowspan="${mg.rowspan}" colspan="${mg.colspan}"`;
-        for (let rr = r; rr < r + mg.rowspan; rr++)
-          for (let cc = c; cc < c + mg.colspan; cc++)
-            if (rr < rows && cc < cols) occupied[rr][cc] = true;
-      }
-      let diagCls = '';
-      if (diag) {
-        const isTrbl = diag.dir === 'trbl';
-        diagCls = ' diag diag-' + (isTrbl ? 'trbl' : 'tlbr');
-        const line = isTrbl ? '<line x1="0" y1="100" x2="100" y2="0"/>' : '<line x1="0" y1="0" x2="100" y2="100"/>';
-        const ds = (diag.tColor ? 'color:' + diag.tColor + ';' : '') + (diag.tSize ? 'font-size:' + diag.tSize + 'px;' : '');
-        inner = `<svg class="diag-line" viewBox="0 0 100 100" preserveAspectRatio="none" aria-hidden="true">${line}</svg><span class="tbl-t1"${ds ? ' style="' + ds + '"' : ''}>${formatInlineText(diag.t1 || '').replace(/\n/g, '<br>')}</span><span class="tbl-t2"${ds ? ' style="' + ds + '"' : ''}>${formatInlineText(diag.t2 || '').replace(/\n/g, '<br>')}</span>`;
-      }
-      html += `<td${attrs}${diagCls ? ' class="' + diagCls.trim() + '"' : ''} data-r="${r}" data-c="${c}">${inner}</td>`;
-    }
-    html += '</tr>';
-  }
-  const bw = tbl.borderWidth != null ? tbl.borderWidth : 3;
-  const bc = tbl.borderColor || 'rgba(0,0,0,0.7)';
-  const ts = (tbl.textColor ? 'color:' + tbl.textColor + ';' : '') + (tbl.fontSize ? 'font-size:' + tbl.fontSize + 'px;' : '');
-  return `<div class="note-table-block" contenteditable="false" data-table-id="${tbl.id}" tabindex="0"><table class="note-table" style="--tbl-border-width:${bw}px;--tbl-border-color:${bc};${ts}">${html}</table></div>`;
-}
-
-function renderRichContent(text) {
-  const imgMap = {};
-  (note.images || []).forEach((im) => { imgMap[im.id] = im; });
-  const fileMap = {};
-  (note.files || []).forEach((f) => { fileMap[f.id] = f; });
-  const tableMap = {};
-  (note.tables || []).forEach((tb) => { tableMap[tb.id] = tb; });
-  const re = /\[\[(img|file|table):([a-zA-Z0-9_-]+)\]\]/g;
-  let out = '';
-  let last = 0;
-  let m;
-  const s = String(text || '');
-  while ((m = re.exec(s)) !== null) {
-    out += formatInlineText(s.slice(last, m.index));
-    if (m[1] === 'img') {
-      const im = imgMap[m[2]];
-      if (im) out += inlineImgHtml(im);
-    } else if (m[1] === 'file') {
-      const f = fileMap[m[2]];
-      if (f) out += fileLinkHtml(f);
-    } else {
-      const tb = tableMap[m[2]];
-      if (tb) out += tableBlockHtml(tb);
-    }
-    last = m.index + m[0].length;
-  }
-  out += formatInlineText(s.slice(last));
-  return out;
-}
+// 富文本/表格 HTML 构建已统一到 logic.js（单一来源），此处由 logic.js 全局提供；
+// 仅在此注入本窗口翻译器与 Markdown 开关。
+setRenderLocale({ tr, mdOn: markdownOn });
 
 function readRichContent(root) {
   let out = '';
@@ -322,22 +167,9 @@ function readRichContent(root) {
   return out;
 }
 
-function refIdsOf() {
-  const ids = new Set();
-  const re = /\[\[(?:img|file|table):([a-zA-Z0-9_-]+)\]\]/g;
-  let m;
-  const s = String(note.content || '');
-  while ((m = re.exec(s)) !== null) ids.add(m[1]);
-  return ids;
-}
-
-function cleanupRefs() {
-  if (!note) return;
-  const refs = refIdsOf();
-  note.images = (note.images || []).filter((im) => refs.has(im.id));
-  note.files = (note.files || []).filter((f) => refs.has(f.id));
-  note.tables = (note.tables || []).filter((tb) => refs.has(tb.id));
-}
+// 复用 logic.js 的同名纯逻辑（单一来源），仅绑定到当前 note 全局变量
+function refIdsOf() { return NoteLogic.refIdsOf(note); }
+function cleanupRefs() { if (note) NoteLogic.cleanupRefs(note); }
 
 function wireImages() {
   $$('.inline-img').forEach((item) => {
@@ -873,7 +705,7 @@ function renderBody() {
       <button class="todo-add">${tr('add_todo')}</button>`;
     wireTodo();
   } else {
-    body.innerHTML = `<div id="dnText" class="dn-content" contenteditable="true" spellcheck="false" data-placeholder="${tr('note_content')}">${renderRichContent(note.content || '')}</div>`;
+    body.innerHTML = `<div id="dnText" class="dn-content" contenteditable="true" spellcheck="false" data-placeholder="${tr('note_content')}">${renderRichContent(note.content || '', note)}</div>`;
     const content = $('#dnText');
     content.addEventListener('click', (e) => {
       const link = e.target.closest('a.note-link');
@@ -924,7 +756,7 @@ function renderBody() {
       note.content = readRichContent(content);
       const rt = e.relatedTarget;
       const inTable = rt && rt.closest && rt.closest('.note-table-block');
-      if (!savedRange && !inTable) content.innerHTML = renderRichContent(note.content);
+      if (!savedRange && !inTable) content.innerHTML = renderRichContent(note.content, note);
       save();
     });
     content.addEventListener('wheel', (e) => {

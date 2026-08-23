@@ -7,12 +7,27 @@ const { autoUpdater } = require('electron-updater');
 
 const isDev = !app.isPackaged;
 
+// 固定应用名称为「便签」，确保任务管理器/系统各处取到的 app.name 一致
+try { app.setName('便签'); } catch (e) { /* ignore */ }
+
+// 允许通过环境变量覆盖用户数据目录（默认不设置，保持生产行为）。
+// 供 e2e 测试隔离数据、避免污染真实便签。
+if (process.env.MYNOTES_USER_DATA) {
+  try { app.setPath('userData', process.env.MYNOTES_USER_DATA); } catch (e) { /* ignore */ }
+}
+
 let mainWindow = null;
 let tray = null;
 let isQuitting = false;
 let reminderTimer = null;
 let powerSaveId = null;
-const recentlyFired = new Set();
+const RECENTLY_FIRED_TTL = 24 * 60 * 60 * 1000;
+const recentlyFired = new Map(); // note id -> 触发时间戳；只增不减会导致常驻进程内存缓涨
+function markRecentlyFired(id) { recentlyFired.set(id, Date.now()); }
+function pruneRecentlyFired() {
+  const cutoff = Date.now() - RECENTLY_FIRED_TTL;
+  for (const [k, t] of recentlyFired) if (t < cutoff) recentlyFired.delete(k);
+}
 const detachedWindows = new Map();
 
 const dataPath = () => path.join(app.getPath('userData'), 'notes-data.json');
@@ -39,62 +54,76 @@ function atomicWrite(filePath, text) {
   fs.renameSync(tmp, filePath);
 }
 
+// ---------- 数据缓存与防抖落盘 ----------
+// 内存中常驻一份数据，避免每个 IPC 都同步读盘+parse（主线程卡顿）。
+// 写盘去抖批量执行，且保留原子写与 .bak 回退。
+const PERSIST_DELAY = 350;
+let dataCache = null;
+let isPersistPending = false;
+let persistTimer = null;
+
+// 缓存缺失时从磁盘加载（主文件 -> 备份回退）
 function readData() {
+  if (dataCache === null) {
+    dataCache = loadDataFromDisk() || { settings: {}, groups: [], notes: [], trash: [] };
+  }
+  return dataCache;
+}
+
+// 主文件 / 备份读取 + 版本迁移
+function loadDataFromDisk() {
   // 1) 主文件
   try {
     const raw = fs.readFileSync(dataPath(), 'utf-8');
     return migrateData(JSON.parse(raw));
-  } catch (e) { /* 损坏或不存在，尝试备份 */ }
+  } catch (e) { /* 损坏或不存在，尝试备份 */ console.error('[data] 读取主数据失败，尝试备份回退：', e && e.message); }
 
   // 2) 主文件损坏，回退到上一版备份
   try {
     const raw = fs.readFileSync(backupDataPath(), 'utf-8');
     return migrateData(JSON.parse(raw));
   } catch (e) {
+    console.error('[data] 备份数据也读失败：', e && e.message);
     return null;
   }
 }
 
+// 更新内存数据，并去抖触发落盘（写入的是最新缓存）
 function writeData(data) {
+  dataCache = data;               // 全量保存或原地变更均替换为最新
+  isPersistPending = true;
+  if (persistTimer) clearTimeout(persistTimer);
+  persistTimer = setTimeout(flushPendingWrite, PERSIST_DELAY);
+}
+
+function flushPendingWrite() {
+  if (persistTimer) { clearTimeout(persistTimer); persistTimer = null; }
+  if (!isPersistPending) return;
+  isPersistPending = false;
+  if (!dataCache) return;
   try {
-    if (typeof data === 'object' && data) {
-      data.version = DEFAULT_DATA_VERSION;
-    }
+    if (typeof dataCache === 'object') dataCache.version = DEFAULT_DATA_VERSION;
     // 写前留一份上一版备份（只保留最近一份）
     try {
       if (fs.existsSync(dataPath())) {
         fs.copyFileSync(dataPath(), backupDataPath());
       }
-    } catch (e) { /* 备份失败不阻塞写入 */ }
-    atomicWrite(dataPath(), JSON.stringify(data, null, 2));
-  } catch (e) { /* 写失败仅记录，不抛出影响渲染进程 */ }
+    } catch (e) { /* 备份失败不阻塞写入 */ console.error('[data] 写备份失败：', e && e.message); }
+    atomicWrite(dataPath(), JSON.stringify(dataCache, null, 2));
+  } catch (e) { console.error('[data] 写数据失败：', e && e.message); }
 }
 
-// 媒体类型对应的 userData 子目录名
-const MEDIA_DIRS = { img: 'images', bg: 'backgrounds', font: 'fonts', sound: 'sounds', images: 'images', backgrounds: 'backgrounds', fonts: 'fonts', sounds: 'sounds' };
-
-// 从 URL 还原媒体文件名
-function mediaFileName(url) {
-  if (typeof url !== 'string') return null;
-  const m = /^note-(img|bg|font|sound):\/\/local\/(.+)$/.exec(url);
-  if (!m) return null;
-  return { kind: MEDIA_DIRS[m[1]], name: decodeURIComponent(m[2]) };
+// 深拷贝一份（供返回给渲染进程/各 IPC，避免外部误改动缓存）；先确保缓存已加载
+function cloneData() {
+  const d = readData();
+  return d ? JSON.parse(JSON.stringify(d)) : null;
 }
 
-// 收集数据里实际引用的媒体文件，按目录分类
+// 收集数据里实际引用的媒体文件，按目录分类（含回收站）。
+// 复用 logic.referencedMedia：保证「导出备份」与「清理孤儿」对回收站媒体的处理一致，
+// 避免备份漏拷回收站媒体（断图）而清理却删不掉（遗留孤儿）。
 function collectMedia(data) {
-  const byDir = {};
-  const add = (url) => {
-    const r = mediaFileName(url);
-    if (!r) return;
-    (byDir[r.kind] = byDir[r.kind] || new Set()).add(r.name);
-  };
-  (data.notes || []).forEach((n) => (n.images || []).forEach((im) => add(im.src)));
-  const s = data.settings || {};
-  add(s.backgroundImage);
-  (s.customFonts || []).forEach((f) => add(f.url));
-  add(s.reminderSoundPath);
-  return byDir;
+  return logic.referencedMedia(data || {});
 }
 
 // 把引用的媒体文件复制进备份文件夹
@@ -109,7 +138,7 @@ function copyMediaToBundle(data, bundleDir) {
     byDir[dirName].forEach((name) => {
       const src = path.join(srcDir, name);
       if (fs.existsSync(src)) {
-        try { fs.copyFileSync(src, path.join(destDir, name)); } catch (e) { /* ignore */ }
+        try { fs.copyFileSync(src, path.join(destDir, name)); } catch (e) { console.error('[backup] 复制媒体失败：', name, e && e.message); }
       }
     });
   }
@@ -126,11 +155,14 @@ function restoreMediaFromBundle(bundleDir) {
     fs.readdirSync(srcDir).forEach((name) => {
       const src = path.join(srcDir, name);
       if (fs.statSync(src).isFile()) {
-        try { fs.copyFileSync(src, path.join(destDir, name)); } catch (e) { /* ignore */ }
+        try { fs.copyFileSync(src, path.join(destDir, name)); } catch (e) { console.error('[restore] 还原媒体失败：', name, e && e.message); }
       }
     });
   }
 }
+
+// 解析 CF_HDROP 剪贴板缓冲里的文件路径（视写入格式做 UTF-16 / Latin1 解码）
+// 与 \0 分隔路径去重，均复用 logic.js 纯实现以便测试
 
 function clipboardImageToDataUrl() {
   const img = clipboard.readImage();
@@ -140,24 +172,13 @@ function clipboardImageToDataUrl() {
 
   // 1) 资源管理器复制文件 -> CF_HDROP
   try {
-    const buf = clipboard.readBuffer('CF_HDROP');
-    if (buf && buf.length > 16) {
-      const pFiles = buf.readUInt32LE(0);
-      const fWide = buf.readUInt32LE(16) !== 0;
-      const list = buf.slice(pFiles);
-      const str = fWide ? list.toString('utf16le') : list.toString('latin1');
-      filePath = str.split('\0').find((p) => p && p.length > 1);
-    }
+    filePath = logic.parseNullSeparated(logic.hdropString(clipboard.readBuffer('CF_HDROP')), [])[0];
   } catch (e) { /* ignore */ }
 
   // 2) FileNameW
   if (!filePath) {
     try {
-      const buf = clipboard.readBuffer('FileNameW');
-      if (buf && buf.length) {
-        const str = buf.toString('utf16le');
-        filePath = str.split('\0').find((p) => p && p.length > 1);
-      }
+      filePath = logic.parseNullSeparated(clipboard.readBuffer('FileNameW').toString('utf16le'), [])[0];
     } catch (e) { /* ignore */ }
   }
 
@@ -212,7 +233,7 @@ function createWindow() {
       contextIsolation: true,
       nodeIntegration: false,
       spellcheck: true,
-      backgroundThrottling: false
+      additionalArguments: ['--app-version=' + app.getVersion()]
     }
   });
 
@@ -268,7 +289,8 @@ function createDetachedWindow(noteId) {
     webPreferences: {
       preload: path.join(__dirname, 'preload.js'),
       contextIsolation: true,
-      nodeIntegration: false
+      nodeIntegration: false,
+      additionalArguments: ['--app-version=' + app.getVersion()]
     }
   });
   win.loadFile(path.join(__dirname, 'renderer', 'note.html'), { query: { id: noteId } });
@@ -287,10 +309,6 @@ function createDetachedWindow(noteId) {
     win.setAlwaysOnTop(true, 'screen-saver');
   });
   win.on('blur', () => win.setAlwaysOnTop(true, 'screen-saver'));
-  const topmostTimer = setInterval(() => {
-    if (win.isDestroyed()) { clearInterval(topmostTimer); return; }
-    win.setAlwaysOnTop(true, 'screen-saver');
-  }, 2000);
   detachedWindows.set(noteId, win);
   win.on('closed', () => {
     if (detachedWindows.get(noteId) === win) detachedWindows.delete(noteId);
@@ -311,7 +329,7 @@ function createTray() {
       label: '新建便签',
       click: () => {
         showWindow();
-        mainWindow.webContents.send('note:create');
+        if (mainWindow) mainWindow.webContents.send('note:create');
       }
     },
     { type: 'separator' },
@@ -320,6 +338,7 @@ function createTray() {
       type: 'checkbox',
       checked: false,
       click: (item) => {
+        if (!mainWindow) return;
         mainWindow.setAlwaysOnTop(item.checked);
         mainWindow.webContents.send('window:always-on-top', item.checked);
       }
@@ -375,6 +394,8 @@ function scheduleReminders(notes) {
     reminderTimer = null;
   }
 
+  pruneRecentlyFired();
+
   const now = Date.now();
   const upcoming = (notes || [])
     .filter((n) => n.reminder && n.reminder.enabled && n.reminder.time && !n.reminder.fired && !recentlyFired.has(n.id))
@@ -410,7 +431,7 @@ function readDataSettings() {
 }
 
 function fireReminder(note) {
-  recentlyFired.add(note.id);
+  markRecentlyFired(note.id);
   const title = note.title ? note.title : '待办提醒';
   const body = note.type === 'todo'
     ? (note.items || []).filter((i) => !i.done).map((i) => i.text).join('\n')
@@ -486,7 +507,7 @@ function setupAutoUpdate() {
 // ---- IPC ----
 function setupIpc() {
   ipcMain.handle('data:load', () => {
-    return readData();
+    return cloneData();
   });
 
   ipcMain.handle('data:save', (e, data) => {
@@ -725,7 +746,7 @@ function setupIpc() {
     const data = readData();
     if (data) {
       const note = (data.notes || []).find((n) => n.id === id) || null;
-      return { note, settings: data.settings || null };
+      return { note: note ? JSON.parse(JSON.stringify(note)) : null, settings: data.settings ? JSON.parse(JSON.stringify(data.settings)) : null };
     }
     return { note: null, settings: null };
   });
@@ -753,6 +774,8 @@ function setupIpc() {
       if (typeof url !== 'string' || !url.trim()) return false;
       let u = url.trim();
       if (!/^[a-zA-Z][a-zA-Z0-9+.-]*:\/\//.test(u)) u = 'http://' + u;
+      // 仅允许 http/https，避免注入 file://、自定义协议等
+      if (!/^https?:\/\//i.test(u)) return false;
       await shell.openExternal(u);
       return true;
     } catch (err) {
@@ -819,26 +842,10 @@ function setupIpc() {
   // 文件/文件夹路径识别
   ipcMain.handle('clipboard:read-files', () => {
     const out = [];
-    const readBuf = (format, encoding) => {
-      try {
-        const buf = clipboard.readBuffer(format);
-        if (buf && buf.length) {
-          const str = buf.toString(encoding);
-          str.split('\0').forEach((p) => { if (p && p.length > 1 && !out.includes(p)) out.push(p); });
-        }
-      } catch (e) { /* ignore */ }
-    };
-    try {
-      const buf = clipboard.readBuffer('CF_HDROP');
-      if (buf && buf.length > 16) {
-        const pFiles = buf.readUInt32LE(0);
-        const fWide = buf.readUInt32LE(16) !== 0;
-        const list = buf.slice(pFiles);
-        const str = fWide ? list.toString('utf16le') : list.toString('latin1');
-        str.split('\0').forEach((p) => { if (p && p.length > 1 && !out.includes(p)) out.push(p); });
-      }
-    } catch (e) { /* ignore */ }
-    if (!out.length) readBuf('FileNameW', 'utf16le');
+    try { logic.parseNullSeparated(logic.hdropString(clipboard.readBuffer('CF_HDROP')), out); } catch (e) { /* ignore */ }
+    if (!out.length) {
+      try { logic.parseNullSeparated(clipboard.readBuffer('FileNameW').toString('utf16le'), out); } catch (e) { /* ignore */ }
+    }
     return out;
   });
 
@@ -1003,6 +1010,24 @@ function setupIpc() {
     toggleWindow();
     return mainWindow && mainWindow.isVisible();
   });
+
+  // ---- 开机自启动 ----
+  ipcMain.handle('startup:get', () => {
+    try {
+      const s = app.getLoginItemSettings();
+      return { ok: true, enabled: !!s.openAtLogin };
+    } catch (e) {
+      return { ok: false, error: (e && e.message) || String(e) };
+    }
+  });
+  ipcMain.handle('startup:set', (e, enabled) => {
+    try {
+      app.setLoginItemSettings({ openAtLogin: !!enabled, path: process.execPath });
+      return { ok: true, enabled: !!app.getLoginItemSettings().openAtLogin };
+    } catch (err) {
+      return { ok: false, error: (err && err.message) || String(err) };
+    }
+  });
 }
 
 // ---- App lifecycle ----
@@ -1018,75 +1043,50 @@ if (!gotLock) {
     const dataDir = path.dirname(dataPath());
     if (!fs.existsSync(dataDir)) fs.mkdirSync(dataDir, { recursive: true });
 
-    protocol.handle('note-bg', (request) => {
-      try {
-        const url = new URL(request.url);
-        const name = path.basename(url.pathname);
-        const file = path.join(app.getPath('userData'), 'backgrounds', name);
-        return net.fetch(pathToFileURL(file).toString());
-      } catch (e) {
-        return new Response('Not Found', { status: 404 });
-      }
-    });
-
-    protocol.handle('note-img', (request) => {
-      try {
-        const url = new URL(request.url);
-        const name = path.basename(url.pathname);
-        const file = path.join(app.getPath('userData'), 'images', name);
-        return net.fetch(pathToFileURL(file).toString());
-      } catch (e) {
-        return new Response('Not Found', { status: 404 });
-      }
-    });
-
-    protocol.handle('note-font', (request) => {
-      try {
-        const url = new URL(request.url);
-        const name = path.basename(url.pathname);
-        const file = path.join(app.getPath('userData'), 'fonts', name);
-        return net.fetch(pathToFileURL(file).toString());
-      } catch (e) {
-        return new Response('Not Found', { status: 404 });
-      }
-    });
-
-    protocol.handle('note-sound', (request) => {
-      try {
-        const url = new URL(request.url);
-        const name = path.basename(url.pathname);
-        const file = path.join(app.getPath('userData'), 'sounds', name);
-        return net.fetch(pathToFileURL(file).toString());
-      } catch (e) {
-        return new Response('Not Found', { status: 404 });
-      }
-    });
-
-    setupIpc();
-    setupAutoUpdate();
-    createWindow();
-    createTray();
-
-    const initial = readData();
-    if (initial && Array.isArray(initial.notes)) {
-      scheduleReminders(initial.notes);
-      initial.notes.forEach((n) => {
-        if (n.desktopPin) createDetachedWindow(n.id);
+    // 自定义查询协议 -> userData 下对应媒体目录，统一由循环注册
+    for (const [scheme, dir] of Object.entries({ 'note-bg': 'backgrounds', 'note-img': 'images', 'note-font': 'fonts', 'note-sound': 'sounds' })) {
+      protocol.handle(scheme, (request) => {
+        try {
+          const url = new URL(request.url);
+          const name = path.basename(url.pathname);
+          const file = path.join(app.getPath('userData'), dir, name);
+          return net.fetch(pathToFileURL(file).toString());
+        } catch (e) {
+          return new Response('Not Found', { status: 404 });
+        }
       });
     }
-    checkOverdueReminders();
 
-    powerMonitor.on('resume', () => {
-      checkOverdueReminders();
-    });
-    powerMonitor.on('unlock-screen', () => {
-      checkOverdueReminders();
-    });
+    setupIpc();
 
-    globalShortcut.register('CommandOrControl+Shift+N', () => {
-      showWindow();
-      mainWindow.webContents.send('note:create');
-    });
+    // 优先创建主窗口，让用户尽快看到界面
+    createWindow();
+
+    // 其余初始化延后一小段时间，不阻塞主窗口首帧（托盘、提醒、钉窗、自动更新、快捷键）
+    setTimeout(() => {
+      setupAutoUpdate();
+      createTray();
+      const initial = readData();
+      if (initial && Array.isArray(initial.notes)) {
+        scheduleReminders(initial.notes);
+        initial.notes.forEach((n) => {
+          if (n.desktopPin) createDetachedWindow(n.id);
+        });
+      }
+      checkOverdueReminders();
+
+      powerMonitor.on('resume', () => {
+        checkOverdueReminders();
+      });
+      powerMonitor.on('unlock-screen', () => {
+        checkOverdueReminders();
+      });
+
+      globalShortcut.register('CommandOrControl+Shift+N', () => {
+        showWindow();
+        if (mainWindow) mainWindow.webContents.send('note:create');
+      });
+    }, 100);
 
     app.on('activate', () => {
       if (BrowserWindow.getAllWindows().length === 0) createWindow();
@@ -1102,5 +1102,7 @@ if (!gotLock) {
     isQuitting = true;
     globalShortcut.unregisterAll();
     stopPowerSaver();
+    // 退出前把内存中待写数据落盘，避免丢最后一次编辑
+    try { flushPendingWrite(); } catch (e) { console.error('[data] 退出前落盘失败：', e && e.message); }
   });
 }

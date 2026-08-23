@@ -81,6 +81,7 @@
 
 - **中英双语**：简体中文 / English 一键切换
 - **一键整理**：自动排列画布上的便签
+- **开机自启动**：设置内一键开启，登录 Windows 后自动启动便签（默认关闭）
 - **剪贴板**：便签内与标题均可正常复制 / 粘贴文字与图片，粘贴自动识别图片 / 文件路径
 - **检查更新**：「关于」页可手动检查新版本，自动更新走弹窗下载 + 重启安装
 - **关于页**：查看版本号、作者与完整更新说明
@@ -102,10 +103,11 @@ npm start
 ### 运行测试
 
 ```bash
-npm test
+npm test            # 单元测试（Node 内置框架，无需额外安装）
+npm run test:e2e    # 端到端测试（Playwright，真实 Electron 链路）
 ```
 
-> 使用 Node 内置测试框架，无需额外安装；测试排序、引用清理、Markdown 导出等核心逻辑。
+> 单测覆盖排序、引用清理、Markdown 导出、颜色与转义等核心逻辑；e2e 用 Playwright 启动真实应用，验证启动 / 编辑 / 钉窗 / 置顶高亮 / 玻璃拟态 / 渲染缓存 / 开机自启动开关等。
 
 ### 打包（生成安装包）
 
@@ -120,6 +122,7 @@ npm run dist
 - [Electron](https://www.electronjs.org/) 33
 - [electron-builder](https://www.electron.build/) 25
 - [electron-updater](https://www.electron.build/auto-update) 6（自动更新）
+- [Playwright](https://playwright.dev/)（端到端测试）
 - 原生 HTML / CSS / JavaScript，无框架依赖
 
 ## 🚚 发布与签名
@@ -132,7 +135,7 @@ npm run dist
   ```bash
   set GH_TOKEN=你的github_token
   ```
-- 每次发布版本号要高于已装版本（改 `package.json` 的 `version` 与 `renderer/app.js` 的 `APP_VERSION`），然后：
+- 每次发布版本号要高于已装版本（仅需改 `package.json` 的 `version`，应用内版本号统一由 `app.getVersion()` 注入，无需再改其他地方），然后：
   ```bash
   npm run dist:publish   # 构建并自动上传到 GitHub Release
   ```

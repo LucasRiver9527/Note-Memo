@@ -1,6 +1,10 @@
 const { contextBridge, ipcRenderer, webUtils } = require('electron');
 
+// 由主进程通过 additionalArguments 注入，保证同步可读、单一来源
+const APP_VERSION = ((process.argv || []).find((a) => a.startsWith('--app-version=')) || '').slice('--app-version='.length) || '';
+
 contextBridge.exposeInMainWorld('api', {
+  appVersion: APP_VERSION,
   loadData: () => ipcRenderer.invoke('data:load'),
   saveData: (data) => ipcRenderer.invoke('data:save', data),
   exportData: (data) => ipcRenderer.invoke('data:export', data),
@@ -61,5 +65,8 @@ contextBridge.exposeInMainWorld('api', {
   onUpdateDownloaded: (cb) => ipcRenderer.on('update:downloaded', (e, info) => cb(info)),
   checkUpdate: () => ipcRenderer.invoke('update:check'),
   downloadUpdate: () => ipcRenderer.invoke('update:download'),
-  quitAndInstall: () => ipcRenderer.invoke('update:install')
+  quitAndInstall: () => ipcRenderer.invoke('update:install'),
+
+  getAutoLaunch: () => ipcRenderer.invoke('startup:get'),
+  setAutoLaunch: (enabled) => ipcRenderer.invoke('startup:set', enabled)
 });
