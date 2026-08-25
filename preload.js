@@ -40,6 +40,7 @@ contextBridge.exposeInMainWorld('api', {
   copyImage: (src) => ipcRenderer.invoke('clipboard:write-image', src),
   setAlwaysOnTop: (flag) => ipcRenderer.send('window:always-on-top', flag),
   setOpacity: (opacity) => ipcRenderer.send('window:set-opacity', opacity),
+  setWindowControls: (opts) => ipcRenderer.send('window:set-controls', opts),
   setSelfOpacity: (opacity) => ipcRenderer.send('window:set-self-opacity', opacity),
   setNoteOpacity: (opacity) => ipcRenderer.send('window:set-note-opacity', opacity),
   onNoteOpacity: (cb) => ipcRenderer.on('window:note-opacity', (e, v) => cb(v)),

@@ -111,6 +111,11 @@
     "sort_color": "按颜色",
     "sort_hint": "排序在「备忘录」和「待办」视图中生效；选择「自定义顺序」后可拖动下方便签调整顺序。",
     "custom_order": "自定义顺序",
+    "sort_scope": "排序范围",
+    "sort_scope_all": "全部（全局）",
+    "sort_group_hint": "选择分组后可各自调整该分组的顺序；「全部」视图使用全局顺序。",
+    "save_current_order": "💾 保存当前排序",
+    "toast_sort_saved": "已保存为自定义排序",
     "backup_folder": "备份文件夹",
     "backup_hint": "设置一个专门的备份文件夹，「一键导出」会把备份文件保存到该文件夹内。",
     "backup_dir_placeholder": "默认：应用数据目录/backups",
@@ -422,6 +427,11 @@
     "sort_color": "By color",
     "sort_hint": "Sorting applies in List and Todo views; choose \"Custom order\" to drag notes below.",
     "custom_order": "Custom order",
+    "sort_scope": "Sort scope",
+    "sort_scope_all": "All (global)",
+    "sort_group_hint": "Select a group to adjust its own order; the All view uses the global order.",
+    "save_current_order": "💾 Save current order",
+    "toast_sort_saved": "Saved as custom order",
     "backup_folder": "Backup folder",
     "backup_hint": "Set a dedicated backup folder; \"Export now\" saves backup files into it.",
     "backup_dir_placeholder": "Default: app data dir/backups",
@@ -736,6 +746,11 @@
     "sort_color": "按颜色",
     "sort_hint": "排序在「备忘录」和「待办」视图中生效；选择「自定义顺序」后可拖动下方便签调整顺序。",
     "custom_order": "自定义顺序",
+    "sort_scope": "排序范围",
+    "sort_scope_all": "全部（全局）",
+    "sort_group_hint": "选择分组后可各自调整该分组的顺序；「全部」视图使用全局顺序。",
+    "save_current_order": "💾 保存当前排序",
+    "toast_sort_saved": "已保存为自定义排序",
     "backup_folder": "备份文件夹",
     "backup_hint": "设置一个专门的备份文件夹，「一键导出」会把备份文件保存到该文件夹内。",
     "backup_dir_placeholder": "默认：应用数据目录/backups",
@@ -1050,6 +1065,11 @@
     "sort_color": "By color",
     "sort_hint": "Sorting applies in List and Todo views; choose \"Custom order\" to drag notes below.",
     "custom_order": "Custom order",
+    "sort_scope": "Sort scope",
+    "sort_scope_all": "All (global)",
+    "sort_group_hint": "Select a group to adjust its own order; the All view uses the global order.",
+    "save_current_order": "💾 Save current order",
+    "toast_sort_saved": "Saved as custom order",
     "backup_folder": "Backup folder",
     "backup_hint": "Set a dedicated backup folder; \"Export now\" saves backup files into it.",
     "backup_dir_placeholder": "Default: app data dir/backups",
@@ -1349,10 +1369,14 @@
     n.tables = (n.tables || []).filter((tb) => refs.has(tb.id));
   }
 
-  // 便签排序，settings 传 { sortMode, noteOrder }
-  function sortNotes(arr, settings) {
+  // 便签排序，settings 传 { sortMode, noteOrder, groupOrders }，groupId 用于按分组的自定义顺序（可选）
+  function sortNotes(arr, settings, groupId) {
     const mode = (settings && settings.sortMode) || 'updated';
-    const order = (settings && settings.noteOrder) || [];
+    let order = (settings && settings.noteOrder) || [];
+    if (mode === 'custom' && groupId) {
+      const go = (settings && settings.groupOrders) || {};
+      order = go[groupId] || [];
+    }
     const a = [...arr];
     a.sort((x, y) => {
       if (mode !== 'custom' && x.pinned !== y.pinned) return x.pinned ? -1 : 1;

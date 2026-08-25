@@ -498,6 +498,10 @@ body.note-dragging .note.dragging {
 }
 .color-pop .swatch:hover { transform: scale(1.15); }
 .color-pop .swatch.active { border-color: var(--fg); }
+/* 右键菜单更紧凑：更小的色块与项目密度 */
+.ctx-menu .swatch { width: 20px; height: 20px; border-radius: 5px; }
+.ctx-menu .color-pop-label { padding-top: 4px; }
+.ctx-menu [type="color"] { width: 20px !important; height: 20px !important; }
 .color-pop-label {
   grid-column: 1 / -1; font-size: 11px; color: var(--fg-dim);
   margin-top: 4px; padding-top: 6px; border-top: 1px solid var(--border);
@@ -883,6 +887,8 @@ body.glass .memo-row:hover { box-shadow: 0 12px 40px rgba(0, 0, 0, 0.32); }
   opacity: var(--note-opacity, 1);
 }
 .doc-pick-item:hover { border-color: var(--accent); filter: brightness(1.04); }
+.doc-pick-item.dragging { opacity: 0.5; }
+.doc-pick-item.drop-target { border-color: var(--accent); box-shadow: 0 -2px 0 0 var(--accent), 0 3px 12px rgba(0,0,0,0.12); }
 .doc-pick-item .dp-info { flex: 1; min-width: 0; }
 .doc-pick-item .dp-title { font-weight: 600; font-size: 14px; }
 .doc-pick-item .dp-sub { font-size: 12px; color: inherit; opacity: 0.65; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
@@ -1022,8 +1028,15 @@ body.bright-bg .note-count,
 body.bright-bg .search-icon,
 body.bright-bg .view-btn:not(.active),
 body.bright-bg .chip:not(.active),
-body.bright-bg .doc-hint {
+body.bright-bg .doc-hint,
+body.bright-bg .icon-btn,
+body.bright-bg .win-btn:not(.active) {
   color: var(--fg);
+}
+body.bright-bg .icon-btn,
+body.bright-bg .win-btn:not(.active) {
+  background: rgba(0, 0, 0, 0.08);
+  text-shadow: 0 1px 2px rgba(255, 255, 255, 0.35);
 }
 body.bright-bg .chip:not(.active),
 body.bright-bg .view-btn:not(.active),
@@ -1053,9 +1066,14 @@ body.bright-bg .empty-hint .sub {
   opacity: 0.95;
 }
 
-/* ---------- 备忘录拖动排序指示 ---------- */
+/* ---------- 备忘录/文档列表 拖动排序指示 ---------- */
 .memo-row.drop-before { box-shadow: 0 -3px 0 0 var(--accent); border-top-left-radius: 0; border-top-right-radius: 0; }
 .memo-row.drop-after { box-shadow: 0 3px 0 0 var(--accent); border-bottom-left-radius: 0; border-bottom-right-radius: 0; }
+.memo-row.dragging { opacity: 0.55; }
+.memo-grip { touch-action: none; }
+.doc-pick-item.drop-before { box-shadow: 0 -2px 0 0 var(--accent); }
+.doc-pick-item.drop-after { box-shadow: 0 2px 0 0 var(--accent); }
+.doc-pick-item.dragging { opacity: 0.5; }
 
 /* ---------- 闹铃提醒弹窗 ---------- */
 #alarmOverlay {

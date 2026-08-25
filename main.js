@@ -4,8 +4,22 @@ const fs = require('fs');
 const { pathToFileURL } = require('url');
 const logic = require('./renderer/logic.js');
 const { autoUpdater } = require('electron-updater');
+const { checkIpcContract } = require('./ipc-contract.js');
 
 const isDev = !app.isPackaged;
+
+// dev 下启动即校验 IPC 契约：renderer 用到的 channel 在 main 是否都有实现，缺一直接抛错，避免静默失效
+if (isDev || process.env.MYNOTES_CHECK_IPC === '1') {
+  const contract = checkIpcContract(__dirname);
+  if (!contract.ok) {
+    const detail = [
+      contract.missingHandlers.length ? '缺 handler: ' + contract.missingHandlers.join(', ') : '',
+      contract.missingSenders.length ? '缺 sender: ' + contract.missingSenders.join(', ') : ''
+    ].filter(Boolean).join('; ');
+    console.error('[ipc-contract] 校验失败：', detail);
+    throw new Error('IPC contract check failed: ' + detail);
+  }
+}
 
 // e2e 测试用独立 userData 隔离数据（未设置则用默认目录）
 if (process.env.MYNOTES_USER_DATA) {
@@ -280,6 +294,14 @@ function fireReminder(note) {
     mainWindow.flashFrame(true);
     setTimeout(() => mainWindow.flashFrame(false), 4000);
     mainWindow.webContents.send('reminder:fired', note.id);
+    // 播报闹铃声音：把声音设置传给渲染进程播放（preload 监听 reminder:sound）
+    const data = readData();
+    const s = (data && data.settings) || {};
+    mainWindow.webContents.send('reminder:sound', {
+      enabled: !!s.reminderSound,
+      path: s.reminderSoundPath || null,
+      volume: s.reminderVolume != null ? s.reminderVolume : 70
+    });
   }
 
   scheduleReminders(readDataNotes());
@@ -754,6 +776,15 @@ function setupIpc() {
   ipcMain.on('window:set-opacity', (e, opacity) => {
     if (mainWindow) mainWindow.setOpacity(opacity);
   });
+  // 自定义背景图/明暗变化时同步原生窗口控制按钮(─ □ ✕)的符号颜色，避免亮背景上看不清
+  ipcMain.on('window:set-controls', (e, opts) => {
+    const win = BrowserWindow.fromWebContents(e.sender) || mainWindow;
+    if (!win || !win.setTitleBarOverlay) return;
+    const symbolColor = (opts && opts.symbolColor) || '#c8c8c8';
+    try {
+      win.setTitleBarOverlay({ color: '#00000000', symbolColor, height: 50 });
+    } catch (err) { /* 非标题栏覆盖窗口忽略 */ }
+  });
   ipcMain.on('window:set-self-opacity', (e, opacity) => {
     const win = BrowserWindow.fromWebContents(e.sender);
     if (win && !win.isDestroyed()) win.setOpacity(opacity);
@@ -822,7 +853,8 @@ if (!gotLock) {
         const url = new URL(request.url);
         const name = path.basename(url.pathname);
         const file = path.join(app.getPath('userData'), 'backgrounds', name);
-        return net.fetch(pathToFileURL(file).toString());
+        if (!fs.existsSync(file)) return new Response('Not Found', { status: 404 });
+        return net.fetch(pathToFileURL(file).toString()).catch(() => new Response('Not Found', { status: 404 }));
       } catch (e) {
         return new Response('Not Found', { status: 404 });
       }
@@ -833,7 +865,8 @@ if (!gotLock) {
         const url = new URL(request.url);
         const name = path.basename(url.pathname);
         const file = path.join(app.getPath('userData'), 'images', name);
-        return net.fetch(pathToFileURL(file).toString());
+        if (!fs.existsSync(file)) return new Response('Not Found', { status: 404 });
+        return net.fetch(pathToFileURL(file).toString()).catch(() => new Response('Not Found', { status: 404 }));
       } catch (e) {
         return new Response('Not Found', { status: 404 });
       }
@@ -844,7 +877,8 @@ if (!gotLock) {
         const url = new URL(request.url);
         const name = path.basename(url.pathname);
         const file = path.join(app.getPath('userData'), 'fonts', name);
-        return net.fetch(pathToFileURL(file).toString());
+        if (!fs.existsSync(file)) return new Response('Not Found', { status: 404 });
+        return net.fetch(pathToFileURL(file).toString()).catch(() => new Response('Not Found', { status: 404 }));
       } catch (e) {
         return new Response('Not Found', { status: 404 });
       }
@@ -855,7 +889,8 @@ if (!gotLock) {
         const url = new URL(request.url);
         const name = path.basename(url.pathname);
         const file = path.join(app.getPath('userData'), 'sounds', name);
-        return net.fetch(pathToFileURL(file).toString());
+        if (!fs.existsSync(file)) return new Response('Not Found', { status: 404 });
+        return net.fetch(pathToFileURL(file).toString()).catch(() => new Response('Not Found', { status: 404 }));
       } catch (e) {
         return new Response('Not Found', { status: 404 });
       }

@@ -107,6 +107,31 @@ test('sortNotes 自定义顺序 + 未出现项按创建时间置尾', () => {
   assert.deepStrictEqual(r, ['z', 'x', 'y']);
 });
 
+test('sortNotes 分组的自定义顺序独立于全局 noteOrder（按 groupId）', () => {
+  const arr = [
+    { id: 'a', groupId: 'g1', createdAt: 100 },
+    { id: 'b', groupId: 'g1', createdAt: 200 },
+    { id: 'c', groupId: 'g2', createdAt: 300 },
+    { id: 'd', groupId: 'g2', createdAt: 400 }
+  ];
+  const settings = { sortMode: 'custom', noteOrder: ['c', 'd', 'a', 'b'], groupOrders: { g1: ['b', 'a'], g2: ['d', 'c'] } };
+  // 应用层会把 arr 先过滤成该分组的便签再调用；分组 g1 使用自己的 groupOrders
+  assert.deepStrictEqual(sortNotes(arr.filter((n) => n.groupId === 'g1'), settings, 'g1').map((x) => x.id), ['b', 'a']);
+  assert.deepStrictEqual(sortNotes(arr.filter((n) => n.groupId === 'g2'), settings, 'g2').map((x) => x.id), ['d', 'c']);
+  // 全局/未指定分组用 noteOrder
+  assert.deepStrictEqual(sortNotes(arr, settings).map((x) => x.id), ['c', 'd', 'a', 'b']);
+});
+
+test('sortNotes 分组自定义顺序：未在该组顺序里的项按创建时间置尾', () => {
+  const arr = [
+    { id: 'a', groupId: 'g1', createdAt: 100 },
+    { id: 'b', groupId: 'g1', createdAt: 200 },
+    { id: 'c', groupId: 'g1', createdAt: 300 }
+  ];
+  const r = sortNotes(arr, { sortMode: 'custom', noteOrder: [], groupOrders: { g1: ['c'] } }, 'g1').map((x) => x.id);
+  assert.deepStrictEqual(r, ['c', 'b', 'a']);
+});
+
 test('sortNotes 不修改原数组', () => {
   const arr = [{ id: 'a', updatedAt: 1 }];
   sortNotes(arr, {});

@@ -22,9 +22,11 @@ async function openApp(opts) {
   await win.waitForLoadState('domcontentloaded');
 
   const closeBtn = win.locator('#btnChangelogClose');
-  if (await closeBtn.isVisible().catch(() => false)) {
-    await closeBtn.click();
-  }
+  // 首启可能出现「更新说明」弹窗；等待其可见再强制关闭（force 绕过"稳定"检查，避免竞态 flake）
+  try {
+    await closeBtn.waitFor({ state: 'visible', timeout: 8000 });
+    await closeBtn.click({ force: true, timeout: 8000 });
+  } catch (_) {}
 
   return { electronApp, win, userDataDir };
 }
@@ -32,6 +34,11 @@ async function openApp(opts) {
 async function closeApp(ctx) {
   await ctx.electronApp.close().catch(() => {});
   await ctx.userDataDir && fs.rm(ctx.userDataDir, { recursive: true, force: true }).catch(() => {});
+}
+
+// 点击封装：force 绕过冷启动「稳定」检查，规避环境级 flake（见规划待办阶段 C）
+async function stableClick(locator) {
+  await locator.click({ force: true });
 }
 
 test('应用可启动，preload 注入与版本号来自 package.json', async () => {
@@ -327,6 +334,372 @@ test('P5 增量渲染：画布内切换置顶后其余便签内容保留', async
 
 
 
+// —— 排序/整理联动：保存当前排序在「全部」视图不弹回、顺序与画面一致 ——
+test('保存排序在「全部」视图生效：拖动后保存不弹回，顺序与画面一致', async () => {
+  const now = Date.now();
+  const mk = (id, title, x, y) => ({
+    id, title, content: '内容' + id, type: 'note', items: [], images: [], files: [], tables: [],
+    color: '#93f1ce', textColor: null, groupId: null, pinned: false, desktopPin: false, reminder: null,
+    x, y, positionAll: { x, y }, w: 240, h: 200, z: 1, createdAt: now, updatedAt: now
+  });
+  // a 未分组位置 (20,20)，b 未分组位置 (280,20)；「全部」初始位置相同
+  const seed = {
+    version: 2,
+    settings: { viewMode: 'board', sortMode: 'updated' },
+    groups: [], trash: [],
+    notes: [mk('a', 'A', 20, 20), mk('b', 'B', 280, 20)]
+  };
+  const ctx = await openApp({ seed });
+  try {
+    await expect(ctx.win.locator('#noteCount')).toHaveText('2');
+    // 模拟把便签 a 拖到便签 b 右侧（「全部」视图写入 positionAll，与 b 重叠）
+    await ctx.win.evaluate(() => {
+      const a = state.notes.find((n) => n.id === 'a');
+      setEffPos(a, 500, 20);
+    });
+    // 保存当前排序
+    await stableClick(ctx.win.locator('#btnSaveOrder'));
+    const res = await ctx.win.evaluate(() => {
+      const a = state.notes.find((n) => n.id === 'a');
+      const b = state.notes.find((n) => n.id === 'b');
+      return { a: a.positionAll, b: b.positionAll, order: state.settings.noteOrder };
+    });
+    // 位置不被 ensureAllLayout 弹回
+    expect(res.a.x).toBe(500);
+    expect(res.a.y).toBe(20);
+    expect(res.b.x).toBe(280);
+    expect(res.b.y).toBe(20);
+    // 顺序按「全部」画面（b 在左、a 在右），而非未分组旧位置（a 在左、b 在右）
+    expect(res.order.indexOf('b')).toBeLessThan(res.order.indexOf('a'));
+  } finally {
+    await closeApp(ctx);
+  }
+});
+
+test('切换分组再切回「全部」不改变已保存的布局', async () => {
+  const now = Date.now();
+  const mk = (id, title, groupId, x, y, paX, paY) => ({
+    id, title, content: '内容' + id, type: 'note', items: [], images: [], files: [], tables: [],
+    color: '#93f1ce', textColor: null, groupId, pinned: false, desktopPin: false, reminder: null,
+    x, y, positionAll: { x: paX, y: paY }, w: 240, h: 200, z: 1, createdAt: now, updatedAt: now
+  });
+  // a 属于分组 g1（其「全部」位置 500,20），b 未分组（「全部」位置 280,20），二者在「全部」里重叠
+  const seed = {
+    version: 2,
+    settings: { viewMode: 'board', sortMode: 'updated' },
+    groups: [{ id: 'g1', name: '分组1', color: '#6c5ce7' }],
+    trash: [],
+    notes: [mk('a', 'A', 'g1', 20, 20, 500, 20), mk('b', 'B', null, 280, 20, 280, 20)]
+  };
+  const ctx = await openApp({ seed });
+  try {
+    await expect(ctx.win.locator('#noteCount')).toHaveText('2');
+    // 保存当前排序（记录「全部」布局）
+    await stableClick(ctx.win.locator('#btnSaveOrder'));
+    // 切到分组 g1，再切回「全部」
+    await stableClick(ctx.win.locator('#groupChips .chip').first());
+    await stableClick(ctx.win.locator('#filterbar .chip[data-group="all"]'));
+    const res = await ctx.win.evaluate(() => {
+      const a = state.notes.find((n) => n.id === 'a');
+      const b = state.notes.find((n) => n.id === 'b');
+      return { a: a.positionAll, b: b.positionAll };
+    });
+    // 切回后「全部」布局不被 ensureAllLayout 重新排开
+    expect(res.a.x).toBe(500);
+    expect(res.a.y).toBe(20);
+    expect(res.b.x).toBe(280);
+    expect(res.b.y).toBe(20);
+  } finally {
+    await closeApp(ctx);
+  }
+});
+
+// —— 排序：保存当前排序只在便签视图；保存后备忘录列表保持顺序并跨视图一致 ——
+test('保存当前排序后备忘录列表保持顺序且跨视图一致', async () => {
+  const now = Date.now();
+  const mk = (id, title, x, y) => ({
+    id, title, content: '内容' + id, type: 'note', items: [], images: [], files: [], tables: [],
+    color: '#93f1ce', textColor: null, groupId: null, pinned: false, desktopPin: false, reminder: null,
+    x, y, positionAll: { x, y }, w: 240, h: 200, z: 1, createdAt: 1000 + x, updatedAt: 1000 + x
+  });
+  const seed = {
+    version: 2,
+    settings: { viewMode: 'board', sortMode: 'updated' },
+    groups: [], trash: [],
+    notes: [mk('a', 'A', 20, 20), mk('b', 'B', 280, 20), mk('c', 'C', 540, 20)]
+  };
+  const ctx = await openApp({ seed });
+  try {
+    await expect(ctx.win.locator('#noteCount')).toHaveText('3');
+    const noteOrder = () => ctx.win.evaluate(() => state.settings.noteOrder.slice());
+    const memoDom = () => ctx.win.evaluate(() => Array.from(document.querySelectorAll('#memoList .memo-row')).map((r) => r.dataset.id));
+    // 便签视图：保存按钮可见，点击后按画布位置记录顺序 a,b,c
+    await expect(ctx.win.locator('#btnSaveOrder')).toBeVisible();
+    await stableClick(ctx.win.locator('#btnSaveOrder'));
+    expect(await noteOrder()).toEqual(['a', 'b', 'c']);
+    // 切备忘录：按保存后的顺序显示（而非按 updatedAt）
+    await stableClick(ctx.win.locator('#viewMemo'));
+    expect(await memoDom()).toEqual(['a', 'b', 'c']);
+    // 模拟用户拖动重排后的自定义顺序
+    await ctx.win.evaluate(() => {
+      state.settings.sortMode = 'custom';
+      state.settings.noteOrder = ['c', 'a', 'b'];
+    });
+    // 跨视图：便签 → 备忘录，顺序保持
+    await stableClick(ctx.win.locator('#viewBoard'));
+    await stableClick(ctx.win.locator('#viewMemo'));
+    expect(await memoDom()).toEqual(['c', 'a', 'b']);
+  } finally {
+    await closeApp(ctx);
+  }
+});
+
+// —— 排序：保存排序 ↔ 一键整理 联动（画布恢复布局 / 列表紧凑排列） ——
+test('画布视图：保存排序后一键整理恢复到保存的布局', async () => {
+  const mk = (id, x, y) => ({
+    id, title: id, content: 'c' + id, type: 'note', items: [], images: [], files: [], tables: [],
+    color: '#93f1ce', textColor: null, groupId: null, pinned: false, desktopPin: false, reminder: null,
+    x, y, positionAll: { x, y }, w: 240, h: 200, z: 1, createdAt: 1000 + x, updatedAt: 1000 + x
+  });
+  const seed = {
+    version: 2,
+    settings: { viewMode: 'board', sortMode: 'updated' },
+    groups: [], trash: [],
+    notes: [mk('a', 20, 20), mk('b', 300, 20), mk('c', 600, 20)]
+  };
+  const ctx = await openApp({ seed });
+  try {
+    await expect(ctx.win.locator('#noteCount')).toHaveText('3');
+    const pa = (id) => ctx.win.evaluate((i) => state.notes.find((n) => n.id === i).positionAll, id);
+    // 保存当前排序（记录布局快照）
+    await stableClick(ctx.win.locator('#btnSaveOrder'));
+    // 打乱位置
+    await ctx.win.evaluate(() => {
+      setEffPos(state.notes.find((n) => n.id === 'a'), 900, 500);
+      setEffPos(state.notes.find((n) => n.id === 'b'), 900, 700);
+    });
+    // 一键整理 → 恢复到保存时的布局
+    await stableClick(ctx.win.locator('#btnQuickArrange'));
+    expect(await pa('a')).toEqual({ x: 20, y: 20 });
+    expect(await pa('b')).toEqual({ x: 300, y: 20 });
+    expect(await pa('c')).toEqual({ x: 600, y: 20 });
+  } finally {
+    await closeApp(ctx);
+  }
+});
+
+test('一键整理（便签视图触发）恢复到保存的位置并跨视图保持', async () => {
+  const mk = (id, x, y) => ({
+    id, title: id, content: 'c' + id, type: 'note', items: [], images: [], files: [], tables: [],
+    color: '#93f1ce', textColor: null, groupId: null, pinned: false, desktopPin: false, reminder: null,
+    x, y, positionAll: { x, y }, w: 240, h: 200, z: 1, createdAt: 1000 + x, updatedAt: 1000 + x
+  });
+  const seed = {
+    version: 2,
+    settings: { viewMode: 'board', sortMode: 'updated' },
+    groups: [], trash: [],
+    notes: [mk('a', 20, 20), mk('b', 300, 20), mk('c', 600, 20)]
+  };
+  const ctx = await openApp({ seed });
+  try {
+    await expect(ctx.win.locator('#noteCount')).toHaveText('3');
+    const pa = (id) => ctx.win.evaluate((i) => state.notes.find((n) => n.id === i).positionAll, id);
+    // 便签视图保存排序（记录位置快照）
+    await expect(ctx.win.locator('#btnSaveOrder')).toBeVisible();
+    await stableClick(ctx.win.locator('#btnSaveOrder'));
+    // 打乱位置
+    await ctx.win.evaluate(() => { setEffPos(state.notes.find((n) => n.id === 'a'), 900, 500); });
+    // 一键整理（按钮仅在便签视图）→ 恢复到保存时的位置
+    await expect(ctx.win.locator('#btnQuickArrange')).toBeVisible();
+    await stableClick(ctx.win.locator('#btnQuickArrange'));
+    expect(await pa('a')).toEqual({ x: 20, y: 20 });
+    // 跨视图：切备忘录再切回，位置仍保持
+    await stableClick(ctx.win.locator('#viewMemo'));
+    await stableClick(ctx.win.locator('#viewBoard'));
+    expect(await pa('a')).toEqual({ x: 20, y: 20 });
+  } finally {
+    await closeApp(ctx);
+  }
+});
+
+// —— 指针拖拽重排：备忘录 / 文档视图用 pointer 事件（支持边拖边滚，替代原生 HTML5 DnD）——
+test('备忘录视图：拖动把手(指针)重排便签顺序', async () => {
+  const now = Date.now();
+  const mk = (id, title, x, y) => ({
+    id, title, content: '内容' + id, type: 'note', items: [], images: [], files: [], tables: [],
+    color: '#93f1ce', textColor: null, groupId: null, pinned: false, desktopPin: false, reminder: null,
+    x, y, positionAll: { x, y }, w: 240, h: 200, z: 1, createdAt: 1000 + x, updatedAt: 1000 + x
+  });
+  const seed = {
+    version: 2,
+    settings: { viewMode: 'board', sortMode: 'custom', noteOrder: ['a', 'b', 'c'] },
+    groups: [], trash: [],
+    notes: [mk('a', 'A', 20, 20), mk('b', 'B', 280, 20), mk('c', 'C', 540, 20)]
+  };
+  const ctx = await openApp({ seed });
+  try {
+    await expect(ctx.win.locator('#noteCount')).toHaveText('3');
+    await ctx.win.locator('#viewMemo').click();
+    const memoDom = () => ctx.win.evaluate(() => Array.from(document.querySelectorAll('#memoList .memo-row')).map((r) => r.dataset.id));
+    await expect.poll(memoDom).toEqual(['a', 'b', 'c']);
+    // 把 a 的把手拖到 c 的底部（插入到末尾）
+    const grip = ctx.win.locator('.memo-row[data-id="a"] .memo-grip');
+    const cBox = await ctx.win.locator('.memo-row[data-id="c"]').boundingBox();
+    const g = await grip.boundingBox();
+    await ctx.win.mouse.move(g.x + g.width / 2, g.y + g.height / 2);
+    await ctx.win.mouse.down();
+    await ctx.win.mouse.move(g.x + g.width / 2, cBox.y + cBox.height - 4, { steps: 10 });
+    await ctx.win.mouse.up();
+    await expect.poll(memoDom).toEqual(['b', 'c', 'a']);
+  } finally {
+    await closeApp(ctx);
+  }
+});
+
+test('文档视图：拖动选择项(指针)重排便签顺序', async () => {
+  const now = Date.now();
+  const mk = (id, title, x, y) => ({
+    id, title, content: '内容' + id, type: 'note', items: [], images: [], files: [], tables: [],
+    color: '#93f1ce', textColor: null, groupId: null, pinned: false, desktopPin: false, reminder: null,
+    x, y, positionAll: { x, y }, w: 240, h: 200, z: 1, createdAt: 1000 + x, updatedAt: 1000 + x
+  });
+  const seed = {
+    version: 2,
+    settings: { viewMode: 'board', sortMode: 'custom', noteOrder: ['a', 'b', 'c'] },
+    groups: [], trash: [],
+    notes: [mk('a', 'A', 20, 20), mk('b', 'B', 280, 20), mk('c', 'C', 540, 20)]
+  };
+  const ctx = await openApp({ seed });
+  try {
+    await expect(ctx.win.locator('#noteCount')).toHaveText('3');
+    await stableClick(ctx.win.locator('#viewDoc'));
+    const docDom = () => ctx.win.evaluate(() => Array.from(document.querySelectorAll('.doc-pick-item')).map((r) => r.dataset.id));
+    await expect.poll(docDom).toEqual(['a', 'b', 'c']);
+    // 把 a 拖到 c 的底部（插入到末尾）
+    const first = ctx.win.locator('.doc-pick-item[data-id="a"]');
+    const cItem = ctx.win.locator('.doc-pick-item[data-id="c"]');
+    const fb = await first.boundingBox();
+    const cBox = await cItem.boundingBox();
+    await ctx.win.mouse.move(fb.x + fb.width / 2, fb.y + fb.height / 2);
+    await ctx.win.mouse.down();
+    await ctx.win.mouse.move(fb.x + fb.width / 2, cBox.y + cBox.height - 4, { steps: 10 });
+    await ctx.win.mouse.up();
+    await expect.poll(docDom).toEqual(['b', 'c', 'a']);
+  } finally {
+    await closeApp(ctx);
+  }
+});
+
+// —— 顶栏「一键整理 / 保存当前排序」只在便签视图显示 ——
+test('一键整理/保存排序按钮只在便签视图显示', async () => {
+  const now = Date.now();
+  const mk = (id, title, x, y) => ({
+    id, title, content: '内容' + id, type: 'note', items: [], images: [], files: [], tables: [],
+    color: '#93f1ce', textColor: null, groupId: null, pinned: false, desktopPin: false, reminder: null,
+    x, y, positionAll: { x, y }, w: 240, h: 200, z: 1, createdAt: 1000 + x, updatedAt: 1000 + x
+  });
+  const seed = {
+    version: 2,
+    settings: { viewMode: 'board', sortMode: 'updated' },
+    groups: [], trash: [],
+    notes: [mk('a', 'A', 20, 20), mk('b', 'B', 280, 20), mk('c', 'C', 540, 20)]
+  };
+  const ctx = await openApp({ seed });
+  try {
+    await expect(ctx.win.locator('#noteCount')).toHaveText('3');
+    // 便签视图：两个按钮显示
+    await expect(ctx.win.locator('#btnQuickArrange')).toBeVisible();
+    await expect(ctx.win.locator('#btnSaveOrder')).toBeVisible();
+    // 备忘录 / 待办 / 文档：隐藏
+    await stableClick(ctx.win.locator('#viewMemo'));
+    await expect(ctx.win.locator('#btnQuickArrange')).toBeHidden();
+    await expect(ctx.win.locator('#btnSaveOrder')).toBeHidden();
+    await stableClick(ctx.win.locator('#viewTodo'));
+    await expect(ctx.win.locator('#btnQuickArrange')).toBeHidden();
+    await expect(ctx.win.locator('#btnSaveOrder')).toBeHidden();
+    await stableClick(ctx.win.locator('#viewDoc'));
+    await expect(ctx.win.locator('#btnQuickArrange')).toBeHidden();
+    await expect(ctx.win.locator('#btnSaveOrder')).toBeHidden();
+    // 切回便签视图：重新显示
+    await stableClick(ctx.win.locator('#viewBoard'));
+    await expect(ctx.win.locator('#btnQuickArrange')).toBeVisible();
+    await expect(ctx.win.locator('#btnSaveOrder')).toBeVisible();
+  } finally {
+    await closeApp(ctx);
+  }
+});
+
+// —— 批量选中：点击便签/备忘录内容区只选中，不进入编辑；退出批量后可正常编辑 ——
+test('批量选中：点击便签内容区只选中不编辑', async () => {
+  const now = Date.now();
+  const mk = (id, title, x, y) => ({
+    id, title, content: '内容' + id, type: 'note', items: [], images: [], files: [], tables: [],
+    color: '#93f1ce', textColor: null, groupId: null, pinned: false, desktopPin: false, reminder: null,
+    x, y, positionAll: { x, y }, w: 240, h: 200, z: 1, createdAt: 1000 + x, updatedAt: 1000 + x
+  });
+  const seed = {
+    version: 2,
+    settings: { viewMode: 'board', sortMode: 'updated' },
+    groups: [], trash: [],
+    notes: [mk('a', 'A', 20, 20), mk('b', 'B', 280, 20)]
+  };
+  const ctx = await openApp({ seed });
+  try {
+    await expect(ctx.win.locator('#noteCount')).toHaveText('2');
+    const note = ctx.win.locator('.note[data-id="a"]');
+    const content = ctx.win.locator('.note[data-id="a"] .note-content');
+    // 批量模式开启
+    await stableClick(ctx.win.locator('#btnBatchToggle'));
+    // 点击内容区：只选中，contenteditable 不聚焦
+    await content.click({ force: true });
+    await expect(note).toHaveClass(/selected/);
+    const active1 = await ctx.win.evaluate(() => (document.activeElement && (document.activeElement.className || document.activeElement.tagName)) || '');
+    expect(active1).not.toContain('note-content');
+    // 退出批量：点击内容区可进入编辑（contenteditable 聚焦）
+    await stableClick(ctx.win.locator('#btnBatchToggle'));
+    await content.click({ force: true });
+    await ctx.win.waitForTimeout(150);
+    const active2 = await ctx.win.evaluate(() => (document.activeElement && document.activeElement.className) || '');
+    expect(active2).toContain('note-content');
+  } finally {
+    await closeApp(ctx);
+  }
+});
+
+test('批量选中：点击备忘录内容区只选中不编辑', async () => {
+  const now = Date.now();
+  const mk = (id, title, x, y) => ({
+    id, title, content: '内容' + id, type: 'note', items: [], images: [], files: [], tables: [],
+    color: '#93f1ce', textColor: null, groupId: null, pinned: false, desktopPin: false, reminder: null,
+    x, y, positionAll: { x, y }, w: 240, h: 200, z: 1, createdAt: 1000 + x, updatedAt: 1000 + x
+  });
+  const seed = {
+    version: 2,
+    settings: { viewMode: 'board', sortMode: 'updated', noteOrder: ['a', 'b'] },
+    groups: [], trash: [],
+    notes: [mk('a', 'A', 20, 20), mk('b', 'B', 280, 20)]
+  };
+  const ctx = await openApp({ seed });
+  try {
+    await expect(ctx.win.locator('#noteCount')).toHaveText('2');
+    await stableClick(ctx.win.locator('#viewMemo'));
+    const row = ctx.win.locator('.memo-row[data-id="a"]');
+    const content = ctx.win.locator('.memo-row[data-id="a"] .note-content');
+    await stableClick(ctx.win.locator('#btnBatchToggle'));
+    await content.click({ force: true });
+    await expect(row).toHaveClass(/selected/);
+    const active1 = await ctx.win.evaluate(() => (document.activeElement && (document.activeElement.className || document.activeElement.tagName)) || '');
+    expect(active1).not.toContain('note-content');
+    await stableClick(ctx.win.locator('#btnBatchToggle'));
+    await content.click({ force: true });
+    await ctx.win.waitForTimeout(150);
+    const active2 = await ctx.win.evaluate(() => (document.activeElement && document.activeElement.className) || '');
+    expect(active2).toContain('note-content');
+  } finally {
+    await closeApp(ctx);
+  }
+});
+
 // —— 任务4 安全网：编辑器加粗（Ctrl+B）在现有实现下应工作 ——
 test('编辑器：选中文字 Ctrl+B 加粗', async () => {
   const ctx = await openApp();
@@ -348,11 +721,6 @@ test('编辑器：选中文字 Ctrl+B 加粗', async () => {
     await expect(content.locator('b, strong').first()).toHaveText('加粗文字');
   } finally { await closeApp(ctx); }
 });
-
-
-
-
-
 
 
 

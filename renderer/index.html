@@ -25,6 +25,7 @@
       <div class="tb-right">
         <button class="tb-btn" id="btnAdd" data-i18n="new_note" data-i18n-title="new_note_tip" title="新建便签 (Ctrl+Shift+N)">＋ 新建</button>
         <button class="tb-btn secondary" id="btnQuickArrange" data-i18n="quick_arrange" data-i18n-title="quick_arrange" title="一键整理">⚡ 一键整理</button>
+        <button class="tb-btn secondary" id="btnSaveOrder" data-i18n="save_current_order" data-i18n-title="save_current_order" title="保存当前排序">💾 保存排序</button>
         <button class="tb-btn secondary" id="btnBatchToggle" data-i18n="batch_select" data-i18n-title="batch_select" title="批量选中">☑ 批量选中</button>
         <button class="icon-btn" id="btnSettings" data-i18n-title="global_settings" title="全局设置">⚙</button>
         <span class="tb-divider"></span>
@@ -296,6 +297,13 @@
               </select>
             </label>
             <p class="sp-hint" id="sortHint" data-i18n="sort_hint">排序在「备忘录」和「待办」视图中生效；选择「自定义顺序」后可拖动下方便签调整顺序。</p>
+            <div id="sortScopeRow" class="hidden">
+              <label class="field">
+                <span data-i18n="sort_scope">排序范围</span>
+                <select id="sortGroup"></select>
+              </label>
+              <p class="sp-hint" data-i18n="sort_group_hint">选择分组后可各自调整该分组的顺序；「全部」视图使用全局顺序。</p>
+            </div>
             <h4 data-i18n="custom_order">自定义顺序</h4>
             <div class="sort-list" id="sortList"></div>
           </section>
@@ -437,6 +445,13 @@
   </div>
 
   <script src="logic.js"></script>
+<script src="state.js"></script>
+<script src="board-layout.js"></script>
+<script src="sort-state.js"></script>
+<script src="rich-content.js"></script>
+<script src="settings-panel.js"></script>
+<script src="table-logic.js"></script>
+<script src="notes-view.js"></script>
 <script src="app.js"></script>
 </body>
 </html>

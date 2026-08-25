@@ -4,7 +4,7 @@ const $$ = (s, root = document) => Array.from(root.querySelectorAll(s));
 const NOTE_COLORS = ['#000000', '#1e1e28', '#2d2f38', '#24344d', '#3a2a4d', '#1f3d33', '#4d2a2a', '#f7d65a', '#ffb3c1', '#a8e6cf', '#a0d8ff', '#d0b3ff', '#ffd8a8', '#f5a97f', '#e6c9ff'];
 const TEXT_COLORS = ['#2d2f38', '#000000', '#444444', '#ffffff', '#c0392b', '#b8860b', '#1e5a8a', '#1e7d5a', '#5b2d8f', '#7f8c8d'];
 
-function uid() { return 'i' + Date.now().toString(36) + Math.random().toString(36).slice(2, 6); }
+function uid() { return RichContent.uid('i'); }
 // 复用 logic.js 的 isDarkColor，避免两窗口各自实现同一算法
 const isDark = isDarkColor;
 
@@ -125,54 +125,6 @@ function save() {
 // 仅在此注入本窗口翻译器与 Markdown 开关。
 setRenderLocale({ tr, mdOn: markdownOn });
 
-function readRichContent(root) {
-  let out = '';
-  (root.childNodes || []).forEach((node) => {
-    if (node.nodeType === 3) {
-      out += node.textContent;
-    } else if (node.nodeType === 1) {
-      const tag = node.tagName;
-      if (node.classList && node.classList.contains('inline-img')) {
-        out += '[[img:' + node.getAttribute('data-img-id') + ']]';
-      } else if (node.classList && node.classList.contains('file-link')) {
-        out += '[[file:' + node.getAttribute('data-file-id') + ']]';
-      } else if (node.classList && node.classList.contains('note-table-block')) {
-        out += '[[table:' + node.getAttribute('data-table-id') + ']]';
-      } else if (tag === 'BR') {
-        out += '\n';
-      } else if (tag === 'B' || tag === 'STRONG') {
-        out += '**' + readRichContent(node) + '**';
-      } else if (tag === 'MARK') {
-        out += '==' + readRichContent(node) + '==';
-      } else if (tag === 'FONT' && node.getAttribute('color')) {
-        out += '[[c:' + node.getAttribute('color') + ']]' + readRichContent(node) + '[[/c]]';
-      } else if (tag === 'SPAN' && node.style) {
-        const bg = node.style.backgroundColor;
-        const fw = node.style.fontWeight;
-        const color = node.style.color;
-        if (bg && bg !== 'transparent' && bg !== 'rgba(0, 0, 0, 0)') {
-          out += '==' + readRichContent(node) + '==';
-        } else if (color && color !== '' && color !== 'inherit') {
-          out += '[[c:' + color + ']]' + readRichContent(node) + '[[/c]]';
-        } else if (fw === 'bold' || Number(fw) >= 600) {
-          out += '**' + readRichContent(node) + '**';
-        } else {
-          out += readRichContent(node);
-        }
-      } else if ((tag === 'DIV' || tag === 'P') && node.style && node.style.textAlign && node.style.textAlign !== '' && node.style.textAlign !== 'start') {
-        out += '[[align:' + node.style.textAlign + ']]' + readRichContent(node) + '[[/align]]';
-      } else {
-        out += readRichContent(node);
-      }
-    }
-  });
-  if (root && root.style && root.style.textAlign && root.style.textAlign !== '' && root.style.textAlign !== 'start' &&
-      /dn-content/.test(root.className || '')) {
-    return '[[align:' + root.style.textAlign + ']]' + out + '[[/align]]';
-  }
-  return out;
-}
-
 // 复用 logic.js 的同名纯逻辑（单一来源），仅绑定到当前 note 全局变量
 function refIdsOf() { return NoteLogic.refIdsOf(note); }
 function cleanupRefs() { if (note) NoteLogic.cleanupRefs(note); }
@@ -244,18 +196,13 @@ let activeTableSelCell = null;
 let activeTableSelBox = null;
 let lastTableBoxTime = 0;
 
-function newTable(rows, cols) {
-  const cells = [];
-  for (let r = 0; r < rows; r++) cells.push(new Array(cols).fill(''));
-  return { id: uid(), rows, cols, cells, merges: [], diagonals: [], borderWidth: 3, borderColor: null, fontSize: null, textColor: null };
-}
-
+// 表格数据纯逻辑（newTable/tableAddRow/…/tableSplit）已收归 table-logic.js（可单测），此处由全局提供。
 function getTableById(id) {
   return (note.tables || []).find((x) => x.id === id);
 }
 
 function insertTableAtCursor(rows, cols) {
-  const tbl = newTable(rows, cols);
+  const tbl = newTable(rows, cols, uid());
   note.tables = note.tables || [];
   note.tables.push(tbl);
   insertMarkerAtCursor('\n[[table:' + tbl.id + ']]\n');
@@ -297,43 +244,6 @@ function openTableInsertDialog() {
   };
   $('#tbOk', modal).onclick = () => done(true);
   $('#tbCancel', modal).onclick = () => done(false);
-}
-
-function tableAddRow(tbl) { tbl.rows++; tbl.cells.push(new Array(tbl.cols).fill('')); }
-function tableAddCol(tbl) { tbl.cols++; (tbl.cells || []).forEach((row) => row.push('')); }
-function tableRemoveRow(tbl, r) {
-  if (tbl.rows <= 1) return;
-  tbl.rows--;
-  tbl.cells.splice(r, 1);
-  tbl.merges = (tbl.merges || []).filter((m) => m.r !== r).map((m) => m.r > r ? { r: m.r - 1, c: m.c, rowspan: m.rowspan, colspan: m.colspan } : m);
-  tbl.diagonals = (tbl.diagonals || []).filter((d) => d.r !== r).map((d) => d.r > r ? { r: d.r - 1, c: d.c, dir: d.dir, t1: d.t1, t2: d.t2 } : d);
-}
-function tableRemoveCol(tbl, c) {
-  if (tbl.cols <= 1) return;
-  tbl.cols--;
-  (tbl.cells || []).forEach((row) => row.splice(c, 1));
-  tbl.merges = (tbl.merges || []).filter((m) => m.c !== c).map((m) => m.c > c ? { r: m.r, c: m.c - 1, rowspan: m.rowspan, colspan: m.colspan } : m);
-  tbl.diagonals = (tbl.diagonals || []).filter((d) => d.c !== c).map((d) => d.c > c ? { r: d.r, c: d.c - 1, dir: d.dir, t1: d.t1, t2: d.t2 } : d);
-}
-function tableMerge(tbl, r1, c1, r2, c2) {
-  if (r1 === r2 && c1 === c2) return;
-  tbl.merges = (tbl.merges || []).filter((m) => !(m.r >= r1 && m.r <= r2 && m.c >= c1 && m.c <= c2));
-  tbl.diagonals = (tbl.diagonals || []).filter((d) => !(d.r >= r1 && d.r <= r2 && d.c >= c1 && d.c <= c2));
-  const joined = [];
-  for (let r = r1; r <= r2; r++)
-    for (let c = c1; c <= c2; c++) {
-      const t = (tbl.cells[r] && tbl.cells[r][c]) || '';
-      if (t) joined.push(t);
-    }
-  tbl.merges.push({ r: r1, c: c1, rowspan: r2 - r1 + 1, colspan: c2 - c1 + 1 });
-  tbl.cells[r1][c1] = joined.join(' ');
-  for (let r = r1; r <= r2; r++)
-    for (let c = c1; c <= c2; c++)
-      if (r !== r1 || c !== c1) tbl.cells[r][c] = '';
-}
-function tableSplit(tbl, r, c) {
-  const idx = (tbl.merges || []).findIndex((m) => m.r === r && m.c === c);
-  if (idx >= 0) tbl.merges.splice(idx, 1);
 }
 
 function refreshTableBlock(block) {
@@ -1071,17 +981,8 @@ async function init() {
 
   if (!note) { document.body.textContent = tr('notfound'); return; }
 
-  // 迁移旧图片到内容标记
-  if (note.images && note.images.length) {
-    const content = note.content || '';
-    const missing = note.images.filter((im) => content.indexOf('[[img:' + im.id + ']]') === -1);
-    if (missing.length) {
-      note.content = content + (content ? '\n' : '') + missing.map((im) => '[[img:' + im.id + ']]').join('');
-    }
-  }
-  if (!note.files) note.files = [];
-  if (!note.images) note.images = [];
-  if (!note.tables) note.tables = [];
+  // A3：数据迁移集中到 state.js（migrateNote：补齐数组字段 + 旧图片补标记）
+  migrateNote(note, uid);
 
   lang = (settings.language === 'en') ? 'en' : 'zh';
   const wrap = $('#note');
