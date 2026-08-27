@@ -47,6 +47,8 @@ function applyTheme() {
   root.style.setProperty('--hl-fg', isDarkColor(hl) ? '#ffffff' : '#2d2f38');
   root.style.setProperty('--note-opacity', (s.noteOpacity / 100).toFixed(2));
   window.api.setNoteOpacity(s.noteOpacity);
+  // 便签外观自定义：圆角 / 阴影 / 边框 / 字距 / 背景图案（单一来源，实时作用于所有便签卡片）
+  applyNoteAppearance(s);
   document.body.classList.toggle('glass', !!s.glass);
   window.api.setEffects({ glass: !!s.glass, highlightColor: hl, desktopMica: !!s.desktopMica });
   root.style.setProperty('--font-size', s.fontSize + 'px');
@@ -65,11 +67,39 @@ function applyTheme() {
   applyTodoStyle();
   applyBackground();
   applyWindowControls();
+  applyMenuAppearance();
 }
 
 function todoAreaBg(color, opacity) {
   const base = (color == null || color === '') ? (isLightTheme() ? '#e6e9f2' : '#2c2e3a') : color;
   return hexToRgba(base, (opacity != null ? opacity : 100) / 100);
+}
+
+// 便签外观自定义：把设置写入根 CSS 变量，让所有便签卡片（.note / 钉窗内容）实时跟随。
+// 单一来源 = state.settings（defaults 在 state.js），这里只做「设置 → 变量」的映射。
+function applyNoteAppearance(s) {
+  const root = document.documentElement;
+  const radius = (s.noteRadius != null ? s.noteRadius : 12);
+  root.style.setProperty('--note-radius', radius + 'px');
+  root.style.setProperty('--note-radius-sm', Math.max(4, Math.round(radius * 0.55)) + 'px');
+
+  // 阴影强度：0=默认，1~3 逐级加深（纯逻辑在 logic.noteShadowCss）
+  const shadow = (s.noteShadow != null ? s.noteShadow : 0);
+  const sh = noteShadowCss(shadow);
+  root.style.setProperty('--note-shadow', sh.base);
+  root.style.setProperty('--note-shadow-hover', sh.hover);
+
+  // 边框：完全跟随用户值（0 = 无边框）。玻璃态下同样尊重用户，不做「强制 1px 玻璃细边」，
+  // 以满足「边框调 0 就无边框」的需求；玻璃态靠半透明底 + 磨砂本身区分边缘。
+  const bw = (s.noteBorderWidth != null ? s.noteBorderWidth : 0);
+  root.style.setProperty('--note-border-width', bw + 'px');
+  root.style.setProperty('--note-border-color', s.noteBorderColor || 'rgba(0,0,0,0.12)');
+  root.style.setProperty('--note-glass-border-width', bw + 'px');
+  root.style.setProperty('--note-glass-border-color', s.noteBorderColor || 'rgba(255,255,255,0.22)');
+
+  // 字体字距（作用于便签内容与全局文字）
+  const ls = (s.noteLetterSpacing != null ? s.noteLetterSpacing : 0);
+  root.style.setProperty('--font-letter-spacing', ls + 'px');
 }
 
 function applyTodoStyle() {
@@ -111,6 +141,8 @@ function applyBackground() {
   let borderAlpha = (s.topBarOpacity != null ? s.topBarOpacity : 100) / 100;
   if (s.topBarAcrylic) borderAlpha = 0.12 + borderAlpha * 0.88;
   const bc = hexToRgba(borderBase, borderAlpha);
+  // 供关闭确认等弹窗复用顶栏配色（颜色/透明度/亚克力），保持全局风格统一
+  document.documentElement.style.setProperty('--topbar-bg', bc);
   const tb = $('#titlebar');
   if (tb) tb.style.backgroundColor = bc;
   const fb = $('#filterbar');
@@ -125,11 +157,16 @@ function applyBackground() {
   applyWindowControls();
 }
 
-// 自定义背景图/明暗变化时同步原生窗口控制按钮(─ □ ✕)符号颜色：亮背景用深色、否则用浅色，保证清晰可辨
+// 自定义背景图/明暗变化时同步原生窗口控制按钮(─ □ ✕)符号颜色，保证始终清晰可辨
+// 依据「顶栏/画布实际背景亮度」取反色符号：亮背景用深色，暗背景用浅色。
 function applyWindowControls() {
   if (!window.api || typeof window.api.setWindowControls !== 'function') return;
+  const bg = (typeof currentBg === 'function' ? currentBg() : '#f4f5fa');
+  const light = (typeof luminance === 'function') ? luminance(bg) > 0.55 : true;
+  // 明亮/复杂背景（bright-bg）也按背景亮度取反色
   const onBright = document.body.classList.contains('bright-bg');
-  const symbolColor = onBright ? '#1e1f26' : '#ececf1';
+  const symbolColor = (light || onBright) ? '#1f2430' : '#eef0f6';
+  // 亮背景下再补一层对比背景不必要；窗口控制区域由顶部背景承担
   window.api.setWindowControls({ symbolColor });
 }
 
@@ -284,6 +321,11 @@ function syncModeSeg() {
 function syncSettingsInputs() {
   renderFontSelect();
   $('#noteOpacity').value = state.settings.noteOpacity;
+  $('#noteRadius').value = state.settings.noteRadius != null ? state.settings.noteRadius : 12;
+  $('#noteShadow').value = state.settings.noteShadow != null ? state.settings.noteShadow : 0;
+  $('#noteBorderWidth').value = state.settings.noteBorderWidth != null ? state.settings.noteBorderWidth : 0;
+  const nbc = $('#noteBorderColor'); if (nbc) nbc.value = state.settings.noteBorderColor || '#000000';
+  $('#noteLetterSpacing').value = state.settings.noteLetterSpacing != null ? state.settings.noteLetterSpacing : 0;
   $('#winOpacity').value = state.settings.winOpacity;
   const nc = $('#noteColorInput'); if (nc) nc.value = state.settings.noteColor || DEFAULT_NOTE_COLOR;
   $('#fontSize').value = state.settings.fontSize;
@@ -319,6 +361,14 @@ function syncSettingsInputs() {
   const av = $('#aboutVersion'); if (av) av.textContent = APP_VERSION;
   const cv = $('#clVersion'); if (cv) cv.textContent = 'v' + APP_VERSION;
   syncModeSeg();
+}
+
+// 右键菜单外观：亚克力（磨砂） + 透明度。单一来源 state.settings，实时作用于所有 .ctx-menu。
+function applyMenuAppearance() {
+  const root = document.documentElement;
+  const op = (state.settings.menuOpacity != null) ? state.settings.menuOpacity : 88;
+  root.style.setProperty('--ctx-opacity', op);
+  document.body.classList.toggle('menu-acrylic', !!state.settings.menuAcrylic);
 }
 
 /* ============ 自定义字体 / 语言 ============ */
@@ -432,10 +482,14 @@ function applyLanguage() {
 function renderGroupChips() {
   const wrap = $('#groupChips');
   wrap.innerHTML = '';
-  state.groups.forEach((g) => {
+  // 「最近使用」的分组排到最前，其余保持原相对顺序（纯逻辑 orderGroupsByRecent，见 board-layout.js）
+  const recent = (typeof BoardLayout !== 'undefined' && BoardLayout.orderGroupsByRecent)
+    ? BoardLayout.orderGroupsByRecent(state.groups, state.settings.recentGroups)
+    : state.groups;
+  recent.forEach((g) => {
     const chip = document.createElement('button');
     chip.className = 'chip' + (filter.group === g.id ? ' active' : '');
-    chip.innerHTML = `<span class="dot" style="background:${g.color}"></span>${escapeHtml(g.name)}`;
+    chip.innerHTML = `<span class="dot" style="background:${g.color}"></span>${escapeHtml(g.name)}${isGroupCollapsed(g.id) ? '<span class="chip-collapsed">▸</span>' : ''}`;
     chip.title = t('left_click_filter');
     chip.onclick = () => setFilter('group', g.id);
     chip.addEventListener('contextmenu', (e) => {
@@ -445,20 +499,39 @@ function renderGroupChips() {
     wrap.appendChild(chip);
   });
   $$('#filterbar .chip[data-group]').forEach((c) => {
-    c.classList.toggle('active', c.dataset.group === filter.group);
+    c.classList.toggle('active', !filter.archive && c.dataset.group === filter.group);
   });
+  const archiveChip = $('#btnArchiveFilter');
+  if (archiveChip) archiveChip.classList.toggle('active', !!filter.archive);
+  if (typeof refreshChipsScroll === 'function') refreshChipsScroll();
 }
 
 function setFilter(key, val) {
   filter[key] = val;
   if (key === 'group') {
+    // 选分组/全部/未分组即退出归档视图（归档是独立的「只看归档」开关）
+    if (filter.archive) filter.archive = false;
     // 让「排序面板」作用域跟随当前视图，保证在面板里调整的顺序与「一键整理」作用于同一分组/全部
     if (val === 'all' || val === 'ungrouped' || state.groups.some((g) => g.id === val)) {
       sortPanelGroupId = val;
     }
+    // 记录「最近使用」分组（仅真实分组；全部/未分组不记）
+    if (val !== 'all' && val !== 'ungrouped' && state.groups.some((g) => g.id === val)) {
+      markGroupRecent(val);
+    }
     renderGroupChips();
   }
   renderAll();
+}
+
+// 把分组 gid 记为「最近使用」：移到 recentGroups 最前、去重、限量，再重排分组芯片
+function markGroupRecent(gid) {
+  if (!gid) return;
+  const limit = (typeof BoardLayout !== 'undefined' && BoardLayout.LAYOUT && BoardLayout.LAYOUT.recentGroupLimit) ? BoardLayout.LAYOUT.recentGroupLimit : 8;
+  const arr = (state.settings.recentGroups || []).filter((x) => x !== gid);
+  arr.unshift(gid);
+  state.settings.recentGroups = arr.slice(0, limit);
+  save();
 }
 
 function createGroup(name) {
@@ -470,5 +543,5 @@ function createGroup(name) {
 }
 
 
-  return { applyTheme, todoAreaBg, applyTodoStyle, applyBackground, renderThemePanel, deleteCustomTheme, openThemeEditor, syncModeSeg, syncSettingsInputs, applyCustomFonts, renderFontSelect, renderFontList, addCustomFont, deleteCustomFont, applyLanguage, renderGroupChips, setFilter, createGroup };
+  return { applyTheme, todoAreaBg, applyTodoStyle, applyBackground, renderThemePanel, deleteCustomTheme, openThemeEditor, syncModeSeg, syncSettingsInputs, applyCustomFonts, renderFontSelect, renderFontList, addCustomFont, deleteCustomFont, applyLanguage, renderGroupChips, setFilter, createGroup, applyMenuAppearance };
 }));

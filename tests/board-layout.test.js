@@ -1,6 +1,6 @@
 const { test } = require('node:test');
 const assert = require('node:assert');
-const { LAYOUT, gridCols, overlapsAny, nextGridPosition, arrangeShelf, arrangeGrid, arrangeCompact, initPositionAll } = require('../renderer/board-layout.js');
+const { LAYOUT, gridCols, overlapsAny, nextGridPosition, arrangeShelf, arrangeCompact, initPositionAll, clampZoom, orderGroupsByRecent, rectsIntersect, suggestGroupIds } = require('../renderer/board-layout.js');
 
 test('LAYOUT 常量默认值', () => {
   assert.strictEqual(LAYOUT.margin, 20);
@@ -78,16 +78,6 @@ test('arrangeShelf 换行：超过 maxX 折行，行高取本行最大', () => {
   assert.strictEqual(c.x, 20);
 });
 
-test('arrangeGrid 网格式排布（可选策略保留）', () => {
-  const notes = [{ id: 'a', w: 100 }, { id: 'b', w: 100 }, { id: 'c', w: 100 }, { id: 'd', w: 100 }];
-  const out = arrangeGrid(notes, 2);
-  // 2 列：0->(20,20) 1->(20+260,20) 2->(20,20+230) 3->(280,250)
-  assert.deepStrictEqual(out[0], { id: 'a', x: 20, y: 20 });
-  assert.deepStrictEqual(out[1], { id: 'b', x: 280, y: 20 });
-  assert.deepStrictEqual(out[2], { id: 'c', x: 20, y: 250 });
-  assert.deepStrictEqual(out[3], { id: 'd', x: 280, y: 250 });
-});
-
 test('overlapsAny 正确判断重叠/间距', () => {
   const existing = [{ x: 100, y: 100, w: 240, h: 180 }];
   // 完全错开
@@ -147,4 +137,81 @@ test('initPositionAll：只给缺 positionAll 的旧数据补位，已有 positi
 test('initPositionAll：全部已有 positionAll 时返回 false', () => {
   const notes = [{ id: 'a', x: 1, y: 1, positionAll: { x: 1, y: 1 } }];
   assert.strictEqual(initPositionAll(notes, 1440), false);
+});
+
+test('clampZoom：只接受有限数字并收敛到 [min, max]', () => {
+  assert.strictEqual(clampZoom(1), 1);
+  assert.strictEqual(clampZoom(0.5), 0.5);
+  assert.strictEqual(clampZoom(1.234), 1.23);
+  // 越界 clamp + 保留两位小数
+  assert.strictEqual(clampZoom(0.1), LAYOUT.zoomMin);
+  assert.strictEqual(clampZoom(99), LAYOUT.zoomMax);
+  assert.strictEqual(clampZoom(-3), LAYOUT.zoomMin);
+  // 非法输入回退 1
+  assert.strictEqual(clampZoom(NaN), 1);
+  assert.strictEqual(clampZoom(undefined), 1);
+  assert.strictEqual(clampZoom('5'), 1);
+});
+
+test('orderGroupsByRecent：命中的分组排到最前，其余保持原相对顺序', () => {
+  const groups = [
+    { id: 'a', name: 'A' },
+    { id: 'b', name: 'B' },
+    { id: 'c', name: 'C' },
+    { id: 'd', name: 'D' }
+  ];
+  // 最近使用 [c, a]（c 最常使用）→ c, a 在最前，其余 b/d 按原顺序
+  assert.deepStrictEqual(
+    orderGroupsByRecent(groups, ['c', 'a']).map((g) => g.id),
+    ['c', 'a', 'b', 'd']
+  );
+  // 去重 + 忽略不存在的 id
+  assert.deepStrictEqual(
+    orderGroupsByRecent(groups, ['c', 'c', 'x', 'b']).map((g) => g.id),
+    ['c', 'b', 'a', 'd']
+  );
+  // 无 recents 时保持原顺序；不破坏入参
+  const src = groups.slice();
+  assert.deepStrictEqual(orderGroupsByRecent(groups, []).map((g) => g.id), ['a', 'b', 'c', 'd']);
+  assert.deepStrictEqual(groups, src);
+});
+
+test('rectsIntersect：矩形相交/接触/不相交判定', () => {
+  const r = { x: 10, y: 10, w: 100, h: 100 };
+  // 相交
+  assert.strictEqual(rectsIntersect(r, { x: 50, y: 50, w: 10, h: 10 }), true);
+  // 恰好接触边界（右缘相接视为相交）
+  assert.strictEqual(rectsIntersect(r, { x: 110, y: 10, w: 10, h: 10 }), true);
+  // 不相交（在右 / 在下）
+  assert.strictEqual(rectsIntersect(r, { x: 200, y: 10, w: 10, h: 10 }), false);
+  assert.strictEqual(rectsIntersect(r, { x: 10, y: 200, w: 10, h: 10 }), false);
+  // 缺参 / 空矩形
+  assert.strictEqual(rectsIntersect(null, r), false);
+  assert.strictEqual(rectsIntersect(r, { x: 1000, y: 1000 }), false);
+});
+
+test('suggestGroupIds：按笔记文本匹配 + 最近使用推荐分组', () => {
+  const groups = [
+    { id: 'g1', name: '工作' },
+    { id: 'g2', name: '购物' },
+    { id: 'g3', name: '旅行' },
+    { id: 'g4', name: '学习' }
+  ];
+  // 文本命中「购物/学习」→ 这两个在最前（按出现顺序）
+  assert.deepStrictEqual(
+    suggestGroupIds('明天要购物清单，顺便学习', groups, []),
+    ['g2', 'g4']
+  );
+  // 没有文本命中 → 回退到最近使用（最多 3 个）
+  assert.deepStrictEqual(
+    suggestGroupIds('随便的笔记', groups, ['g3', 'g1', 'g2']),
+    ['g3', 'g1', 'g2']
+  );
+  // 文本命中优先；最近使用仅兜底且去重、限量
+  assert.deepStrictEqual(
+    suggestGroupIds('工作记录', groups, ['g4', 'g1', 'g2', 'g3']).slice(0, 2),
+    ['g1', 'g4']
+  );
+  // 空文本不绑定分组
+  assert.deepStrictEqual(suggestGroupIds('', groups, []), []);
 });

@@ -45,13 +45,17 @@
 
   // 由画布布局读序：先按「行」（~rowBand 带宽量化 y）再按「列」（x），返回按阅读顺序的 id 列表。
   // 位置通过 posOf 取（「全部」取 positionAll，否则取 x,y），保证保存的顺序与画面一致。
+  // 行分组用 floor + 极小容差：round 半带宽边界会因浮点误差把同排便签拆到不同行，导致“保存排序后位置偏移”。
   function readOrderFromLayout(notes, filterGroup, rowBand) {
     const band = rowBand || 100;
+    const eps = 0.001;
     return (notes || []).slice()
       .sort((a, b) => {
         const pa = posOf(a, filterGroup);
         const pb = posOf(b, filterGroup);
-        return (Math.round((pa.y || 0) / band) - Math.round((pb.y || 0) / band)) || ((pa.x || 0) - (pb.x || 0));
+        const rowA = Math.floor(((pa.y || 0) / band) + eps);
+        const rowB = Math.floor(((pb.y || 0) / band) + eps);
+        return (rowA - rowB) || ((pa.x || 0) - (pb.x || 0));
       })
       .map((n) => n.id);
   }
@@ -102,5 +106,41 @@
     return order;
   }
 
-  return { ALL, UNGROUPED, KEY_ALL, KEY_UNGROUPED, resolveScope, posOf, writePos, readOrderFromLayout, reorderScoped, ensureOrderRefs, moveBefore, moveAfter };
+  // 排序策略（显示层）：根据当前排序方式返回便签 id 的「展示顺序」，**绝不修改 noteOrder/groupOrders**。
+  // 存储基准（noteOrder/groupOrders）永远只代表「自定义顺序」；按时间/标题/颜色等都是临时展示滤镜。
+  // 返回 id 列表（非便签对象），便于渲染层映射。缺省/未知策略回退 'updated'。
+  //   - custom：基准顺序优先，缺失（新建）便签追加到末尾 → 新便签一定参与排序。
+  //   - 非 custom：按策略排序（置顶 pinned 便签排最前，其余按策略），不改动存储。
+  function applySortStrategy(notes, strategy, filterGroup, storedNoteOrder, storedGroupOrders) {
+    const { orderGid } = resolveScope(filterGroup);
+    const baseOrder = orderGid ? ((storedGroupOrders || {})[orderGid] || []) : (storedNoteOrder || []);
+    const arr = (notes || []).slice();
+    if (!arr.length) return [];
+    const mode = strategy || 'updated';
+    const byId = new Map(arr.map((n) => [n.id, n]));
+    if (mode === 'custom') {
+      const out = [];
+      baseOrder.forEach((id) => { if (byId.has(id) && !out.includes(id)) out.push(id); });
+      // 未保存（新建）便签：按默认方案（创建时间降序）排序追加到末尾，不干扰已保存便签的顺序
+      const missing = arr.filter((n) => { const base = baseOrder.indexOf(n.id); return base < 0; });
+      missing.sort((a, b) => (b.createdAt || 0) - (a.createdAt || 0));
+      missing.forEach((n) => { if (!out.includes(n.id)) out.push(n.id); });
+      return out;
+    }
+    const cmp = (a, b) => {
+      if (mode === 'created') return (b.createdAt || 0) - (a.createdAt || 0);
+      if (mode === 'title') return String(a.title || '').localeCompare(String(b.title || ''), 'zh');
+      if (mode === 'color') {
+        const ca = String(a.color || ''), cb = String(b.color || '');
+        const la = /^#[0-9a-f]{6}$/i.test(ca), lb = /^#[0-9a-f]{6}$/i.test(cb);
+        if (la && lb) return parseInt(ca.slice(1), 16) - parseInt(cb.slice(1), 16);
+        return ca.localeCompare(cb);
+      }
+      return (b.updatedAt || b.createdAt || 0) - (a.updatedAt || a.createdAt || 0);
+    };
+    arr.sort((a, b) => (a.pinned !== b.pinned ? (a.pinned ? -1 : 1) : cmp(a, b)));
+    return arr.map((n) => n.id);
+  }
+
+  return { ALL, UNGROUPED, KEY_ALL, KEY_UNGROUPED, resolveScope, posOf, writePos, readOrderFromLayout, reorderScoped, ensureOrderRefs, moveBefore, moveAfter, applySortStrategy };
 }));

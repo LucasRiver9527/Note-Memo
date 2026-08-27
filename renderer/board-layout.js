@@ -21,7 +21,12 @@
     defaultW: 240,    // 便签默认宽
     defaultH: 180,    // 便签默认高
     newH: 200,        // 新便签默认高（nextGridPosition 用）
-    maxCells: 5000    // 网格扫描上限，防死循环
+    maxCells: 5000,   // 网格扫描上限，防死循环
+    segmentGap: 36,   // 「按分组分段」策略：各分段之间的垂直间距
+    zoomMin: 0.4,     // 画布缩放下限
+    zoomMax: 2,       // 画布缩放上限
+    zoomStep: 0.1,    // 画布缩放步长
+    recentGroupLimit: 8 // 「最近使用分组」最多保留的数量
   };
 
   function optsOf(opts) { return { ...LAYOUT, ...(opts || {}) }; }
@@ -78,19 +83,6 @@
       out.push({ id: n.id, x, y });
       x += w + L.gap;
       rowMaxH = Math.max(rowMaxH, h);
-    });
-    return out;
-  }
-
-  // 网格式排布（旧版策略，保留作为可选）
-  function arrangeGrid(notes, cols, opts) {
-    const L = optsOf(opts);
-    cols = cols || 1;
-    const out = [];
-    (notes || []).forEach((n, i) => {
-      const row = Math.floor(i / cols);
-      const col = i % cols;
-      out.push({ id: n.id, x: L.margin + col * L.gridWidth, y: L.margin + row * L.gridHeight });
     });
     return out;
   }
@@ -164,5 +156,53 @@
     return changed;
   }
 
-  return { LAYOUT, gridCols, overlapsAny, nextGridPosition, arrangeShelf, arrangeGrid, arrangeCompact, initPositionAll };
+  // 「优先级」策略被移除（随「一键整理策略」设置删除）：一键整理统一用 compact。
+  // 画布缩放值收敛：只接受有限数字，clamp 到 [zoomMin, zoomMax]，并保留两位小数。
+  function clampZoom(z) {
+    const v = (typeof z === 'number' && isFinite(z)) ? z : 1;
+    return Math.max(LAYOUT.zoomMin, Math.min(LAYOUT.zoomMax, Math.round(v * 100) / 100));
+  }
+
+  // 按「最近使用」给分组排序：recentIds（最近的在前）命中的分组排到最前，其余保持原相对顺序。
+  // 纯函数：输入 groups + recentIds，输出重排后的分组数组（不改动入参）。未命中 recents 时退化为原顺序。
+  function orderGroupsByRecent(groups, recentIds) {
+    const gs = Array.isArray(groups) ? groups : [];
+    const recent = Array.isArray(recentIds) ? recentIds : [];
+    const byId = new Map();
+    gs.forEach((g) => { if (g && g.id != null) byId.set(g.id, g); });
+    const out = [];
+    const used = new Set();
+    recent.forEach((id) => {
+      if (id != null && byId.has(id) && !used.has(id)) { out.push(byId.get(id)); used.add(id); }
+    });
+    gs.forEach((g) => { if (g && !used.has(g.id)) out.push(g); });
+    return out;
+  }
+
+  // 两个矩形是否有交集（含边界接触）。a/b: { x, y, w, h }；无交集/缺参返回 false。供「框选」命中检测用。
+  function rectsIntersect(a, b) {
+    if (!a || !b) return false;
+    const ax = a.x || 0, ay = a.y || 0, aw = a.w || 0, ah = a.h || 0;
+    const bx = b.x || 0, by = b.y || 0, bw = b.w || 0, bh = b.h || 0;
+    return !(bx > ax + aw || bx + bw < ax || by > ay + ah || by + bh < ay);
+  }
+
+  // 「标签建议」：根据便签文本 + 最近使用，推荐最可能归属的分组 id（最多 3 个，按相关度排序）。
+  // 优先「分组名出现在笔记文本里」（中文也适用子串匹配），其次是最近使用的分组。纯函数、可单测。
+  function suggestGroupIds(text, groups, recentIds) {
+    const t = String(text || '').toLowerCase();
+    const gs = Array.isArray(groups) ? groups : [];
+    const recents = Array.isArray(recentIds) ? recentIds : [];
+    const ids = [];
+    gs.forEach((g) => {
+      const name = String((g && g.name) || '').toLowerCase();
+      if (name && t.includes(name) && !ids.includes(g.id)) ids.push(g.id);
+    });
+    recents.forEach((id) => {
+      if (id != null && gs.some((g) => g.id === id) && !ids.includes(id)) ids.push(id);
+    });
+    return ids.slice(0, 3);
+  }
+
+  return { LAYOUT, gridCols, overlapsAny, nextGridPosition, arrangeShelf, arrangeCompact, initPositionAll, clampZoom, orderGroupsByRecent, rectsIntersect, suggestGroupIds };
 }));

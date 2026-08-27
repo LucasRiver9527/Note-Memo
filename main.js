@@ -3,13 +3,15 @@ const path = require('path');
 const fs = require('fs');
 const { pathToFileURL } = require('url');
 const logic = require('./renderer/logic.js');
+const Shortcuts = require('./renderer/shortcuts.js');
 const { autoUpdater } = require('electron-updater');
-const { checkIpcContract } = require('./ipc-contract.js');
 
 const isDev = !app.isPackaged;
 
-// dev 下启动即校验 IPC 契约：renderer 用到的 channel 在 main 是否都有实现，缺一直接抛错，避免静默失效
+// dev 下启动即校验 IPC 契约：renderer 用到的 channel 在 main 是否都有实现，缺一直接抛错，避免静默失效。
+// ipc-contract.js 是开发专用模块，不随安装包分发（build files 不含它），故只在 dev / 显式开启时 require，避免打包后找不到模块。
 if (isDev || process.env.MYNOTES_CHECK_IPC === '1') {
+  const { checkIpcContract } = require('./ipc-contract.js');
   const contract = checkIpcContract(__dirname);
   if (!contract.ok) {
     const detail = [
@@ -87,10 +89,19 @@ function clipboardImageToDataUrl() {
 }
 
 function readData() {
+  let raw;
   try {
-    const raw = fs.readFileSync(dataPath(), 'utf-8');
+    raw = fs.readFileSync(dataPath(), 'utf-8');
+  } catch (e) {
+    // 文件不存在（首次运行）属正常；其它读取错误记日志，便于排查
+    if (e && e.code !== 'ENOENT') console.error('[data] 读取数据文件失败：', e.message);
+    return null;
+  }
+  try {
     return JSON.parse(raw);
   } catch (e) {
+    // 数据损坏：记日志（避免静默当成「首次运行」清空），调用方可决定回退
+    console.error('[data] 数据文件损坏，无法解析：', e.message);
     return null;
   }
 }
@@ -99,16 +110,56 @@ function writeData(data) {
   fs.writeFileSync(dataPath(), JSON.stringify(data, null, 2), 'utf-8');
 }
 
+// ---- 窗口状态持久化：把 bounds / maximized 记到数据文件的 settings.windowState ----
+// （放在 settings 里是因为 renderer 的 data:save 只写 {settings,groups,notes,trash}，顶层键会被覆盖）
+function readWindowState() {
+  const data = readData();
+  const ws = data && data.settings && data.settings.windowState;
+  if (ws && ws.normalBounds && typeof ws.normalBounds.width === 'number') return ws;
+  return null;
+}
+
+let winStateTimer = null;
+function persistWindowState() {
+  if (!mainWindow || mainWindow.isDestroyed()) return;
+  clearTimeout(winStateTimer);
+  winStateTimer = setTimeout(() => {
+    if (!mainWindow || mainWindow.isDestroyed()) return;
+    try {
+      const normal = mainWindow.getNormalBounds();
+      const state = {
+        normalBounds: { x: normal.x, y: normal.y, width: normal.width, height: normal.height },
+        maximized: mainWindow.isMaximized()
+      };
+      const data = readData() || {};
+      data.settings = data.settings || {};
+      data.settings.windowState = state;
+      writeData(data);
+    } catch (e) { /* ignore */ }
+  }, 300);
+}
+
+
 function createWindow() {
   const { width, height } = screen.getPrimaryDisplay().workAreaSize;
+  const saved = readWindowState();
+  const nb = (saved && saved.normalBounds) || null;
+  // 用保存的普通尺寸；若之前最大化，仍先按普通尺寸创建再 restore，避免越界
+  const winW = (nb && nb.width) || 1080;
+  const winH = (nb && nb.height) || 720;
+  let startX = (nb && typeof nb.x === 'number') ? nb.x : Math.round((width - winW) / 2);
+  let startY = (nb && typeof nb.y === 'number') ? nb.y : Math.round((height - winH) / 2);
+  // 防越界：窗口至少一部分落在工作区内
+  if (startX + winW < 0 || startX > width) startX = Math.round((width - winW) / 2);
+  if (startY + winH < 0 || startY > height) startY = Math.round((height - winH) / 2);
 
   mainWindow = new BrowserWindow({
-    width: 1080,
-    height: 720,
+    width: winW,
+    height: winH,
     minWidth: 640,
     minHeight: 420,
-    x: Math.round((width - 1080) / 2),
-    y: Math.round((height - 720) / 2),
+    x: startX,
+    y: startY,
     titleBarStyle: 'hidden',
     titleBarOverlay: {
       color: '#00000000',
@@ -130,23 +181,50 @@ function createWindow() {
 
   mainWindow.loadFile(path.join(__dirname, 'renderer', 'index.html'));
 
-  mainWindow.on('maximize', () => mainWindow.webContents.send('window:maximized', true));
-  mainWindow.on('unmaximize', () => mainWindow.webContents.send('window:maximized', false));
+  mainWindow.on('maximize', () => { mainWindow.webContents.send('window:maximized', true); persistWindowState(); });
+  mainWindow.on('unmaximize', () => { mainWindow.webContents.send('window:maximized', false); persistWindowState(); });
+  mainWindow.on('resize', persistWindowState);
+  mainWindow.on('move', persistWindowState);
+  mainWindow.on('hide', persistWindowState);
 
   mainWindow.once('ready-to-show', () => {
     mainWindow.show();
+    // 恢复最大化状态（还原到最大化前尺寸 max；若最大化失败则保持普通）
+    if (saved && saved.maximized) {
+      try { mainWindow.maximize(); } catch (e) { /* ignore */ }
+    }
   });
 
   mainWindow.on('close', (e) => {
-    if (!isQuitting) {
-      e.preventDefault();
-      mainWindow.hide();
-    }
+    if (isQuitting) return;
+    // 弹窗询问：退出应用 还是 隐藏到任务栏（托盘常驻）
+    e.preventDefault();
+    requestCloseMainWindow();
   });
 
   mainWindow.on('closed', () => {
     mainWindow = null;
   });
+}
+
+// 关闭主窗口时的选择：请 renderer 弹主题化选择框（彻底退出 / 隐藏到任务栏 / 取消）
+// 结果经 ipc 'window:close-decision' 回传（'hide' | 'quit' | 'cancel'），避免使用系统原生对话框（与主题不符）。
+function requestCloseMainWindow() {
+  if (!mainWindow || mainWindow.isDestroyed()) return;
+  try {
+    mainWindow.webContents.send('window:close-request');
+  } catch (e) { /* ignore */ }
+}
+
+// 处理 renderer 回传的关闭决定
+function handleCloseDecision(decision) {
+  if (decision === 'quit') {
+    isQuitting = true;
+    app.quit();
+  } else if (decision === 'hide') {
+    if (mainWindow && !mainWindow.isDestroyed()) mainWindow.hide();
+  }
+  // 'cancel' → 什么都不做
 }
 
 function createDetachedWindow(noteId) {
@@ -234,6 +312,8 @@ function createTray() {
 
 function showWindow() {
   if (!mainWindow) return;
+  // 之前是最小化：先 restore，恢复最大化/原尺寸状态，再显示
+  if (mainWindow.isMinimized()) mainWindow.restore();
   mainWindow.show();
   mainWindow.focus();
 }
@@ -321,7 +401,16 @@ function setupIpc() {
   ipcMain.handle('data:save', (e, data) => {
     writeData(data);
     if (data && Array.isArray(data.notes)) {
+      // 重新武装的提醒（fired=false 且启用的便签）允许再次调度——解除最近触发标记（「稍后再响」依赖此机制）。
+      data.notes.forEach((n) => {
+        if (n && n.reminder && n.reminder.enabled && !n.reminder.fired) recentlyFired.delete(n.id);
+      });
       scheduleReminders(data.notes);
+    }
+    // 设置变更（含快捷键）后同步全局快捷键；失败仅记录，不阻塞保存
+    if (data && data.settings && typeof data.settings === 'object') {
+      const reg = registerGlobalShortcuts(data.settings);
+      if (reg.failures.length) console.warn('[shortcuts] 注册失败:', reg.failures.join(','));
     }
     return true;
   });
@@ -348,6 +437,24 @@ function setupIpc() {
       } else {
         fs.writeFileSync(result.filePath, JSON.stringify(data, null, 2), 'utf-8');
       }
+      return { ok: true, path: result.filePath };
+    } catch (err) {
+      return { ok: false, error: err.message };
+    }
+  });
+
+  ipcMain.handle('note:export-markdown', async (e, md, suggestName) => {
+    const result = await dialog.showSaveDialog(mainWindow, {
+      title: '导出为 Markdown',
+      defaultPath: suggestName || `便签-${new Date().toISOString().slice(0, 10)}.md`,
+      filters: [
+        { name: 'Markdown', extensions: ['md', 'markdown'] },
+        { name: '文本文件', extensions: ['txt'] }
+      ]
+    });
+    if (result.canceled || !result.filePath) return { ok: false, canceled: true };
+    try {
+      fs.writeFileSync(result.filePath, md, 'utf-8');
       return { ok: true, path: result.filePath };
     } catch (err) {
       return { ok: false, error: err.message };
@@ -612,6 +719,8 @@ function setupIpc() {
     const data = readData() || { settings: {}, groups: [], notes: [] };
     data.notes = (data.notes || []).map((n) => (n.id === note.id ? note : n));
     writeData(data);
+    // 重新武装的提醒允许再次调度（稍后再响）
+    if (note && note.reminder && note.reminder.enabled && !note.reminder.fired) recentlyFired.delete(note.id);
     scheduleReminders(data.notes);
     if (mainWindow) mainWindow.webContents.send('note:changed', note);
     return true;
@@ -681,6 +790,19 @@ function setupIpc() {
         return { label: c, icon: icon || undefined, click: () => resolve({ action: 'note-color', color: c }) };
       });
       template.push({ label: '便签底色', submenu: noteColors });
+      // 透明度：预设子菜单（原生菜单不支持拖拽滑块，用预设档位调节），作用于当前便签（单张）
+      template.push({ type: 'separator' });
+      const curOpacity = (opts.noteOpacity != null) ? Math.round(opts.noteOpacity) : 100;
+      const opacities = [100, 85, 70, 55, 40, 25];
+      template.push({
+        label: '透明度',
+        submenu: opacities.map((v) => ({
+          label: v + '%',
+          type: 'radio',
+          checked: Math.round(curOpacity) === v,
+          click: () => resolve({ action: 'note-opacity', value: v })
+        }))
+      });
       const menu = Menu.buildFromTemplate(template);
       menu.popup({ window: win, x: Math.round(opts.x || 0), y: Math.round(opts.y || 0), callback: () => resolve({ action: 'cancel' }) });
     });
@@ -735,6 +857,32 @@ function setupIpc() {
     }
   });
 
+  // ---- 全局快捷键 ----
+  ipcMain.handle('shortcuts:get', () => {
+    try {
+      return { ok: true, ...getShortcutsPayload() };
+    } catch (e) {
+      return { ok: false, error: (e && e.message) || String(e) };
+    }
+  });
+  ipcMain.handle('shortcuts:set', (e, overrides) => {
+    try {
+      const data = readData() || {};
+      data.settings = data.settings || {};
+      // 覆盖项对象（{ id: accel }）；设空值即恢复默认（从 settings 里移除该 id）
+      const clean = {};
+      Object.entries(overrides && typeof overrides === 'object' ? overrides : {}).forEach(([id, accel]) => {
+        if (accel && Shortcuts.isValidAccelerator(accel)) clean[id] = accel;
+      });
+      data.settings.shortcuts = clean;
+      writeData(data);
+      const reg = registerGlobalShortcuts(data.settings);
+      return { ok: true, overrides: clean, failures: reg.failures };
+    } catch (err) {
+      return { ok: false, error: (err && err.message) || String(err) };
+    }
+  });
+
   // ---- 自动更新 ----
   ipcMain.handle('update:check', async () => {
     if (!app.isPackaged) return { ok: false, error: 'dev' };
@@ -769,7 +917,8 @@ function setupIpc() {
     else mainWindow.maximize();
   });
   ipcMain.on('window:hide', () => mainWindow && mainWindow.hide());
-  ipcMain.on('window:close', () => mainWindow && mainWindow.hide());
+  ipcMain.on('window:close', () => requestCloseMainWindow());
+  ipcMain.on('window:close-decision', (e, decision) => handleCloseDecision(decision));
   ipcMain.on('window:always-on-top', (e, flag) => {
     if (mainWindow) mainWindow.setAlwaysOnTop(!!flag);
   });
@@ -794,6 +943,14 @@ function setupIpc() {
       if (w && !w.isDestroyed()) w.webContents.send('window:note-opacity', opacity);
     });
   });
+  // 钉窗右键菜单「便签透明度」滑杆：持久化全局 noteOpacity 并同步主窗口（复用到所有便签卡片）
+  ipcMain.on('note:save-note-opacity', (e, opacity) => {
+    const data = readData() || {};
+    data.settings = data.settings || {};
+    data.settings.noteOpacity = opacity;
+    writeData(data);
+    if (mainWindow && !mainWindow.isDestroyed()) mainWindow.webContents.send('window:note-opacity-setting', opacity);
+  });
   ipcMain.on('window:set-effects', (e, fx) => {
     const srcWin = BrowserWindow.fromWebContents(e.sender);
     if (srcWin === mainWindow) {
@@ -813,6 +970,46 @@ function setupIpc() {
     toggleWindow();
     return mainWindow && mainWindow.isVisible();
   });
+}
+
+// ---- 全局快捷键 ----
+// 从 settings（短期由 renderer 持久化到数据文件）注册「唤起/隐藏窗口」「新建便签」两个全局快捷键。
+// 返回 { failures: [id...] }，方便 renderer 把注册失败（被其它应用占用）提示给用户。
+function registerGlobalShortcuts(settings) {
+  const failures = [];
+  const accels = Shortcuts.effectiveShortcuts(settings);
+  const spec = [
+    { id: 'toggleWindow', accel: accels.toggleWindow, cb: () => toggleWindow() },
+    { id: 'createNote', accel: accels.createNote, cb: () => { showWindow(); if (mainWindow && !mainWindow.isDestroyed()) mainWindow.webContents.send('note:create'); } }
+  ];
+  // 先清掉所有旧的全局快捷键（含用户改绑过的旧加速键），避免残留旧绑定导致新注册失败
+  try { globalShortcut.unregisterAll(); } catch (e) { /* ignore */ }
+  // 注册单个加速键：失败重试一次（Electron 偶发因窗口/焦点时序失败，重试可消解）
+  const tryRegister = (accel, cb) => {
+    try {
+      if (globalShortcut.register(accel, cb)) return true;
+    } catch (e) { /* ignore */ }
+    return false;
+  };
+  spec.forEach(({ id, accel, cb }) => {
+    if (!accel) return;
+    if (!Shortcuts.isValidAccelerator(accel)) { failures.push(id); return; }
+    let ok = tryRegister(accel, cb);
+    if (!ok) ok = tryRegister(accel, cb);
+    if (!ok) failures.push(id);
+  });
+  return { failures };
+}
+
+// 读取快捷键设置（settings.shortcuts，只含用户覆盖，默认由 shortcuts.js 兜底）+ 默认表，供设置面板渲染
+function getShortcutsPayload() {
+  const data = readData() || {};
+  const settings = data.settings || {};
+  return {
+    overrides: settings.shortcuts || {},
+    defaults: Shortcuts.buildDefaultShortcuts(),
+    globalFailures: [] // 由每次注册时返回
+  };
 }
 
 function setupAutoUpdate() {
@@ -909,10 +1106,9 @@ if (!gotLock) {
       });
     }
 
-    globalShortcut.register('CommandOrControl+Shift+N', () => {
-      showWindow();
-      mainWindow.webContents.send('note:create');
-    });
+    // 从持久化设置注册全局快捷键（缺省用 shortcuts.js 默认，避免与系统默认冲突）
+    const reg = registerGlobalShortcuts(initial ? (initial.settings || {}) : {});
+    if (reg.failures.length) console.warn('[shortcuts] 启动注册失败:', reg.failures.join(','));
 
     app.on('activate', () => {
       if (BrowserWindow.getAllWindows().length === 0) createWindow();

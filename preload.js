@@ -17,6 +17,7 @@ contextBridge.exposeInMainWorld('api', {
   pickSound: () => ipcRenderer.invoke('dialog:pick-sound'),
   chooseDirectory: () => ipcRenderer.invoke('dialog:choose-directory'),
   backupExport: (data, dir) => ipcRenderer.invoke('backup:export', data, dir),
+  exportNoteMarkdown: (md, filename) => ipcRenderer.invoke('note:export-markdown', md, filename),
   openPath: (dir) => ipcRenderer.invoke('backup:open-dir', dir),
   cleanupOrphanMedia: () => ipcRenderer.invoke('media:cleanup-orphans'),
 
@@ -33,6 +34,8 @@ contextBridge.exposeInMainWorld('api', {
   close: () => ipcRenderer.send('window:close'),
   maximize: () => ipcRenderer.send('window:maximize'),
   onMaximized: (cb) => ipcRenderer.on('window:maximized', (e, flag) => cb(flag)),
+  onCloseRequest: (cb) => ipcRenderer.on('window:close-request', () => cb()),
+  replyCloseDecision: (decision) => ipcRenderer.send('window:close-decision', decision),
   openExternal: (url) => ipcRenderer.invoke('open-external', url),
   readClipboard: () => ipcRenderer.invoke('clipboard:read-text'),
   readClipboardImage: () => ipcRenderer.invoke('clipboard:read-image'),
@@ -44,6 +47,8 @@ contextBridge.exposeInMainWorld('api', {
   setSelfOpacity: (opacity) => ipcRenderer.send('window:set-self-opacity', opacity),
   setNoteOpacity: (opacity) => ipcRenderer.send('window:set-note-opacity', opacity),
   onNoteOpacity: (cb) => ipcRenderer.on('window:note-opacity', (e, v) => cb(v)),
+  saveNoteOpacity: (opacity) => ipcRenderer.send('note:save-note-opacity', opacity),
+  onNoteOpacitySetting: (cb) => ipcRenderer.on('window:note-opacity-setting', (e, v) => cb(v)),
   setEffects: (fx) => ipcRenderer.send('window:set-effects', fx),
   onEffects: (cb) => ipcRenderer.on('window:effects', (e, v) => cb(v)),
 
@@ -69,5 +74,8 @@ contextBridge.exposeInMainWorld('api', {
   quitAndInstall: () => ipcRenderer.invoke('update:install'),
 
   getAutoLaunch: () => ipcRenderer.invoke('startup:get'),
-  setAutoLaunch: (enabled) => ipcRenderer.invoke('startup:set', enabled)
+  setAutoLaunch: (enabled) => ipcRenderer.invoke('startup:set', enabled),
+
+  getShortcuts: () => ipcRenderer.invoke('shortcuts:get'),
+  setShortcuts: (overrides) => ipcRenderer.invoke('shortcuts:set', overrides)
 });

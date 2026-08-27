@@ -44,37 +44,29 @@ const TEXT_COLORS = ['#2d2f38', '#000000', '#444444', '#ffffff', '#c0392b', '#b8
 
 // settings 默认值 / 取值 / 迁移已收归 state.js（见 StateLogic 顶层全局）
 
-
 function t(key) {
   const lang = (state && state.settings && state.settings.language) || 'zh';
   return T(key, lang);
 }
 
+// v1.2.5（预览测试版）更新说明：仅列本版本新增/改进，之前版本内容不再列出。
 const CHANGELOG = [
-  { zh: '文本对齐：便签 / 文档 / 钉桌便签加入左·居中·右对齐（Ctrl+L / Ctrl+E / Ctrl+R），图片也支持独立对齐', en: 'Text alignment: left/center/right for notes, doc & pinned notes (Ctrl+L/E/R); images align independently' },
-  { zh: '批量选中：点选便签多选，支持批量删除、移动分组、拖动整组移动', en: 'Batch select: multi-select notes for batch delete, move to group, drag-group move' },
-  { zh: '「贴靠」恢复：窗口拖到屏幕边缘自动调整（顶部最大化、左右半屏、四角四分屏），并支持 Win11 贴靠布局', en: 'Snap restored: drag to screen edges to maximize/half/quarter, supports Win11 snap layouts' },
-  { zh: '修复 Win11 拖动便签卡顿、钉桌便签玻璃拟态失效、便签粘贴图片失效', en: 'Fix Win11 note-drag stutter, desktop-note glass, and image paste' },
-  { zh: '批量操作栏跟随顶栏外观自定义（颜色 / 透明度 / 亚克力）', en: 'Batch bar follows the title bar appearance customization' },
-  { zh: '修复：便签内 Ctrl+C / Ctrl+V 无法复制粘贴的问题（含标题），粘贴现可正常插入', en: 'Fix: Ctrl+C/Ctrl+V copy & paste now work in notes (incl. title)' },
-  { zh: '「关于」页新增「检查更新」按钮，可手动检测版本更新', en: 'Added a "Check for updates" button on the About page' },
-  { zh: '数据安全加固：原子写入、版本号与损坏自动回退，断电也不怕数据写坏', en: 'Data safety: atomic writes, versioning & crash recovery' },
-  { zh: '备份自包含：一键备份自动打包图片 / 字体 / 声音等媒体，跨设备迁移不断图', en: 'Self-contained backup: bundles images/fonts/sounds for lossless migration' },
-  { zh: '图片等媒体缺失时显示友好占位提示，一键移除，不再破图', en: 'Graceful placeholder for missing media instead of broken images' },
-  { zh: '「贴靠」：窗口拖到屏幕边缘自动调整大小（顶部最大化、左右半屏、四角四分屏）', en: 'Snap windows to screen edges (maximize / half / quarter)' },
-  { zh: '便签钉桌面支持 Windows 亚克力玻璃模糊', en: 'Acrylic blur for desktop-pinned notes' },
-  { zh: '顶栏亚克力模糊，可自定义顶栏底色与透明度', en: 'Title bar acrylic blur with custom color & opacity' },
-  { zh: '右上角最小化 / 最大化 / 关闭按钮与顶栏样式统一', en: 'Window control buttons unified with the title bar' },
-  { zh: '外观设置分模块（便签外观 / 主程序外观），12 套主题，薄荷默认置顶', en: 'Modular appearance settings, 12 themes, Mint by default' },
-  { zh: '恢复默认外观与默认主题一致；图表按钮高对比优化', en: 'Reset appearance matches the default theme; high-contrast buttons' },
-  { zh: '图片按光标插入位置放置，支持拖入文件 / 文件夹快捷打开', en: 'Insert images at the cursor; paste file/folder paths to open quickly' },
-  { zh: '支持 Markdown 加粗 / 高亮（Ctrl+B / Ctrl+H）', en: 'Markdown bold / highlight (Ctrl+B / Ctrl+H)' },
-  { zh: '编辑时 Ctrl+滚轮快捷调整字体大小', en: 'Ctrl+scroll to adjust font size while editing' },
-  { zh: '新增「文档」视图，像文档一样查看与编辑便签', en: 'New Document view to read & edit notes like a document' },
-  { zh: '备忘录可拖动调整顺序；待办区集中管理', en: 'Reorder memos by drag; centralized todo area' },
-  { zh: '全新表格：插入 / 合并 / 拆分单元格，自定义边框、文字颜色与大小，斜线表头，双击编辑并可换行', en: 'New table: merge/split cells, borders & text styling, diagonal header, edit cells with line breaks' },
-  { zh: '待办提醒闹铃声音，可自定义声音与音量，待机也保证提醒', en: 'Reminder alarm sound, custom file & volume, works in standby' },
-  { zh: '新增「关于」页面：版本、作者、更新说明', en: 'New About page: version, author, changelog' }
+  { zh: '一键排列改良：可切换策略（紧凑 / 书架 / 网格 / 置顶优先 / 按分组分段）', en: 'Arrange improvements: switchable strategies (compact / shelf / grid / pinned-first / by group segments)' },
+  { zh: '保存当前排序 ↔ 一键整理 联动：保存排序记录顺序+位置快照，一键整理在所有视图精确恢复', en: 'Save-order + one-click-arrange: saving records order & position snapshot; arrange restores it precisely in every view' },
+  { zh: '画布缩放 / 平移：Ctrl+滚轮缩放、空格或中键平移，右下角工具栏一键恢复 100%', en: 'Canvas zoom & pan: Ctrl+wheel to zoom, Space/middle-drag to pan, toolbar to reset to 100%' },
+  { zh: '便签框选：空白处拖框多选，配合批量删除、移动分组、整组拖动', en: 'Box select: drag a box on empty canvas to multi-select for batch delete / move-to-group / drag group' },
+  { zh: '分组折叠：折叠隐藏分组便签，取消折叠精确恢复折叠前布局', en: 'Group collapse: fold a group to hide its notes, un-collapse restores the exact prior layout' },
+  { zh: '最近使用分组：常用分组自动置顶，切换更顺手', en: 'Recently-used groups: frequently used groups moved to the front for quicker switching' },
+  { zh: '空白画布右键快捷插入：新建便签 / 新建待办 / 粘贴为新便签 / 一键整理', en: 'Right-click quick insert on empty canvas: new note / new to-do / paste as note / arrange all' },
+  { zh: 'Markdown 预览：便签与文档可切换为只读预览，直接看到加粗、高亮、图片、表格等渲染效果', en: 'Markdown preview: toggle notes & docs to a read-only view showing bold, highlight, images, tables rendered' },
+  { zh: '便签归档 / 置灰：归档便签移出常规视图，提供单独「归档」入口查看与恢复', en: 'Archive / gray-out: archived notes leave the normal view, with a dedicated Archive entry to view & restore' },
+  { zh: '撤销 / 重做完善：新建、删除、移动、缩放、分组等结构操作可撤销重做', en: 'Fuller undo/redo: undo & redo for create, delete, move, resize and group operations' },
+  { zh: '撤销 / 重做加入全局快捷键：Ctrl+Z / Ctrl+Shift+Z，可在全局设置内改键', en: 'Undo/redo shortcuts added: Ctrl+Z / Ctrl+Shift+Z, rebindable in global settings' },
+  { zh: '提醒稍后再响：闹铃可延后 5 / 10 / 30 分钟再次提醒', en: 'Reminder snooze: postpone the alarm by 5 / 10 / 30 minutes' },
+  { zh: '标签建议：按笔记内容在「添加到分组」里自动推荐最合适的分组', en: 'Group suggestions: auto-suggest the best-matching group when assigning a note' },
+  { zh: '快捷键系统：全局唤起 / 新建 + 编辑器加粗、高亮、对齐等，均可在设置内改键与恢复默认', en: 'Shortcut system: global & editor shortcuts, all rebindable and resettable in settings' },
+  { zh: '分组芯片左右滚动箭头；画布滚动条随内容自适应', en: 'Left/right scroll arrows for group chips; adaptive canvas scrollbar' },
+  { zh: '主题化关闭确认弹窗；窗口尺寸与最大化状态跨重启记忆；亚克力下顶栏控件更清晰统一', en: 'Themed close-confirm dialog; window size & maximized state remembered across restarts; clearer title-bar controls under acrylic' }
 ];
 
 const APP_VERSION = (window.api && window.api.appVersion) || '';
@@ -105,8 +97,9 @@ let state = {
 let multiSelect = false;
 const selectedNotes = new Set();
 let isBatchDragging = false;
+let spaceDown = false;
 
-let filter = { group: 'all', query: '' };
+let filter = { group: 'all', query: '', archive: false };
 let zCounter = 10;
 let saveTimer = null;
 let activeColorPop = null;
@@ -133,15 +126,226 @@ function noteFingerprint(n) {
     n.id, n.title || '', n.content || '',
     n.color || '', n.textColor || '', n.fontSize || '', n.fontFamily || '',
     n.pinned ? 1 : 0, n.groupId || '', n.type || '',
+    n.archived ? 1 : 0, n.preview ? 1 : 0,
     p.x || 0, p.y || 0, n.w || 0, n.h || 0, n.z || 0,
     n.reminder ? (n.reminder.time || '') + '/' + (n.reminder.fired ? 1 : 0) : '',
     JSON.stringify(n.images || []), JSON.stringify(n.files || []), JSON.stringify(n.tables || [])
   ].join('|');
 }
 
+/* ============ 画布缩放 / 平移 ============ */
+function boardZoom() {
+  return state.settings.boardZoom || 1;
+}
+
+// 分组折叠状态：collapsedGroups[gid] === true 时该分组的便签在所有视图隐藏（折叠）
+function isGroupCollapsed(gid) {
+  return !!(gid && state.settings.collapsedGroups && state.settings.collapsedGroups[gid]);
+}
+
+function toggleGroupCollapse(gid) {
+  if (!gid) return;
+  const map = state.settings.collapsedGroups || {};
+  const nowCollapsed = !map[gid];
+  map[gid] = nowCollapsed;
+  state.settings.collapsedGroups = map;
+  if (nowCollapsed) {
+    // 折叠：把当前布局快照下来（两组坐标，覆盖「全部/分组」两套作用域），供取消折叠时原样恢复
+    state.settings.collapseSnapshot[gid] = snapshotBoardLayout();
+  } else {
+    // 取消折叠：把布局恢复到折叠前（便签回到原始位置，不与后来整理/排布的便签重叠）
+    const snap = state.settings.collapseSnapshot[gid];
+    if (snap) restoreBoardLayout(snap);
+    delete state.settings.collapseSnapshot[gid];
+  }
+  save();
+  renderGroupChips();
+  renderAll();
+}
+
+// 快照当前所有便签的布局：同时记录「全部」作用域(positionAll)与分组作用域(x,y)，保证任意视图下取消折叠都能还原。
+function snapshotBoardLayout() {
+  const all = [];
+  const grp = [];
+  state.notes.forEach((n) => {
+    const pa = n.positionAll || { x: n.x || 0, y: n.y || 0 };
+    all.push({ id: n.id, x: pa.x, y: pa.y });
+    grp.push({ id: n.id, x: n.x || 0, y: n.y || 0 });
+  });
+  return { all, grp };
+}
+
+// 从快照恢复布局：写回 positionAll（「全部」作用域）与 x,y（分组作用域）
+function restoreBoardLayout(snap) {
+  if (!snap) return;
+  const allById = new Map((snap.all || []).map((s) => [s.id, s]));
+  const grpById = new Map((snap.grp || []).map((s) => [s.id, s]));
+  state.notes.forEach((n) => {
+    const a = allById.get(n.id);
+    if (a && typeof a.x === 'number') n.positionAll = { x: a.x, y: a.y };
+    const g = grpById.get(n.id);
+    if (g && typeof g.x === 'number') { n.x = g.x; n.y = g.y; }
+  });
+}
+
+// 把 #board 的已算好的未缩放尺寸（dataset.uw/uh）套用当前缩放：width/height *= zoom + transform: scale。
+// 缩放作用于 #board（transform-origin:0 0），这样便签的 left/top 仍用未缩放坐标，视觉按 zoom 放大。
+function setBoardScaledSize() {
+  const board = $('#board');
+  if (!board) return;
+  const z = boardZoom();
+  const uw = parseFloat(board.dataset.uw) || (board.clientWidth + 100);
+  const uh = parseFloat(board.dataset.uh) || (board.clientHeight + 100);
+  board.style.width = (uw * z) + 'px';
+  board.style.height = (uh * z) + 'px';
+  board.style.transform = 'scale(' + z + ')';
+  board.style.transformOrigin = '0 0';
+}
+
+// 更新缩放控件显示：把当前缩放值写到画布右下角工具栏（可见/不可见跟随画布视图；设置面板打开时隐藏避免遮挡）
+function syncZoomToolbar() {
+  const wrap = $('#canvasToolbar');
+  if (!wrap) return;
+  const settingsOpen = $('#settingsOverlay') && !$('#settingsOverlay').classList.contains('hidden');
+  const boardView = state.settings.viewMode === 'board';
+  const show = boardView && !settingsOpen;
+  wrap.classList.toggle('hidden', !show);
+  if (!show) {
+    // 收起时让展开态复位，下次显示回归小圆钮
+    wrap.classList.remove('expanded');
+    const exp = $('#ctExpand');
+    if (exp) { exp.textContent = '⤢'; exp.title = t('canvas_zoom_toggle'); }
+  }
+  const label = $('#zoomLabel');
+  if (label) label.textContent = Math.round(boardZoom() * 100) + '%';
+}
+
+/* ============ 撤销 / 重做（结构操作快照历史） ============ */
+const MAX_UNDO = 60;
+const undoStack = [];
+const redoStack = [];
+
+// 深拷贝便签与回收站（notes-data 均为纯数据，JSON 克隆安全）
+function cloneNotes(arr) {
+  return (arr || []).map((n) => JSON.parse(JSON.stringify(n)));
+}
+function cloneTrash(arr) {
+  return (arr || []).map((t) => ({ ...t, note: JSON.parse(JSON.stringify(t.note)) }));
+}
+function cloneOrders() {
+  return { noteOrder: (state.settings.noteOrder || []).slice(), groupOrders: JSON.parse(JSON.stringify(state.settings.groupOrders || {})) };
+}
+function snapshotState() {
+  return { notes: cloneNotes(state.notes), trash: cloneTrash(state.trash), groups: JSON.parse(JSON.stringify(state.groups || [])), orders: cloneOrders() };
+}
+function applySnapshot(snap) {
+  if (!snap) return;
+  state.notes = snap.notes;
+  state.trash = snap.trash;
+  state.groups = snap.groups || [];
+  state.settings.noteOrder = (snap.orders && snap.orders.noteOrder) || [];
+  state.settings.groupOrders = (snap.orders && snap.orders.groupOrders) || {};
+  ensureOrder();
+  if (typeof clearSelection === 'function') clearSelection();
+  save();
+  renderAll();
+  // 撤销/重做可能改变分组或回收站，刷新相应列表（若有）
+  if (typeof renderGroupChips === 'function') renderGroupChips();
+  if (typeof renderTrashPanel === 'function') renderTrashPanel();
+}
+function pushUndo() {
+  undoStack.push(snapshotState());
+  if (undoStack.length > MAX_UNDO) undoStack.shift();
+  redoStack.length = 0;
+  syncUndoButtons();
+}
+function undo() {
+  const snap = undoStack.pop();
+  if (!snap) return;
+  redoStack.push(snapshotState());
+  applySnapshot(snap);
+  syncUndoButtons();
+}
+function redo() {
+  const snap = redoStack.pop();
+  if (!snap) return;
+  undoStack.push(snapshotState());
+  applySnapshot(snap);
+  syncUndoButtons();
+}
+function syncUndoButtons() {
+  const bu = $('#btnUndo');
+  const br = $('#btnRedo');
+  if (bu) bu.disabled = undoStack.length === 0;
+  if (br) br.disabled = redoStack.length === 0;
+}
+
+// 调整缩放。anchor：{ mode: 'cursor'|'center'|'reset', x, y }。
+function applyBoardZoomRatio(newRatio, anchor) {
+  const canvas = $('#canvas');
+  const board = $('#board');
+  if (!canvas || !board) return;
+  const oldZ = boardZoom();
+  const newZ = clampZoom(newRatio);
+  if (newZ === oldZ) return;
+  const cRect = canvas.getBoundingClientRect();
+  const bRect = board.getBoundingClientRect();
+  const anchorObj = anchor || {};
+  const useCursor = anchorObj.mode === 'cursor';
+  const refScreenX = useCursor ? (anchorObj.x != null ? anchorObj.x : cRect.left + cRect.width / 2) : cRect.left + cRect.width / 2;
+  const refScreenY = useCursor ? (anchorObj.y != null ? anchorObj.y : cRect.top + cRect.height / 2) : cRect.top + cRect.height / 2;
+  // 参考点（光标/中心）在「未缩放板坐标」上的位置
+  const refX = (refScreenX - bRect.left) / oldZ;
+  const refY = (refScreenY - bRect.top) / oldZ;
+  state.settings.boardZoom = newZ;
+  setBoardScaledSize();
+  // 让参考点在新缩放下仍落在原屏幕位置：scrollLeft = cRect.left + refX*newZ - refScreenX
+  canvas.scrollLeft = Math.max(0, cRect.left + refX * newZ - refScreenX);
+  canvas.scrollTop = Math.max(0, cRect.top + refY * newZ - refScreenY);
+  syncZoomToolbar();
+  save();
+}
+
+function zoomStep(dir) {
+  applyBoardZoomRatio(boardZoom() + dir * LAYOUT.zoomStep, { mode: 'center' });
+}
+
+function zoomReset() {
+  const canvas = $('#canvas');
+  const board = $('#board');
+  if (!canvas || !board) return;
+  // 以画布中心为参考缩放回 100%
+  const cRect = canvas.getBoundingClientRect();
+  const bRect = board.getBoundingClientRect();
+  const refX = (cRect.left + cRect.width / 2 - bRect.left) / boardZoom();
+  const refY = (cRect.top + cRect.height / 2 - bRect.top) / boardZoom();
+  const oldZ = boardZoom();
+  state.settings.boardZoom = 1;
+  setBoardScaledSize();
+  canvas.scrollLeft = Math.max(0, cRect.left + refX * 1 - (cRect.left + cRect.width / 2));
+  canvas.scrollTop = Math.max(0, cRect.top + refY * 1 - (cRect.top + cRect.height / 2));
+  syncZoomToolbar();
+  save();
+}
+
+
 /* ============ 工具函数 ============ */
 function defaultNoteColor() {
   return state.settings.noteColor || DEFAULT_NOTE_COLOR;
+}
+
+// 分组芯片区左右箭头状态刷新：无可滚动/在最左/在最右时置灰；无分组时隐藏。供芯片重渲染后调用。
+function refreshChipsScroll() {
+  const wrap = $('#groupChips');
+  const left = $('#btnChipsLeft');
+  const right = $('#btnChipsRight');
+  if (!wrap || !left || !right) return;
+  const empty = wrap.childElementCount === 0;
+  left.classList.toggle('hidden', empty);
+  right.classList.toggle('hidden', empty);
+  const max = wrap.scrollWidth - wrap.clientWidth;
+  left.disabled = empty || max <= 0 || wrap.scrollLeft <= 1;
+  right.disabled = empty || max <= 0 || wrap.scrollLeft >= max - 1;
 }
 
 function getTheme() {
@@ -446,18 +650,28 @@ function toast(msg) {
   t._timer = setTimeout(() => t.classList.add('hidden'), 2200);
 }
 
+// 保存失败提示：不静默丢数据（已尝试 toast 一次，避免每次保存都弹）
+let saveErrorShown = false;
+function reportSaveError(err) {
+  console.error('[save] 数据保存失败：', err);
+  if (!saveErrorShown) {
+    saveErrorShown = true;
+    try { toast(t('toast_save_failed')); } catch (_) {}
+  }
+}
+
 function save() {
   clearTimeout(saveTimer);
   saveTimer = setTimeout(() => {
     state.notes.forEach(cleanupRefs);
-    window.api.saveData({ settings: state.settings, groups: state.groups, notes: state.notes, trash: state.trash });
+    window.api.saveData({ settings: state.settings, groups: state.groups, notes: state.notes, trash: state.trash }).catch(reportSaveError);
   }, 300);
 }
 
 function saveNow() {
   clearTimeout(saveTimer);
   state.notes.forEach(cleanupRefs);
-  window.api.saveData({ settings: state.settings, groups: state.groups, notes: state.notes, trash: state.trash });
+  window.api.saveData({ settings: state.settings, groups: state.groups, notes: state.notes, trash: state.trash }).catch(reportSaveError);
 }
 
 // 「一键整理 / 保存当前排序」只在便签视图显示；其它视图排序简单，无需这两个按键（避免无关 bug）。
@@ -510,7 +724,10 @@ function ensureOrder() {
 }
 
 function getSortedNotes(arr) {
-  return sortNotes(arr, state.settings, activeGroupId());
+  // 显示顺序 = 排序策略（custom 用 noteOrder/groupOrders；其它按时间/标题/颜色动态计算，绝不改动存储基准）
+  const ids = SortState.applySortStrategy(arr, state.settings.sortMode, filter.group, state.settings.noteOrder, state.settings.groupOrders);
+  const byId = new Map(arr.map((n) => [n.id, n]));
+  return ids.map((id) => byId.get(id)).filter(Boolean);
 }
 
 function moveSortBy(id, dir) {
@@ -673,8 +890,10 @@ function renderSortPanel() {
   let scopeNotes = state.notes.filter((n) => !n.desktopPin);
   if (sortPanelGroupId === 'ungrouped') scopeNotes = scopeNotes.filter((n) => !n.groupId);
   else if (sortPanelGroupId !== 'all') scopeNotes = scopeNotes.filter((n) => n.groupId === sortPanelGroupId);
-  // 按作用域顺序排序（'all'/'ungrouped' 用全局 noteOrder，具体分组用该组顺序）
-  const ordered = sortNotes(scopeNotes, state.settings, sortPanelGid());
+  // 统一走单一来源 applySortStrategy（与主视图 getSortedNotes 一致），避免排序面板与实际画面顺序产生分歧。
+  const ids = SortState.applySortStrategy(scopeNotes, state.settings.sortMode, sortPanelGroupId, state.settings.noteOrder, state.settings.groupOrders);
+  const byId = new Map(scopeNotes.map((n) => [n.id, n]));
+  const ordered = ids.map((id) => byId.get(id)).filter(Boolean);
   ordered.forEach((n) => {
     const el = document.createElement('div');
     el.className = 'sort-item';
@@ -711,6 +930,97 @@ function renderSortPanel() {
   });
 }
 
+/* ============ 快捷键设置 ============ */
+// 渲染「快捷键」设置面板：列出所有快捷键（全局 + 编辑器），点击可重新按键，底部有恢复默认。
+function renderShortcutPanel() {
+  const list = $('#shortcutList');
+  if (!list) return;
+  list.innerHTML = '';
+  const overrides = (state.settings.shortcuts && typeof state.settings.shortcuts === 'object') ? state.settings.shortcuts : {};
+  Shortcuts.SHORTCUT_DEFS.forEach((def) => {
+    const accel = Shortcuts.getShortcut({ shortcuts: overrides }, def.id);
+    const el = document.createElement('div');
+    el.className = 'shortcut-item';
+    el.innerHTML = `
+      <div class="sc-label">
+        <div>${t(def.labelKey)}</div>
+        <div class="sc-scope">${def.scope === 'global' ? t('shortcut_scope_global') : (def.scope === 'app' ? t('shortcut_scope_app') : t('shortcut_scope_editor'))}</div>
+      </div>
+      <button class="sc-key" data-id="${def.id}">${Shortcuts.toDisplay(accel)}</button>`;
+    const btn = $('.sc-key', el);
+    btn.onclick = () => beginRecordShortcut(btn, def.id);
+    list.appendChild(el);
+  });
+}
+
+// 进入按键录制：监听下一次带修饰键的按键组合，写入 settings.shortcuts 并保存 + 重新注册全局快捷键。
+let shortcutRecordingId = null;
+let shortcutRecorderHandler = null;
+
+function beginRecordShortcut(btn, id) {
+  if (shortcutRecordingId) return; // 已有一条在录
+  shortcutRecordingId = id;
+  btn.classList.add('recording');
+  btn.textContent = t('shortcut_press_keys');
+  shortcutRecorderHandler = (ev) => {
+    ev.preventDefault();
+    ev.stopPropagation();
+    if (ev.key === 'Escape') { stopRecordShortcut(); return; }
+    const accel = Shortcuts.acceleratorFromEvent(ev);
+    if (!accel) { btn.textContent = t('shortcut_invalid'); return; }
+    finishRecordShortcut(id, accel);
+  };
+  document.addEventListener('keydown', shortcutRecorderHandler, true);
+}
+
+function stopRecordShortcut() {
+  if (shortcutRecorderHandler) {
+    document.removeEventListener('keydown', shortcutRecorderHandler, true);
+    shortcutRecorderHandler = null;
+  }
+  const btn = $(`.sc-key[data-id="${shortcutRecordingId}"]`);
+  if (btn) btn.classList.remove('recording');
+  shortcutRecordingId = null;
+}
+
+function finishRecordShortcut(id, accel) {
+  // 去重复：同一加速键已绑定到其它 id 时，清掉旧绑定
+  const overrides = (state.settings.shortcuts && typeof state.settings.shortcuts === 'object') ? state.settings.shortcuts : {};
+  const next = { ...overrides };
+  for (const def of Shortcuts.SHORTCUT_DEFS) {
+    if (def.id !== id) {
+      const cur = Shortcuts.getShortcut({ shortcuts: next }, def.id);
+      if (cur === accel) delete next[def.id];
+    }
+  }
+  next[id] = accel;
+  saveShortcuts(next);
+}
+
+function saveShortcuts(overrides) {
+  state.settings.shortcuts = overrides;
+  stopRecordShortcut();
+  // 落盘 + 主进程重新注册全局快捷键
+  window.api.setShortcuts(overrides).then((r) => {
+    if (r && r.ok) {
+      state.settings.shortcuts = r.overrides || overrides;
+      if (r.failures && r.failures.length) {
+        const names = r.failures.map((id) => {
+          const def = Shortcuts.SHORTCUT_DEFS.find((d) => d.id === id);
+          return def ? t(def.labelKey) : id;
+        }).join(', ');
+        toast(t('shortcut_failed').replace('{n}', names));
+      }
+    } else if (r && r.error) {
+      toast(t('shortcut_failed').replace('{n}', r.error));
+    } else if (!r) {
+      toast(t('shortcut_failed').replace('{n}', t('shortcut_unknown_error')));
+    }
+    save();
+    renderShortcutPanel();
+  });
+}
+
 // 快速保存：不进设置，把当前排列顺序保存为自定义排序（并记录布局快照供「一键整理」恢复）
 function saveCurrentOrder() {
   ensureOrder();
@@ -737,7 +1047,7 @@ function saveCurrentOrder() {
   order.length = 0;
   reordered.forEach((id) => order.push(id));
   state.notes.forEach((n) => { if (inView(n) && !order.includes(n.id)) order.push(n.id); });
-  // 记录布局快照（供一键整理恢复到保存时的精确位置）——所有视图都记录。
+  // 记录布局快照（供「一键整理」恢复到保存时的精确位置，并对重叠便签轻移去重叠）。
   state.settings.orderLayouts = state.settings.orderLayouts || {};
   const snap = {};
   state.notes.filter(inView).forEach((n) => { const p = effPos(n); snap[n.id] = { x: p.x, y: p.y }; });
@@ -865,7 +1175,10 @@ function previewReminderSound() {
 }
 
 /* ============ 闹铃提醒弹窗 ============ */
+let alarmNoteId = null;
+
 function showAlarmModal(n) {
+  alarmNoteId = n && n.id;
   const title = n.title || t('untitled');
   const body = n.type === 'todo'
     ? (n.items || []).filter((i) => !i.done).map((i) => i.text).join('\n')
@@ -876,8 +1189,22 @@ function showAlarmModal(n) {
 }
 
 function dismissAlarm() {
+  alarmNoteId = null;
   stopAlarm();
   $('#alarmOverlay').classList.add('hidden');
+}
+
+// 稍后再响：把当前闹铃的提醒重新武装为「minutes 分钟后」，关闭弹窗并让主进程重新调度。
+function snoozeAlarm(minutes) {
+  const n = state.notes.find((x) => x.id === alarmNoteId);
+  if (n && n.reminder) {
+    n.reminder = { enabled: true, time: new Date(Date.now() + minutes * 60000).toISOString(), fired: false };
+    n.updatedAt = Date.now();
+    save();
+    renderAll();
+    toast(t('alarm_snoozed').replace('{n}', minutes));
+  }
+  dismissAlarm();
 }
 
 /* ============ 通用弹窗 ============ */
@@ -926,46 +1253,90 @@ function confirmModal(title, message) {
   });
 }
 
+/* ============ 关闭确认弹窗（主题化三个选择） ============ */
+let closeDecisionResolve = null;
+function showCloseDecisionModal() {
+  return new Promise((resolve) => {
+    // 若已有弹窗在等待，先关闭上一个
+    if (closeDecisionResolve) { const r = closeDecisionResolve; closeDecisionResolve = null; r('cancel'); }
+    closeDecisionResolve = resolve;
+    const overlay = $('#closeOverlay');
+    if (!overlay) { resolve('cancel'); return; }
+    overlay.classList.remove('hidden');
+  });
+}
+
+function hideCloseDecisionModal() {
+  const overlay = $('#closeOverlay');
+  if (overlay) overlay.classList.add('hidden');
+}
+
+function closeDecision(choice) {
+  const r = closeDecisionResolve;
+  closeDecisionResolve = null;
+  hideCloseDecisionModal();
+  if (r) r(choice);
+}
+
+
 /* ============ 整理排列 ============ */
 function arrangeNotes() {
   const canvasEl = $('#canvas');
   // 按「当前可视画布宽度」打包，确保整理后所有便签都落在窗口可视范围内。
-  const maxX = (canvasEl && canvasEl.clientWidth) ? canvasEl.clientWidth : (BoardLayout.LAYOUT.defaultW * 6);
-  // 每个分组独立整理：只打包当前分组/筛选的便签，不关心其它分组；「全部」视图打包所有便签
+  // 缩放后画布可视区域对应的「未缩放」宽度 = clientWidth / zoom（便签坐标始终未缩放）。
+  const maxX = (canvasEl && canvasEl.clientWidth) ? Math.round(canvasEl.clientWidth / boardZoom()) : (BoardLayout.LAYOUT.defaultW * 6);
+  // 每个分组独立整理：只打包当前分组/筛选的便签，不关心其它分组；「全部」视图打包所有便签。
+  // 折叠分组视为不占位：整理仅作用于当前可见（未折叠）便签，让它们填满整个画布（含折叠组腾出的空白）。
   const inView = (n) => {
     if (n.desktopPin) return false;
+    if (isGroupCollapsed(n.groupId)) return false;
     if (filter.group === 'ungrouped') return !n.groupId;
     if (filter.group !== 'all' && filter.group !== 'ungrouped') return n.groupId === filter.group;
     return true;
   };
   ensureOrder();
-  // 保存过当前排序（自定义排序 + 有布局快照）：一键整理 = 恢复到保存时的精确位置。
-  // 其它情况（未保存 / 非自定义排序）：退回紧凑整理。
-  if (state.settings.sortMode === 'custom') {
-    const snap = (state.settings.orderLayouts || {})[layoutScopeKey()];
-    if (snap) {
-      state.notes.filter(inView).forEach((n) => {
-        const s = snap[n.id];
-        if (s && typeof s.x === 'number') setEffPos(n, s.x, s.y);
-      });
-      save();
-      renderSortPanel();
-      renderAll();
-      return;
-    }
+  const inViewNotes = state.notes.filter(inView);
+  // 一键整理：精确恢复「保存当前排序」时记录的布局快照（保持保存的顺序与位置）。
+  // 说明：快照是「保存当前排序」那一刻的样子；若手动调整后想以新布局为基准，请再点一次「保存当前排序」。
+  // 未保存过（无快照）时，按当前排序模式紧凑「填空」排列。
+  const snap = (state.settings.orderLayouts || {})[layoutScopeKey()];
+  if (state.settings.sortMode === 'custom' && snap) {
+    inViewNotes.forEach((n) => {
+      const s = snap[n.id];
+      if (s && typeof s.x === 'number') setEffPos(n, s.x, s.y);
+    });
+    // 未保存（新建）便签：按默认方案（创建时间降序）排序后，逐个放到不重叠空位；绝不移动已保存便签的位置。
+    const occupied = [];
+    inViewNotes.forEach((n) => {
+      if (snap[n.id] && typeof snap[n.id].x === 'number') {
+        const p = effPos(n);
+        occupied.push({ x: p.x, y: p.y, w: n.w || LAYOUT.defaultW, h: n.h || LAYOUT.defaultH });
+      }
+    });
+    const unsaved = inViewNotes.filter((n) => !(snap[n.id] && typeof snap[n.id].x === 'number'));
+    unsaved.slice().sort((a, b) => (b.createdAt || 0) - (a.createdAt || 0)).forEach((n) => {
+      const w = n.w || LAYOUT.defaultW, h = n.h || LAYOUT.defaultH;
+      const cand = BoardLayout.nextGridPosition(occupied, maxX, {}, w, h);
+      setEffPos(n, cand.x, cand.y);
+      occupied.push({ x: cand.x, y: cand.y, w, h });
+    });
+  } else {
+    const sorted = getSortedNotes(inViewNotes);
+    if (!sorted.length) return;
+    // 超大（超出画布宽）便签放到最后再排：避免它在中间占位导致后面便签被挤到下方、中间留出大块空白。
+    // 排布仍按当前排序顺序（仅把超大便签整体后移），其余便签保持阅读顺序紧凑打包。
+    const maxW = (maxX > 0) ? maxX : Infinity;
+    const ordered = sorted.slice().sort((a, b) =>
+      (((a.w || LAYOUT.defaultW) > maxW) ? 1 : 0) - (((b.w || LAYOUT.defaultW) > maxW) ? 1 : 0)
+    );
+    const payload = ordered.map((n) => ({ id: n.id, w: n.w, h: n.h }));
+    const placed = BoardLayout.arrangeCompact(payload, maxX);
+    const posMap = new Map(placed.map((p) => [p.id, p]));
+    sorted.forEach((n) => {
+      const p = posMap.get(n.id);
+      if (p) setEffPos(n, p.x, p.y);
+    });
   }
-  // 普通整理：按当前排序模式（尊重自定义或其它排序方式）的顺序紧凑整齐排列
-  const sorted = getSortedNotes(state.notes.filter(inView));
-  if (!sorted.length) return;
-  const placed = BoardLayout.arrangeCompact(
-    sorted.map((n) => ({ id: n.id, w: n.w, h: n.h })),
-    maxX
-  );
-  const posMap = new Map(placed.map((p) => [p.id, p]));
-  sorted.forEach((n) => {
-    const p = posMap.get(n.id);
-    if (p) setEffPos(n, p.x, p.y);
-  });
   save();
   renderSortPanel();
   renderAll();
@@ -1002,6 +1373,7 @@ function switchTab(name) {
   if (name === 'font') { renderFontSelect(); renderFontList(); syncSettingsInputs(); }
   if (name === 'reminder') syncSettingsInputs();
   if (name === 'sort') renderSortPanel();
+  if (name === 'shortcuts') renderShortcutPanel();
   if (name === 'backup') { const el = $('#backupDir'); if (el) el.value = state.settings.backupDir || ''; }
   if (name === 'trash') renderTrashPanel();
   if (name === 'about') syncSettingsInputs();
@@ -1032,6 +1404,11 @@ function bindUI() {
   $('#btnBatchDelete').onclick = batchDeleteSelected;
   $('#btnBatchMove').onclick = batchMoveSelected;
 
+  // 撤销 / 重做按钮
+  $('#btnUndo').onclick = undo;
+  $('#btnRedo').onclick = redo;
+
+
   $('#viewBoard').onclick = () => setViewMode('board');
   $('#viewMemo').onclick = () => setViewMode('memo');
   $('#viewTodo').onclick = () => setViewMode('todo');
@@ -1046,12 +1423,21 @@ function bindUI() {
   $('#btnSettings').onclick = () => {
     switchTab('appearance');
     $('#settingsOverlay').classList.remove('hidden');
+    if (typeof syncZoomToolbar === 'function') syncZoomToolbar();
   };
-  $('#btnCloseSettings').onclick = () => $('#settingsOverlay').classList.add('hidden');
-  $('#settingsOverlay').onclick = (e) => { if (e.target.id === 'settingsOverlay') $('#settingsOverlay').classList.add('hidden'); };
+  $('#btnCloseSettings').onclick = () => { $('#settingsOverlay').classList.add('hidden'); if (typeof syncZoomToolbar === 'function') syncZoomToolbar(); };
+  $('#settingsOverlay').onclick = (e) => { if (e.target.id === 'settingsOverlay') { $('#settingsOverlay').classList.add('hidden'); if (typeof syncZoomToolbar === 'function') syncZoomToolbar(); } };
+
+  // 关闭确认弹窗按钮
+  $('#btnCloseHide').onclick = () => closeDecision('hide');
+  $('#btnCloseQuit').onclick = () => closeDecision('quit');
+  $('#btnCloseCancel').onclick = () => closeDecision('cancel');
+  $('#closeOverlay').onclick = (e) => { if (e.target.id === 'closeOverlay') closeDecision('cancel'); };
 
   $('#btnChangelog').onclick = openChangelog;
   $('#btnChangelogClose').onclick = closeChangelog;
+  const repoBtn = $('#btnOpenRepo');
+  if (repoBtn) repoBtn.onclick = () => window.api.openExternal('https://github.com/LucasRiver9527/Note-Memo');
   $('#changelogOverlay').onclick = (e) => { if (e.target.id === 'changelogOverlay') closeChangelog(); };
 
   $('#btnCheckUpdate').onclick = async () => {
@@ -1112,6 +1498,12 @@ function bindUI() {
     renderSortPanel();
     renderAll();
   });
+  const resetShortcutsBtn = $('#btnResetShortcuts');
+  if (resetShortcutsBtn) resetShortcutsBtn.onclick = () => {
+    if (shortcutRecordingId) stopRecordShortcut();
+    saveShortcuts({});
+    toast(t('shortcut_reset_done'));
+  };
   const sortGroupSel = $('#sortGroup');
   if (sortGroupSel) sortGroupSel.addEventListener('change', (e) => {
     sortPanelGroupId = e.target.value;
@@ -1178,6 +1570,7 @@ function bindUI() {
   $('#btnClearAll').onclick = async () => {
     const ok = await confirmModal(t('confirm_clear_all_title'), t('confirm_clear_all_msg'));
     if (ok) {
+      pushUndo();
       state.notes.forEach((n) => { if (n.desktopPin) window.api.unpinFromDesktop(n.id); n.desktopPin = false; });
       state.trash.push(...state.notes.map((n) => ({ note: n, deletedAt: Date.now() })));
       state.notes = [];
@@ -1201,6 +1594,38 @@ function bindUI() {
     c.onclick = () => setFilter('group', c.dataset.group);
   });
 
+  // 归档视图开关：点击切换「只看归档/回到常规视图」
+  const archiveChip = $('#btnArchiveFilter');
+  if (archiveChip) {
+    archiveChip.onclick = () => {
+      filter.archive = !filter.archive;
+      renderGroupChips();
+      renderAll();
+    };
+  }
+
+  // 分组过多时：鼠标滚轮在分组芯片区水平滚动，让「后面未显示的分组」可达
+  const chipsWrap = $('#groupChips');
+  if (chipsWrap) {
+    chipsWrap.addEventListener('wheel', (e) => {
+      if (Math.abs(e.deltaY) > Math.abs(e.deltaX)) {
+        e.preventDefault();
+        chipsWrap.scrollLeft += e.deltaY;
+      }
+    }, { passive: false });
+
+    // 左右箭头滚动分组：固定在两端，按是否可滚动方向置灰，无分组时隐藏
+    const leftArrow = $('#btnChipsLeft');
+    const rightArrow = $('#btnChipsRight');
+    const chipsStep = () => Math.max(120, Math.round(chipsWrap.clientWidth * 0.7));
+    const scrollChips = (dir) => { chipsWrap.scrollLeft += dir * chipsStep(); requestAnimationFrame(refreshChipsScroll); };
+    if (leftArrow) leftArrow.onclick = () => scrollChips(-1);
+    if (rightArrow) rightArrow.onclick = () => scrollChips(1);
+    chipsWrap.addEventListener('scroll', refreshChipsScroll);
+    window.addEventListener('resize', refreshChipsScroll);
+    refreshChipsScroll();
+  }
+
   const search = $('#searchInput');
   search.addEventListener('input', () => {
     filter.query = search.value;
@@ -1219,18 +1644,75 @@ function bindUI() {
       }
     } else {
       const board = $('#board');
+      const z = boardZoom();
       if (e.target === board || e.target === canvas) {
         const rect = board.getBoundingClientRect();
-        createNote(Math.round(e.clientX - rect.left), Math.round(e.clientY - rect.top));
+        createNote(Math.round((e.clientX - rect.left) / z), Math.round((e.clientY - rect.top) / z));
       }
     }
   });
+
+  // 画布缩放：Ctrl+滚轮（仅空白背景/非编辑区域）、工具栏按钮
+  canvas.addEventListener('wheel', (e) => {
+    if (!e.ctrlKey) return;
+    if (state.settings.viewMode !== 'board') return;
+    const t = e.target;
+    if (t && t.closest && t.closest('.note-content, .doc-content, .note-title, input, select, textarea, button, .resize-handle')) return;
+    e.preventDefault();
+    const dir = e.deltaY < 0 ? 1 : -1;
+    applyBoardZoomRatio(boardZoom() + dir * LAYOUT.zoomStep, { mode: 'cursor', x: e.clientX, y: e.clientY });
+  }, { passive: false });
+
+  // 平移：空格+左键拖 或 鼠标中键拖（仅空白背景）
+  canvas.addEventListener('mousedown', (e) => {
+    if (state.settings.viewMode !== 'board') return;
+    if (!(e.target === canvas || e.target === board)) return;
+    if ((e.button === 1) || (e.button === 0 && spaceDown)) {
+      e.preventDefault();
+      startCanvasPan(e);
+    } else if (e.button === 0) {
+      // 左键空白背景：开启框选（拖拽拉框多选）
+      startBoxSelect(e);
+    }
+  });
+
+  // 空白画布右键：快捷插入
+  canvas.addEventListener('contextmenu', (e) => {
+    if (state.settings.viewMode !== 'board') return;
+    if (!(e.target === canvas || e.target === board)) return;
+    e.preventDefault();
+    showBoardContextMenu(e);
+  });
+
+  // 缩放工具栏
+  $('#btnZoomOut').addEventListener('click', () => zoomStep(-1));
+  $('#btnZoomIn').addEventListener('click', () => zoomStep(1));
+  $('#btnZoomReset').addEventListener('click', () => zoomReset());
+  $('#btnZoomPan').addEventListener('click', () => { toast(t('canvas_pan_hint')); });
+  const ctExpand = $('#ctExpand');
+  if (ctExpand) ctExpand.addEventListener('click', () => {
+    const tb = $('#canvasToolbar');
+    const expanded = tb.classList.toggle('expanded');
+    ctExpand.textContent = expanded ? '✕' : '⤢';
+    ctExpand.title = expanded ? t('canvas_zoom_toggle_close') : t('canvas_zoom_toggle');
+  });
+  syncZoomToolbar();
 
   // 外观输入
   $('#noteOpacity').addEventListener('input', (e) => { state.settings.noteOpacity = Number(e.target.value); applyTheme(); });
   $('#noteOpacity').addEventListener('change', save);
   $('#noteColorInput').addEventListener('input', (e) => { state.settings.noteColor = e.target.value; });
   $('#noteColorInput').addEventListener('change', save);
+  $('#noteRadius').addEventListener('input', (e) => { state.settings.noteRadius = Number(e.target.value); applyTheme(); });
+  $('#noteRadius').addEventListener('change', save);
+  $('#noteShadow').addEventListener('input', (e) => { state.settings.noteShadow = Number(e.target.value); applyTheme(); });
+  $('#noteShadow').addEventListener('change', save);
+  $('#noteBorderWidth').addEventListener('input', (e) => { state.settings.noteBorderWidth = Number(e.target.value); applyTheme(); });
+  $('#noteBorderWidth').addEventListener('change', save);
+  $('#noteBorderColor').addEventListener('input', (e) => { state.settings.noteBorderColor = e.target.value; applyTheme(); });
+  $('#noteBorderColor').addEventListener('change', save);
+  $('#noteLetterSpacing').addEventListener('input', (e) => { state.settings.noteLetterSpacing = Number(e.target.value); applyTheme(); });
+  $('#noteLetterSpacing').addEventListener('change', save);
   $('#btnResetNoteColor').onclick = () => {
     state.settings.noteColor = DEFAULT_NOTE_COLOR;
     syncSettingsInputs();
@@ -1383,6 +1865,9 @@ function bindUI() {
 
   // 闹铃提醒弹窗
   $('#btnAlarmDismiss').onclick = dismissAlarm;
+  $('#btnAlarmSnooze5').onclick = () => snoozeAlarm(5);
+  $('#btnAlarmSnooze10').onclick = () => snoozeAlarm(10);
+  $('#btnAlarmSnooze30').onclick = () => snoozeAlarm(30);
   $('#alarmOverlay').onclick = (e) => { if (e.target.id === 'alarmOverlay') dismissAlarm(); };
   $('#btnReminderSave').onclick = () => {
     const val = $('#reminderInput').value;
@@ -1396,6 +1881,11 @@ function bindUI() {
     }
     closeReminder();
   };
+
+  // 窗口尺寸变化后，让画布尺寸跟随视口（内容不溢出时收起滚动条）
+  window.addEventListener('resize', () => {
+    if (state.settings.viewMode === 'board' && typeof syncBoardSize === 'function') syncBoardSize();
+  });
 }
 
 /* ============ 提示气泡 ============ */
@@ -1479,6 +1969,34 @@ async function init() {
   bindUI();
   initTooltips();
 
+  // 空格+左键拖 = 平移画布（空格仅在该编辑器未聚焦时生效，避免干扰输入空格）
+  window.addEventListener('keydown', (e) => {
+    if (e.code !== 'Space') return;
+    const t = e.target;
+    if (t && t.closest && t.closest('input, textarea, select, [contenteditable="true"]')) return;
+    spaceDown = true;
+    document.body.classList.add('pan-mode');
+  });
+  window.addEventListener('keyup', (e) => {
+    if (e.code !== 'Space') return;
+    spaceDown = false;
+    document.body.classList.remove('pan-mode');
+  });
+  window.addEventListener('blur', () => {
+    spaceDown = false;
+    document.body.classList.remove('pan-mode');
+  });
+
+  // 结构操作撤销/重做：走「应用级(app)」快捷键体系（可改键）；输入/编辑区内交给浏览器原生撤销/重做
+  const isEditableTarget = (t) => t && t.closest && t.closest('input, textarea, select, [contenteditable="true"]');
+  window.addEventListener('keydown', (e) => {
+    if (isEditableTarget(e.target)) return;
+    const sc = Shortcuts.whichShortcut(e, state.settings, 'app');
+    if (sc === 'undo') { e.preventDefault(); undo(); }
+    else if (sc === 'redo') { e.preventDefault(); redo(); }
+  });
+
+
   // 阻止拖入文件/链接时浏览器默认导航（否则会打开空白窗口）
   window.addEventListener('dragover', (e) => { e.preventDefault(); });
   window.addEventListener('drop', (e) => { e.preventDefault(); });
@@ -1510,7 +2028,14 @@ async function init() {
     }
   });
 
-  const data = await window.api.loadData();
+  let data = null;
+  try {
+    data = await window.api.loadData();
+  } catch (err) {
+    // 读取失败不静默：记录日志并提示（避免用户误以为数据被清空）
+    console.error('[data] 读取数据失败：', err);
+    try { toast(t('toast_load_failed')); } catch (_) {}
+  }
   if (data) {
     // A3：设置单一入口 + 数据迁移集中到 state.js（migrateData），就地回填默认值/版本迁移/补齐便签字段
     const migrated = migrateData(data, uid);
@@ -1563,6 +2088,14 @@ async function init() {
   window.api.onMaximized((flag) => {
     document.body.classList.toggle('maximized', !!flag);
   });
+
+  // 关闭确认：主进程询问 → 弹主题化选择框 → 回传决定
+  window.api.onCloseRequest(async () => {
+    const choice = await showCloseDecisionModal();
+    if (choice) window.api.replyCloseDecision(choice);
+    else window.api.replyCloseDecision('cancel');
+  });
+
 
   window.api.onUpdateAvailable(async (info) => {
     const ver = (info && info.version) || '';
@@ -1627,8 +2160,18 @@ async function init() {
     }
   });
 
+  // 钉窗右键菜单调整「便签不透明度」：同步全局设置并实时应用到所有便签卡片
+  window.api.onNoteOpacitySetting((v) => {
+    if (typeof v === 'number' && v <= 100 && state.settings.noteOpacity !== v) {
+      state.settings.noteOpacity = v;
+      applyTheme();
+      save();
+    }
+  });
+
+
   // 开发版标记：启动提示构建信息，便于确认运行的是最新代码
-  try { toast('开发版 build 2026-08-25（快照恢复 · 指针拖拽排序 · 批量只选不编辑）'); } catch (e) { /* ignore */ }
+  try { toast('开发版 build 2026-08-26（v1.2.5 预览测试版）'); } catch (e) { /* ignore */ }
 
   window.addEventListener('beforeunload', () => {
     window.api.saveData({ settings: state.settings, groups: state.groups, notes: state.notes, trash: state.trash });

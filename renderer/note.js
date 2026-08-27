@@ -530,8 +530,8 @@ function editCell(block, td, tbl, r, c) {
   td.onkeydown = (e) => {
     if (e.key === 'Enter') { e.preventDefault(); document.execCommand('insertLineBreak'); }
     else if (e.key === 'Escape') { e.preventDefault(); done(false); }
-    else if (e.ctrlKey && !e.shiftKey && (e.key === 'b' || e.key === 'B')) { e.preventDefault(); toggleBold(td); }
-    else if (e.ctrlKey && (e.key === 'h' || e.key === 'H')) { e.preventDefault(); toggleHighlight(td); }
+    else if (whichShortcut(e, settings, 'editor') === 'bold') { e.preventDefault(); toggleBold(td); }
+    else if (whichShortcut(e, settings, 'editor') === 'highlight') { e.preventDefault(); toggleHighlight(td); }
   };
 }
 
@@ -681,13 +681,10 @@ function renderBody() {
       adjustFontSize(e.deltaY < 0 ? 1 : -1);
     }, { passive: false });
     content.addEventListener('keydown', (e) => {
-      if (e.ctrlKey && !e.shiftKey && (e.key === 'b' || e.key === 'B')) {
-        e.preventDefault();
-        toggleBold(content);
-      } else if (e.ctrlKey && (e.key === 'h' || e.key === 'H')) {
-        e.preventDefault();
-        toggleHighlight(content);
-      } else if (e.ctrlKey && !e.shiftKey && (e.key === 'c' || e.key === 'C')) {
+      const sc = whichShortcut(e, settings, 'editor');
+      if (sc === 'bold') { e.preventDefault(); toggleBold(content); }
+      else if (sc === 'highlight') { e.preventDefault(); toggleHighlight(content); }
+      else if (sc === 'copyImage') {
         const imgSrc = getSelectedImageSrc();
         if (imgSrc) {
           e.preventDefault();
@@ -933,6 +930,11 @@ async function handleNativeMenuAction(a) {
     note.color = a.color;
     applyNoteStyle();
     save();
+  } else if (action === 'note-opacity') {
+    const v = a.value != null ? Number(a.value) : 100;
+    note.opacity = v;
+    applyOpacity();      // 实时作用于当前钉桌便签（仅这一张）
+    save();              // 持久化到该便签（note:update 按 note 存储）
   }
 }
 
@@ -958,6 +960,20 @@ function showColorMenu() {
   });
   menu.appendChild(row);
   menu.classList.remove('hidden');
+}
+
+// 每张便签独立的透明度（只作用于当前钉桌便签窗口，不用全局 noteOpacity）
+function noteOpacityValue() {
+  return (note && note.opacity != null) ? note.opacity : 100;
+}
+
+function applyOpacity() {
+  const v = noteOpacityValue();
+  // 同时作用于内容层与 OS 窗口透明度：部分平台窗口不是逐像素透明，
+  // 仅靠 #note 元素透明度只会透出窗口自身背影；setOpacity 才能透出桌面。
+  const wrap = $('#note');
+  if (wrap) wrap.style.opacity = v / 100;
+  window.api.setSelfOpacity(v / 100);
 }
 
 function applyNoteStyle() {
@@ -988,8 +1004,7 @@ async function init() {
   const wrap = $('#note');
   applyNoteStyle();
   if (note.fontSize) wrap.style.setProperty('--note-font-size', note.fontSize + 'px');
-  wrap.style.opacity = (settings.noteOpacity != null ? settings.noteOpacity : 100) / 100;
-  window.api.onNoteOpacity((v) => { wrap.style.opacity = (v != null ? v : 100) / 100; });
+  applyOpacity();
   const applyFx = (fx) => {
     if (fx && typeof fx.desktopMica !== 'undefined') {
       settings.desktopMica = !!fx.desktopMica;
@@ -1005,6 +1020,7 @@ async function init() {
   window.api.onEffects(applyFx);
 
   document.documentElement.style.setProperty('--font-size', (settings.fontSize || 14) + 'px');
+  document.documentElement.style.setProperty('--font-letter-spacing', (settings.noteLetterSpacing != null ? settings.noteLetterSpacing : 0) + 'px');
   let fam;
   if (note.fontFamily && note.fontFamily !== 'system') fam = note.fontFamily;
   else if (settings.fontFamily && settings.fontFamily !== 'system') fam = settings.fontFamily;
@@ -1038,7 +1054,7 @@ async function init() {
     if (e.target.closest('.note-table-block')) return;
     captureSelection();
     savedImageSrc = getSelectedImageSrc();
-    const action = window.api.showNativeMenu({ x: e.clientX, y: e.clientY, textColors: TEXT_COLORS, noteColors: NOTE_COLORS });
+    const action = window.api.showNativeMenu({ x: e.clientX, y: e.clientY, textColors: TEXT_COLORS, noteColors: NOTE_COLORS, noteOpacity: noteOpacityValue() });
     action.then((a) => handleNativeMenuAction(a));
   });
   window.addEventListener('dragover', (e) => { e.preventDefault(); });

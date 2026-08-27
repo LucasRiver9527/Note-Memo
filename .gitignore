@@ -26,3 +26,8 @@ cert/
 *.pfx
 *.p12
 *.key
+
+# 构建产物与本地待办，不入仓库
+out/
+release-latest/
+优化改进待办.txt

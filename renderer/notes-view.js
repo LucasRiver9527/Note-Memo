@@ -18,7 +18,7 @@ function noteText(n) {
 
 function buildNoteEl(n) {
   const el = document.createElement('div');
-  el.className = 'note' + (n.pinned ? ' pinned' : '');
+  el.className = 'note' + (n.pinned ? ' pinned' : '') + (n.archived ? ' archived' : '');
   el.dataset.id = n.id;
   const pos = effPos(n);
   el.style.left = pos.x + 'px';
@@ -51,6 +51,9 @@ function buildNoteEl(n) {
         <button class="todo-del" title="${t('delete')}">✕</button>
       </li>`).join('')}</ul>
       <button class="todo-add">${t('add_todo')}</button>`;
+  } else if (n.preview) {
+    // 预览：渲染后的富文本只读展示（不进入编辑）
+    bodyHtml = `<div class="note-content note-preview" contenteditable="false" spellcheck="false">${renderRichCached(n)}</div>`;
   } else {
     bodyHtml = `<div class="note-content" contenteditable="true" spellcheck="false" data-placeholder="${t('note_content')}">${renderRichCached(n)}</div>`;
   }
@@ -67,6 +70,7 @@ function buildNoteEl(n) {
         <button class="t-table" title="${t('insert_table')}">▦</button>
         <button class="t-remind" title="${t('todo_remind')}">⏰</button>
         <button class="t-color" title="${t('color')}">🎨</button>
+        ${isTodo ? '' : `<button class="t-preview ${n.preview ? 'active' : ''}" title="${t(n.preview ? 'note_preview_off' : 'note_preview')}">👁</button>`}
         <button class="t-pin ${n.pinned ? 'active' : ''}" title="${t('pin')}">🔝</button>
         <button class="t-del" title="${t('delete')}">🗑</button>
       </div>
@@ -85,7 +89,7 @@ function buildNoteEl(n) {
 
 function buildMemoEl(n) {
   const el = document.createElement('div');
-  el.className = 'memo-row' + (n.pinned ? ' pinned' : '');
+  el.className = 'memo-row' + (n.pinned ? ' pinned' : '') + (n.archived ? ' archived' : '');
   el.dataset.id = n.id;
   el.style.setProperty('--note-color', n.color);
   if (n.fontSize) el.style.setProperty('--note-font-size', n.fontSize + 'px');
@@ -111,6 +115,8 @@ function buildMemoEl(n) {
         <button class="todo-del" title="${t('delete')}">✕</button>
       </li>`).join('')}</ul>
       <button class="todo-add">${t('add_todo')}</button>`;
+  } else if (n.preview) {
+    bodyHtml = `<div class="note-content note-preview" contenteditable="false" spellcheck="false">${renderRichCached(n)}</div>`;
   } else {
     bodyHtml = `<div class="note-content" contenteditable="true" spellcheck="false" data-placeholder="${t('note_content')}">${renderRichCached(n)}</div>`;
   }
@@ -128,6 +134,7 @@ function buildMemoEl(n) {
           <button class="t-table" title="${t('insert_table')}">▦</button>
           <button class="t-remind" title="${t('todo_remind')}">⏰</button>
           <button class="t-color" title="${t('color')}">🎨</button>
+          ${isTodo ? '' : `<button class="t-preview ${n.preview ? 'active' : ''}" title="${t(n.preview ? 'note_preview_off' : 'note_preview')}">👁</button>`}
           <button class="t-pin ${n.pinned ? 'active' : ''}" title="${t('pin')}">🔝</button>
           <button class="t-del" title="${t('delete')}">🗑</button>
         </div>
@@ -176,6 +183,7 @@ function wireCommon(el, n) {
         ii.classList.add('selected');
       }
     });
+    if (!n.preview) {
     content.addEventListener('input', () => { n.content = readRichContent(content); n.updatedAt = Date.now(); save(); });
     content.addEventListener('paste', async (e) => {
       const cd = e.clipboardData || window.clipboardData;
@@ -226,31 +234,13 @@ function wireCommon(el, n) {
       adjustNoteFontSize(n, e.deltaY < 0 ? 1 : -1, (sz) => { el.style.setProperty('--note-font-size', sz + 'px'); });
     }, { passive: false });
     content.addEventListener('keydown', (e) => {
-      if (e.ctrlKey && !e.shiftKey && (e.key === 'b' || e.key === 'B')) {
-        e.preventDefault();
-        toggleBold(content);
-      } else if (e.ctrlKey && (e.key === 'h' || e.key === 'H')) {
-        e.preventDefault();
-        toggleHighlight(content);
-      } else if (e.ctrlKey && (e.key === 'l' || e.key === 'L')) {
-        e.preventDefault();
-        alignBlock(content, 'justifyLeft');
-        n.content = readRichContent(content);
-        n.updatedAt = Date.now();
-        save();
-      } else if (e.ctrlKey && (e.key === 'e' || e.key === 'E')) {
-        e.preventDefault();
-        alignBlock(content, 'justifyCenter');
-        n.content = readRichContent(content);
-        n.updatedAt = Date.now();
-        save();
-      } else if (e.ctrlKey && (e.key === 'r' || e.key === 'R')) {
-        e.preventDefault();
-        alignBlock(content, 'justifyRight');
-        n.content = readRichContent(content);
-        n.updatedAt = Date.now();
-        save();
-      } else if (e.ctrlKey && !e.shiftKey && (e.key === 'c' || e.key === 'C')) {
+      const sc = whichShortcut(e, state.settings, 'editor');
+      if (sc === 'bold') { e.preventDefault(); toggleBold(content); }
+      else if (sc === 'highlight') { e.preventDefault(); toggleHighlight(content); }
+      else if (sc === 'alignLeft') { e.preventDefault(); alignBlock(content, 'justifyLeft'); n.content = readRichContent(content); n.updatedAt = Date.now(); save(); }
+      else if (sc === 'alignCenter') { e.preventDefault(); alignBlock(content, 'justifyCenter'); n.content = readRichContent(content); n.updatedAt = Date.now(); save(); }
+      else if (sc === 'alignRight') { e.preventDefault(); alignBlock(content, 'justifyRight'); n.content = readRichContent(content); n.updatedAt = Date.now(); save(); }
+      else if (sc === 'copyImage') {
         const imgSrc = getSelectedImageSrc(n);
         if (imgSrc) {
           e.preventDefault();
@@ -263,6 +253,7 @@ function wireCommon(el, n) {
         }
       }
     });
+    }
   }
   todoTexts.forEach((inp) => {
     inp.addEventListener('input', () => {
@@ -282,7 +273,9 @@ function wireCommon(el, n) {
     });
   });
 
-  $('.t-pin', el).onclick = () => { n.pinned = !n.pinned; n.updatedAt = Date.now(); save(); renderAll(); };
+  $('.t-pin', el).onclick = () => { pushUndo(); n.pinned = !n.pinned; n.updatedAt = Date.now(); save(); renderAll(); };
+  const previewBtn = $('.t-preview', el);
+  if (previewBtn) previewBtn.onclick = () => { n.preview = !n.preview; n.updatedAt = Date.now(); save(); renderAll(); };
   $('.t-del', el).onclick = () => deleteNote(n.id);
   $('.t-color', el).onclick = (e) => { e.stopPropagation(); openColorPop(el, n); };
   $('.t-remind', el).onclick = () => openReminder(n);
@@ -301,6 +294,7 @@ function wireCommon(el, n) {
   };
   $('.t-desktop', el).onclick = (e) => {
     e.stopPropagation();
+    pushUndo();
     n.desktopPin = true;
     n.updatedAt = Date.now();
     saveNow();
@@ -323,6 +317,7 @@ function wireCommon(el, n) {
     openTableInsertDialog(n);
   };
   $('.t-todo', el).onclick = () => {
+    pushUndo();
     if (n.type !== 'todo') {
       n.type = 'todo';
       n.items = n.items || [];
@@ -805,6 +800,7 @@ function showTableContextMenu(e, n, block) {
     deselectTable();
     renderAll();
   }, true);
+  appendMenuAppearanceFooter(pop);
   document.body.appendChild(pop);
   const x = Math.max(8, Math.min(e.clientX, window.innerWidth - pop.offsetWidth - 8));
   const y = Math.max(8, Math.min(e.clientY, window.innerHeight - pop.offsetHeight - 8));
@@ -927,8 +923,8 @@ function editCell(block, td, n, tbl, r, c) {
   td.onkeydown = (e) => {
     if (e.key === 'Enter') { e.preventDefault(); document.execCommand('insertLineBreak'); }
     else if (e.key === 'Escape') { e.preventDefault(); done(false); }
-    else if (e.ctrlKey && !e.shiftKey && (e.key === 'b' || e.key === 'B')) { e.preventDefault(); toggleBold(td); }
-    else if (e.ctrlKey && (e.key === 'h' || e.key === 'H')) { e.preventDefault(); toggleHighlight(td); }
+    else if (whichShortcut(e, state.settings, 'editor') === 'bold') { e.preventDefault(); toggleBold(td); }
+    else if (whichShortcut(e, state.settings, 'editor') === 'highlight') { e.preventDefault(); toggleHighlight(td); }
   };
 }
 
@@ -1014,12 +1010,14 @@ function refreshFoot(el, n) {
 }
 
 function startDrag(el, n, e) {
+  pushUndo();
   const board = $('#board');
   const canvas = $('#canvas');
   let rect = board.getBoundingClientRect();
+  const z = (typeof boardZoom === 'function') ? boardZoom() : 1;
   const npos = effPos(n);
-  const offsetX = e.clientX - rect.left - npos.x;
-  const offsetY = e.clientY - rect.top - npos.y;
+  const offsetX = (e.clientX - rect.left) / z - npos.x;
+  const offsetY = (e.clientY - rect.top) / z - npos.y;
 
   // 批量模式：拖动任意已选便签，其余选中便签同步移动
   const batch = multiSelect && selectedNotes.has(n.id);
@@ -1046,8 +1044,8 @@ function startDrag(el, n, e) {
     if (!lastEv) return;
     const ev = lastEv;
     lastEv = null;
-    const nx = Math.max(0, Math.round(ev.clientX - rect.left - offsetX));
-    const ny = Math.max(0, Math.round(ev.clientY - rect.top - offsetY));
+    const nx = Math.max(0, Math.round((ev.clientX - rect.left) / z - offsetX));
+    const ny = Math.max(0, Math.round((ev.clientY - rect.top) / z - offsetY));
     const np = effPos(n);
     const dx = nx - np.x;
     const dy = ny - np.y;
@@ -1095,7 +1093,14 @@ function startDrag(el, n, e) {
       $$('.note').forEach((other) => {
         const id = other.dataset.id;
         const nn = state.notes.find((x) => x.id === id);
-        if (nn && selectedNotes.has(id)) { const p = effPos(nn); other.style.left = p.x + 'px'; other.style.top = p.y + 'px'; other.__snap = noteFingerprint(nn); }
+        if (nn && selectedNotes.has(id)) {
+          const p = effPos(nn);
+          // 必须清掉拖拽期间的 translate3d，否则新 left/top + 残留 transform 会造成「双重偏移/弹开」
+          other.style.transform = '';
+          other.style.left = p.x + 'px';
+          other.style.top = p.y + 'px';
+          other.__snap = noteFingerprint(nn);
+        }
       });
     }
     canvas.removeEventListener('scroll', updateRect);
@@ -1108,6 +1113,7 @@ function startDrag(el, n, e) {
     n.updatedAt = Date.now();
     save();
     if (batch) renderAll();
+    else syncBoardSize();
   };
   document.addEventListener('pointermove', onMove);
   document.addEventListener('pointerup', onUp);
@@ -1115,13 +1121,15 @@ function startDrag(el, n, e) {
 }
 
 function startResize(el, n, e) {
+  pushUndo();
   const startX = e.clientX;
   const startY = e.clientY;
+  const z = (typeof boardZoom === 'function') ? boardZoom() : 1;
   const origW = n.w || LAYOUT.defaultW;
   const origH = n.h || LAYOUT.defaultH;
   const onMove = (ev) => {
-    n.w = Math.max(LAYOUT.defaultW, origW + (ev.clientX - startX));
-    n.h = Math.max(140, origH + (ev.clientY - startY));
+    n.w = Math.max(LAYOUT.defaultW, origW + (ev.clientX - startX) / z);
+    n.h = Math.max(140, origH + (ev.clientY - startY) / z);
     el.style.width = n.w + 'px';
     el.style.height = n.h + 'px';
   };
@@ -1131,14 +1139,17 @@ function startResize(el, n, e) {
     n.updatedAt = Date.now();
     el.__snap = noteFingerprint(n);
     save();
+    syncBoardSize();
   };
   document.addEventListener('mousemove', onMove);
   document.addEventListener('mouseup', onUp);
 }
 
 /* ============ 待办区 ============ */
-function createTodoNote(text) {
-  const pos = nextGridPosition();
+function createTodoNote(text, x, y) {
+  pushUndo();
+  const pos = (x != null && y != null) ? { x, y } : nextGridPosition();
+  const allPos = (filter.group === 'all') ? pos : nextAllPosition();
   const n = {
     id: uid(),
     title: '待办',
@@ -1153,10 +1164,12 @@ function createTodoNote(text) {
     groupId: (filter.group && filter.group !== 'all' && filter.group !== 'ungrouped') ? filter.group : null,
     pinned: false,
     desktopPin: false,
+    archived: false,
+    preview: false,
     reminder: null,
     x: pos.x,
     y: pos.y,
-    positionAll: { x: pos.x, y: pos.y },
+    positionAll: { x: allPos.x, y: allPos.y },
     w: LAYOUT.defaultW,
     h: LAYOUT.newH,
     createdAt: Date.now(),
@@ -1169,7 +1182,9 @@ function createTodoNote(text) {
 }
 
 function createEmptyTodoNote() {
+  pushUndo();
   const pos = nextGridPosition();
+  const allPos = (filter.group === 'all') ? pos : nextAllPosition();
   const n = {
     id: uid(),
     title: '待办',
@@ -1184,10 +1199,12 @@ function createEmptyTodoNote() {
     groupId: (filter.group && filter.group !== 'all' && filter.group !== 'ungrouped') ? filter.group : null,
     pinned: false,
     desktopPin: false,
+    archived: false,
+    preview: false,
     reminder: null,
     x: pos.x,
     y: pos.y,
-    positionAll: { x: pos.x, y: pos.y },
+    positionAll: { x: allPos.x, y: allPos.y },
     w: LAYOUT.defaultW,
     h: LAYOUT.newH,
     createdAt: Date.now(),
@@ -1206,6 +1223,7 @@ function renderTodoView() {
 
   const visible = state.notes.filter((n) => {
     if (n.desktopPin) return false;
+    if (!!n.archived !== !!filter.archive) return false;
     if (filter.group === 'ungrouped' && n.groupId) return false;
     if (filter.group !== 'all' && filter.group !== 'ungrouped' && n.groupId !== filter.group) return false;
     return true;
@@ -1376,8 +1394,13 @@ function renderAll() {
 
   const visible = state.notes.filter((n) => {
     if (n.desktopPin) return false;
-    if (filter.group === 'ungrouped' && n.groupId) return false;
-    if (filter.group !== 'all' && filter.group !== 'ungrouped' && n.groupId !== filter.group) return false;
+    if (!!n.archived !== !!filter.archive) return false;
+    if (isGroupCollapsed(n.groupId)) return false;
+    if (!filter.archive) {
+      // 常规视图：按分组筛选（归档便签已在上方排除）
+      if (filter.group === 'ungrouped' && n.groupId) return false;
+      if (filter.group !== 'all' && filter.group !== 'ungrouped' && n.groupId !== filter.group) return false;
+    }
     if (query) {
       const g = state.groups.find((x) => x.id === n.groupId);
       const hay = ((n.title || '') + ' ' + noteText(n) + ' ' + (g ? g.name : '')).toLowerCase();
@@ -1451,6 +1474,48 @@ function renderAll() {
   const empty = state.notes.length === 0;
   $('#emptyHint').classList.toggle('hidden', !empty || state.settings.viewMode === 'todo' || state.settings.viewMode === 'doc');
   if (multiSelect) syncSelectedVisual();
+
+  if (state.settings.viewMode === 'board') syncBoardSize();
+  if (typeof syncZoomToolbar === 'function') syncZoomToolbar();
+}
+
+// 自适应画布尺寸：让「画布」高度/宽度至少等于视口，随便签内容增大。
+// 这样内容不超视口时不出现滚动条（#canvas overflow:auto 因 content<=client 而无滚动），
+// 超出时出现并让滚动条拇指长度随内容自适应。仅画布视图需要。
+// 内部始终以「未缩放坐标」计算内容边界，再交给 setBoardScaledSize 套用缩放（宽度/高度 *= zoom + transform）。
+function syncBoardSize() {
+  const board = $('#board');
+  const canvas = $('#canvas');
+  if (!board || !canvas) return;
+  const L = (typeof BoardLayout !== 'undefined' && BoardLayout.LAYOUT) ? BoardLayout.LAYOUT : { margin: 20, gap: 18 };
+  const cw = canvas.clientWidth || 0;
+  const ch = canvas.clientHeight || 0;
+  // 当前分组/筛选下的可见便签（与 renderAll 一致）
+  const inView = (n) => {
+    if (n.desktopPin) return false;
+    if (!!n.archived !== !!filter.archive) return false;
+    if (typeof isGroupCollapsed === 'function' && isGroupCollapsed(n.groupId)) return false;
+    if (!filter.archive) {
+      if (filter.group === 'ungrouped') return !n.groupId;
+      if (filter.group !== 'all' && filter.group !== 'ungrouped') return n.groupId === filter.group;
+    }
+    return true;
+  };
+  let maxRight = L.margin;
+  let maxBottom = L.margin;
+  state.notes.filter(inView).forEach((n) => {
+    const p = effPos(n);
+    const w = n.w || L.defaultW || L.margin;
+    const h = n.h || L.defaultH || L.margin;
+    if (p && typeof p.x === 'number') maxRight = Math.max(maxRight, p.x + w + L.gap);
+    if (p && typeof p.y === 'number') maxBottom = Math.max(maxBottom, p.y + h + L.gap);
+  });
+  const boardW = Math.max(cw, maxRight);
+  const boardH = Math.max(ch, maxBottom);
+  board.dataset.uw = boardW;
+  board.dataset.uh = boardH;
+  if (typeof setBoardScaledSize === 'function') setBoardScaledSize();
+  else { board.style.width = boardW + 'px'; board.style.height = boardH + 'px'; }
 }
 
 function setViewMode(mode) {
@@ -1472,7 +1537,7 @@ function renderDocView(visible) {
     const items = getSortedNotes(visible).map((n) => {
       const tc = n.textColor || state.settings.noteTextColor || autoTextColor(n.color);
       return `
-      <div class="doc-pick-item" data-id="${n.id}" style="--note-color:${n.color};background:${n.color};color:${tc}">
+      <div class="doc-pick-item${n.archived ? ' archived' : ''}" data-id="${n.id}" style="--note-color:${n.color};background:${n.color};color:${tc}">
         <div class="dp-info">
           <div class="dp-title">${escapeHtml(n.title || t('untitled'))}</div>
           <div class="dp-sub">${escapeHtml((noteText(n) || '').slice(0, 80))}</div>
@@ -1520,6 +1585,7 @@ function renderDocView(visible) {
       <button class="doc-fmt-btn" id="btnDocAlignCenter" title="${t('align_center')}">⇹</button>
       <button class="doc-fmt-btn" id="btnDocAlignRight" title="${t('align_right')}">⇥</button>` : ''}
       <span class="doc-tb-sep"></span>
+      ${!isTodo ? `<button class="doc-fmt-btn" id="btnDocPreview" title="${t(n.preview ? 'note_preview_off' : 'note_preview')}">👁</button>` : ''}
       <button class="doc-fmt-btn" id="btnDocDesktop" title="${t('desktop')}">📌</button>
       <button class="doc-fmt-btn" id="btnDocTodo" title="${t('todo_mode')}">☑</button>
       <button class="doc-fmt-btn" id="btnDocGroup" title="${t('add_to_group')}">🏷</button>
@@ -1533,7 +1599,7 @@ function renderDocView(visible) {
     </div>
     <div class="doc-editor ${isDarkColor(textColor) ? '' : 'note-text-light'}" style="--note-color:${n.color};${n.fontSize ? '--note-font-size:' + n.fontSize + 'px;' : ''}color:${textColor}">
       <input id="docTitle" class="doc-title-input" value="${escapeHtml(n.title || '')}" placeholder="${t('note_title')}" />
-      ${isTodo ? todoHtml : `<div id="docContent" class="doc-content" contenteditable="true" spellcheck="false" data-placeholder="${t('note_content')}">${renderRichCached(n)}</div>`}
+      ${isTodo ? todoHtml : `<div id="docContent" class="doc-content${n.preview ? ' note-preview' : ''}" contenteditable="${n.preview ? 'false' : 'true'}" spellcheck="false" data-placeholder="${t('note_content')}">${renderRichCached(n)}</div>`}
     </div>`;
   wireDocView(n, isTodo);
 }
@@ -1547,9 +1613,10 @@ function wireDocView(n, isTodo) {
 
   // 便签右上角功能按钮（文档模式）
   const pinBtn = $('#btnDocPin');
-  if (pinBtn) pinBtn.onclick = () => { n.pinned = !n.pinned; n.updatedAt = Date.now(); save(); renderAll(); };
+  if (pinBtn) pinBtn.onclick = () => { pushUndo(); n.pinned = !n.pinned; n.updatedAt = Date.now(); save(); renderAll(); };
   const todoBtn = $('#btnDocTodo');
   if (todoBtn) todoBtn.onclick = () => {
+    pushUndo();
     if (n.type !== 'todo') {
       n.type = 'todo';
       n.items = n.items || [];
@@ -1578,12 +1645,25 @@ function wireDocView(n, isTodo) {
   if (colorBtn) colorBtn.onclick = () => openColorPop(noteAnchor(n), n);
   const delBtn = $('#btnDocDel');
   if (delBtn) delBtn.onclick = () => deleteNote(n.id);
+  const previewBtn = $('#btnDocPreview');
+  if (previewBtn) previewBtn.onclick = () => { n.preview = !n.preview; n.updatedAt = Date.now(); save(); renderAll(); };
 
   if (isTodo) return;
   const content = $('#docContent');
   const boldBtn = $('#btnDocBold');
   const hlBtn = $('#btnDocHighlight');
   if (!content) return;
+  if (n.preview) {
+    // 预览：只保留链接/文件打开 与 右键菜单（退出预览），不挂编辑相关处理器
+    content.addEventListener('contextmenu', (e) => { if (e.target.closest('button, input')) return; showNoteContextMenu(e, n); });
+    content.addEventListener('click', (e) => {
+      const link = e.target.closest('a.note-link');
+      if (link) { const url = link.getAttribute('data-url'); if (url) window.api.openExternal(url); return; }
+      const fl = e.target.closest('.file-link');
+      if (fl) { e.stopPropagation(); window.api.openFilePath(fl.getAttribute('data-path'), fl.getAttribute('data-is-dir') === '1'); }
+    });
+    return;
+  }
   if (boldBtn) boldBtn.onclick = () => { content.focus(); if (savedRange && savedNoteId === n.id) restoreSelection(); toggleBold(content); };
   if (hlBtn) hlBtn.onclick = () => { content.focus(); if (savedRange && savedNoteId === n.id) restoreSelection(); toggleHighlight(content); };
   const setAlign = (cmd) => {
@@ -1664,28 +1744,13 @@ function wireDocView(n, isTodo) {
     adjustNoteFontSize(n, e.deltaY < 0 ? 1 : -1, (sz) => { const ed = content.closest('.doc-editor'); if (ed) ed.style.setProperty('--note-font-size', sz + 'px'); });
   }, { passive: false });
   content.addEventListener('keydown', (e) => {
-    if (e.ctrlKey && !e.shiftKey && (e.key === 'b' || e.key === 'B')) {
-      e.preventDefault();
-      toggleBold(content);
-    } else if (e.ctrlKey && (e.key === 'h' || e.key === 'H')) {
-      e.preventDefault();
-      toggleHighlight(content);
-    } else if (e.ctrlKey && (e.key === 'l' || e.key === 'L')) {
-      e.preventDefault();
-      alignBlock(content, 'justifyLeft');
-      n.content = readRichContent(content);
-      save();
-    } else if (e.ctrlKey && (e.key === 'e' || e.key === 'E')) {
-      e.preventDefault();
-      alignBlock(content, 'justifyCenter');
-      n.content = readRichContent(content);
-      save();
-    } else if (e.ctrlKey && (e.key === 'r' || e.key === 'R')) {
-      e.preventDefault();
-      alignBlock(content, 'justifyRight');
-      n.content = readRichContent(content);
-      save();
-    } else if (e.ctrlKey && !e.shiftKey && (e.key === 'c' || e.key === 'C')) {
+    const sc = whichShortcut(e, state.settings, 'editor');
+    if (sc === 'bold') { e.preventDefault(); toggleBold(content); }
+    else if (sc === 'highlight') { e.preventDefault(); toggleHighlight(content); }
+    else if (sc === 'alignLeft') { e.preventDefault(); alignBlock(content, 'justifyLeft'); n.content = readRichContent(content); save(); }
+    else if (sc === 'alignCenter') { e.preventDefault(); alignBlock(content, 'justifyCenter'); n.content = readRichContent(content); save(); }
+    else if (sc === 'alignRight') { e.preventDefault(); alignBlock(content, 'justifyRight'); n.content = readRichContent(content); save(); }
+    else if (sc === 'copyImage') {
       const imgSrc = getSelectedImageSrc(n);
       if (imgSrc) {
         e.preventDefault();
@@ -1703,12 +1768,17 @@ function wireDocView(n, isTodo) {
 }
 
 function nextGridPosition() {
-  const maxX = $('#canvas').clientWidth || LAYOUT.defaultW * 6;
+  const z = (typeof boardZoom === 'function') ? boardZoom() : 1;
+  const maxX = Math.round((($('#canvas').clientWidth) || LAYOUT.defaultW * 6) / z);
   // 只按当前分组/筛选的可见便签找空位，避免「其他分组的便签占位」导致新便签落点怪异
   const inCurrentView = (n) => {
     if (n.desktopPin) return false;
-    if (filter.group === 'ungrouped') return !n.groupId;
-    if (filter.group !== 'all' && filter.group !== 'ungrouped') return n.groupId === filter.group;
+    if (!!n.archived !== !!filter.archive) return false;
+    if (isGroupCollapsed(n.groupId)) return false;
+    if (!filter.archive) {
+      if (filter.group === 'ungrouped') return !n.groupId;
+      if (filter.group !== 'all' && filter.group !== 'ungrouped') return n.groupId === filter.group;
+    }
     return true;
   };
   const vis = state.notes.filter(inCurrentView);
@@ -1725,8 +1795,23 @@ function nextGridPosition() {
   return BoardLayout.nextGridPosition(allOccupied, maxX);
 }
 
+// 「全部」视图作用域下的新便签空位：避开所有便签的 positionAll，保证回到「全部」时不重叠。
+// 用于在分组/未分组视图新建便签时，独立给出 positionAll（与分组作用域的 x,y 分开）。
+function nextAllPosition() {
+  const z = (typeof boardZoom === 'function') ? boardZoom() : 1;
+  const maxX = Math.round((($('#canvas').clientWidth) || LAYOUT.defaultW * 6) / z);
+  const occupied = state.notes.map((n) => {
+    const p = n.positionAll || { x: n.x || 0, y: n.y || 0 };
+    return { x: p.x, y: p.y, w: n.w || LAYOUT.defaultW, h: n.h || LAYOUT.defaultH };
+  });
+  return BoardLayout.nextGridPosition(occupied, maxX, {}, LAYOUT.defaultW, LAYOUT.newH);
+}
+
 function createNote(x, y) {
+  pushUndo();
   const pos = (x != null && y != null) ? { x, y } : nextGridPosition();
+  // 仅在「全部」视图时 positionAll 与当前作用域一致；分组/未分组视图独立算一个不重叠的「全部」空位。
+  const allPos = (filter.group === 'all') ? pos : nextAllPosition();
   const n = {
     id: uid(),
     title: '',
@@ -1740,10 +1825,12 @@ function createNote(x, y) {
     groupId: (filter.group && filter.group !== 'all' && filter.group !== 'ungrouped') ? filter.group : null,
     pinned: false,
     desktopPin: false,
+    archived: false,
+    preview: false,
     reminder: null,
     x: pos.x,
     y: pos.y,
-    positionAll: { x: pos.x, y: pos.y },
+    positionAll: { x: allPos.x, y: allPos.y },
     w: LAYOUT.defaultW,
     h: LAYOUT.newH,
     createdAt: Date.now(),
@@ -1770,6 +1857,7 @@ function focusNewNote(id) {
 function deleteNote(id) {
   const n = state.notes.find((x) => x.id === id);
   if (!n) return;
+  pushUndo();
   if (n.desktopPin) window.api.unpinFromDesktop(id);
   n.desktopPin = false;
   state.notes = state.notes.filter((x) => x.id !== id);
@@ -1821,8 +1909,12 @@ function visibleNotes() {
   const query = filter.query.trim().toLowerCase();
   return state.notes.filter((n) => {
     if (n.desktopPin) return false;
-    if (filter.group === 'ungrouped' && n.groupId) return false;
-    if (filter.group !== 'all' && filter.group !== 'ungrouped' && n.groupId !== filter.group) return false;
+    if (!!n.archived !== !!filter.archive) return false;
+    if (isGroupCollapsed(n.groupId)) return false;
+    if (!filter.archive) {
+      if (filter.group === 'ungrouped' && n.groupId) return false;
+      if (filter.group !== 'all' && filter.group !== 'ungrouped' && n.groupId !== filter.group) return false;
+    }
     if (query) {
       const g = state.groups.find((x) => x.id === n.groupId);
       const hay = ((n.title || '') + ' ' + noteText(n) + ' ' + (g ? g.name : '')).toLowerCase();
@@ -1843,6 +1935,165 @@ function updateBatchCount() {
   if (el) el.textContent = t('batch_selected_count').replace('{n}', selectedNotes.size);
 }
 
+/* ============ 画布交互：平移 / 框选 / 右键快捷插入 ============ */
+// 进入批量 UI（不切换开关）：显示批量工具条 + 进入 multi-select 态，供框选等批量入口复用
+function ensureMultiSelectActive() {
+  if (!multiSelect) {
+    multiSelect = true;
+    document.body.classList.add('multi-select');
+    const toggle = $('#btnBatchToggle');
+    if (toggle) toggle.classList.add('active');
+    $('#batchBar').classList.remove('hidden');
+  }
+  syncSelectedVisual();
+}
+
+// 平移画布：通过修改 #canvas 的 scrollLeft/scrollTop 实现（缩放后内容超出视口才可平移）。
+// 触发：空格+左键 或 鼠标中键（已在 app.js 的 mousedown 判定 target 为空白背景后调用）。
+function startCanvasPan(e) {
+  const canvas = $('#canvas');
+  const startX = e.clientX;
+  const startY = e.clientY;
+  const sl = canvas.scrollLeft;
+  const st = canvas.scrollTop;
+  canvas.style.cursor = 'grabbing';
+  document.body.classList.add('panning');
+  const onMove = (ev) => {
+    canvas.scrollLeft = Math.max(0, sl - (ev.clientX - startX));
+    canvas.scrollTop = Math.max(0, st - (ev.clientY - startY));
+  };
+  const onUp = () => {
+    document.removeEventListener('mousemove', onMove);
+    document.removeEventListener('mouseup', onUp);
+    canvas.removeEventListener('mouseleave', onUp);
+    canvas.style.cursor = '';
+    document.body.classList.remove('panning');
+  };
+  document.addEventListener('mousemove', onMove);
+  document.addEventListener('mouseup', onUp);
+  canvas.addEventListener('mouseleave', onUp);
+}
+
+// 框选：空白背景左键拖拽画出一个选择框，框内（与框相交）的可见便签被选中并进入批量 UI。
+// 纯逻辑（矩形相交判定）复用 BoardLayout.rectsIntersect。
+function startBoxSelect(e) {
+  const board = $('#board');
+  const z = boardZoom();
+  const rect = board.getBoundingClientRect();
+  const startBX = (e.clientX - rect.left) / z;
+  const startBY = (e.clientY - rect.top) / z;
+  let active = false;
+  let marquee = null;
+  let cur = { x: startBX, y: startBY, w: 0, h: 0 };
+
+  const onMove = (ev) => {
+    const bx = (ev.clientX - rect.left) / z;
+    const by = (ev.clientY - rect.top) / z;
+    if (!active) {
+      const dist = Math.abs(ev.clientX - e.clientX) + Math.abs(ev.clientY - e.clientY);
+      if (dist < 4) return;
+      active = true;
+      marquee = document.createElement('div');
+      marquee.id = 'marquee';
+      board.appendChild(marquee);
+    }
+    const x = Math.min(startBX, bx);
+    const y = Math.min(startBY, by);
+    const w = Math.abs(bx - startBX);
+    const h = Math.abs(by - startBY);
+    cur = { x, y, w, h };
+    marquee.style.left = x + 'px';
+    marquee.style.top = y + 'px';
+    marquee.style.width = w + 'px';
+    marquee.style.height = h + 'px';
+  };
+  const onUp = () => {
+    document.removeEventListener('pointermove', onMove);
+    document.removeEventListener('pointerup', onUp);
+    document.removeEventListener('pointercancel', onUp);
+    if (marquee) marquee.remove();
+    if (active) {
+      selectedNotes.clear();
+      visibleNotes().forEach((n) => {
+        const p = effPos(n);
+        const nr = { x: p.x, y: p.y, w: n.w || LAYOUT.defaultW, h: n.h || LAYOUT.defaultH };
+        if (BoardLayout.rectsIntersect(nr, cur)) selectedNotes.add(n.id);
+      });
+      if (selectedNotes.size) ensureMultiSelectActive();
+      else clearSelection();
+    } else {
+      // 空白处单击：取消全部选择（不新建，双击仍负责新建）
+      if (selectedNotes.size) clearSelection();
+    }
+  };
+  document.addEventListener('pointermove', onMove);
+  document.addEventListener('pointerup', onUp);
+  document.addEventListener('pointercancel', onUp);
+}
+
+// 空白画布右键菜单：快捷插入（新建便签 / 新建待办 / 粘贴为新便签 / 一键整理）
+function showBoardContextMenu(e) {
+  e.preventDefault();
+  e.stopPropagation();
+  closePops();
+  const board = $('#board');
+  const z = boardZoom();
+  const rect = board.getBoundingClientRect();
+  const bx = (e.clientX - rect.left) / z;
+  const by = (e.clientY - rect.top) / z;
+  const pop = document.createElement('div');
+  pop.className = 'color-pop ctx-menu';
+  pop.style.gridTemplateColumns = '1fr';
+  pop.style.minWidth = '140px';
+  pop.style.padding = '4px';
+  pop.style.maxHeight = Math.min(window.innerHeight - 24, 440) + 'px';
+  pop.style.overflowY = 'auto';
+
+  const addItem = (icon, label, onClick, danger) => {
+    const b = document.createElement('button');
+    b.style.cssText = 'background:transparent;border:none;color:var(--fg);padding:4px 9px;border-radius:6px;cursor:pointer;text-align:left;font-size:12.5px;line-height:1.3;font-family:inherit;width:100%;display:flex;align-items:center;gap:6px;';
+    b.innerHTML = `<span>${icon}</span><span>${label}</span>`;
+    b.onmouseenter = () => (b.style.background = 'var(--accent-soft)');
+    b.onmouseleave = () => (b.style.background = 'transparent');
+    b.onclick = () => { closePops(); onClick(); };
+    pop.appendChild(b);
+  };
+
+  addItem('📝', t('board_new_note'), () => createNote(Math.round(bx), Math.round(by)));
+  addItem('☑', t('board_new_todo'), () => {
+    const n = createTodoNote('', Math.round(bx), Math.round(by));
+    renderAll();
+    focusNewNote(n.id);
+  });
+  addItem('📥', t('board_paste_note'), async () => {
+    const text = await window.api.readClipboard();
+    if (text && text.trim()) createNoteWithContent(Math.round(bx), Math.round(by), text);
+    else toast(t('toast_paste_empty'));
+  });
+  addItem('▦', t('board_arrange'), () => arrangeNotes());
+
+  appendMenuAppearanceFooter(pop);
+  document.body.appendChild(pop);
+  const x = Math.max(8, Math.min(e.clientX, window.innerWidth - pop.offsetWidth - 8));
+  const y = Math.max(8, Math.min(e.clientY, window.innerHeight - pop.offsetHeight - 8));
+  pop.style.left = x + 'px';
+  pop.style.top = y + 'px';
+  activeColorPop = pop;
+  setTimeout(() => document.addEventListener('mousedown', closePopsOnce), 0);
+}
+
+// 在指定位置新建一条带初始内容的便签（右键「粘贴为新便签」用）
+function createNoteWithContent(x, y, content) {
+  const n = createNote(x, y);
+  n.content = content;
+  n.updatedAt = Date.now();
+  save();
+  renderAll();
+  focusNewNote(n.id);
+  return n;
+}
+
+
 function selectAllVisible() {
   visibleNotes().forEach((n) => selectedNotes.add(n.id));
   syncSelectedVisual();
@@ -1852,6 +2103,7 @@ function batchDeleteSelected() {
   const ids = Array.from(selectedNotes);
   if (!ids.length) return;
   const count = ids.length;
+  pushUndo();
   const idSet = new Set(ids);
   const removed = state.notes.filter((n) => idSet.has(n.id));
   state.notes = state.notes.filter((n) => !idSet.has(n.id));
@@ -1874,6 +2126,8 @@ function batchMoveSelected() {
 
 function setBatchGroup(groupId) {
   const count = selectedNotes.size;
+  if (!count) return;
+  pushUndo();
   const idSet = new Set(selectedNotes);
   state.notes.forEach((n) => {
     if (idSet.has(n.id)) n.groupId = groupId;
@@ -1932,6 +2186,7 @@ function purgeTrash() {
 function restoreTrashItem(id) {
   const idx = state.trash.findIndex((t) => t.note.id === id);
   if (idx < 0) return;
+  pushUndo();
   const { note } = state.trash[idx];
   state.trash.splice(idx, 1);
   state.notes.push(note);
@@ -2177,8 +2432,31 @@ function showNoteContextMenu(e, n) {
   });
   addItem('⏰', t('todo_remind'), () => openReminder(n));
   addItem('🎨', t('color'), () => openColorPop(noteAnchor(n), n, e.clientX, e.clientY));
+  addItem('📥', t(n.archived ? 'note_unarchive' : 'note_archive'), () => {
+    n.archived = !n.archived;
+    n.updatedAt = Date.now();
+    save();
+    renderAll();
+    toast(t(n.archived ? 'toast_archived' : 'toast_unarchived'));
+  });
+  if (n.type !== 'todo') {
+    addItem('👁', t(n.preview ? 'note_preview_off' : 'note_preview'), () => {
+      n.preview = !n.preview;
+      n.updatedAt = Date.now();
+      save();
+      renderAll();
+    });
+  }
+  addItem('📝', t('export_markdown'), async () => {
+    const fname = ((n.title || '').replace(/[\\/:*?"<>|]/g, '_').trim() || '便签') + '.md';
+    const md = noteToMarkdown(n, { image: (src) => src });
+    const r = await window.api.exportNoteMarkdown(md, fname);
+    if (r.ok) toast(t('toast_exported') + r.path);
+    else if (!r.canceled) toast(t('toast_export_fail') + r.error);
+  });
   addItem('🗑', t('delete'), () => deleteNote(n.id), true);
 
+  appendMenuAppearanceFooter(pop);
   document.body.appendChild(pop);
   const x = Math.max(8, Math.min(e.clientX, window.innerWidth - pop.offsetWidth - 8));
   const y = Math.max(8, Math.min(e.clientY, window.innerHeight - pop.offsetHeight - 8));
@@ -2314,6 +2592,33 @@ function openGroupPop(el, n) {
   pop.style.minWidth = '140px';
   pop.style.padding = '6px';
 
+  const assignGroup = (id) => { pushUndo(); n.groupId = id; n.updatedAt = Date.now(); save(); renderAll(); };
+
+  // 标签建议：按笔记文本 + 最近使用推荐最可能归属的分组（顶到最前面，便于快速选择）
+  const suggestIds = (typeof BoardLayout !== 'undefined' && BoardLayout.suggestGroupIds)
+    ? BoardLayout.suggestGroupIds(noteText(n), state.groups, state.settings.recentGroups)
+    : [];
+  if (suggestIds.length) {
+    const lbl = document.createElement('div');
+    lbl.className = 'color-pop-label';
+    lbl.textContent = t('group_suggest');
+    pop.appendChild(lbl);
+    suggestIds.forEach((id) => {
+      const g = state.groups.find((x) => x.id === id);
+      if (!g) return;
+      const b = document.createElement('button');
+      b.style.cssText = 'background:var(--accent-soft);border:none;color:var(--fg);padding:7px 10px;border-radius:7px;cursor:pointer;text-align:left;font-size:13px;font-family:inherit;';
+      b.innerHTML = `<span class="dot" style="display:inline-block;width:8px;height:8px;border-radius:50%;background:${g.color};margin-right:6px"></span>${escapeHtml(g.name)}${n.groupId === g.id ? ' ✓' : ''}`;
+      b.onmouseenter = () => (b.style.background = 'var(--accent)');
+      b.onmouseleave = () => (b.style.background = 'var(--accent-soft)');
+      b.onclick = (e) => { e.stopPropagation(); assignGroup(g.id); };
+      pop.appendChild(b);
+    });
+    const sep = document.createElement('div');
+    sep.style.cssText = 'height:1px;background:var(--border);margin:4px 0;';
+    pop.appendChild(sep);
+  }
+
   const items = [
     { label: t('ungrouped'), id: null },
     ...state.groups.map((g) => ({ label: g.name, id: g.id }))
@@ -2324,7 +2629,7 @@ function openGroupPop(el, n) {
     b.innerHTML = `${it.id ? `<span class="dot" style="display:inline-block;width:8px;height:8px;border-radius:50%;background:${(state.groups.find(g=>g.id===it.id)||{}).color};margin-right:6px"></span>` : ''}${escapeHtml(it.label)}${n.groupId === it.id ? ' ✓' : ''}`;
     b.onmouseenter = () => (b.style.background = 'var(--accent-soft)');
     b.onmouseleave = () => (b.style.background = 'transparent');
-    b.onclick = (e) => { e.stopPropagation(); n.groupId = it.id; n.updatedAt = Date.now(); save(); renderAll(); };
+    b.onclick = (e) => { e.stopPropagation(); assignGroup(it.id); };
     pop.appendChild(b);
   });
 
@@ -2337,6 +2642,7 @@ function openGroupPop(el, n) {
     promptModal(t('new_group'), t('group_name'), '').then((name) => {
       if (name) {
         const g = createGroup(name.trim());
+        pushUndo();
         n.groupId = g.id;
         n.updatedAt = Date.now();
         save();
@@ -2388,6 +2694,11 @@ function openGroupEditPop(anchorEl, g) {
     });
   });
 
+  addBtn(isGroupCollapsed(g.id) ? (t('group_expand') + (state.notes.some((n) => n.groupId === g.id) ? '（' + state.notes.filter((n) => n.groupId === g.id).length + '）' : '')) : `▾ ${t('group_collapse')}`, () => {
+    toggleGroupCollapse(g.id);
+  });
+
+
   const colorLabel = document.createElement('div');
   colorLabel.style.cssText = 'font-size:11px;color:var(--fg-dim);padding:8px 10px 2px;';
   colorLabel.textContent = t('change_color');
@@ -2413,6 +2724,7 @@ function openGroupEditPop(anchorEl, g) {
   addBtn(`<span style="color:#e5484d">🗑 ${t('delete_group')}</span>`, () => {
     confirmModal(t('delete_group'), `${t('confirm_delete_group_msg')}（${g.name}）`).then((ok) => {
       if (ok) {
+        pushUndo();
         state.groups = state.groups.filter((x) => x.id !== g.id);
         state.notes.forEach((n) => { if (n.groupId === g.id) n.groupId = null; });
         if (filter.group === g.id) filter.group = 'all';
@@ -2424,11 +2736,39 @@ function openGroupEditPop(anchorEl, g) {
     });
   });
 
+  appendMenuAppearanceFooter(pop);
   document.body.appendChild(pop);
   const r = anchorEl.getBoundingClientRect();
   pop.style.left = r.left + 'px';
   pop.style.top = Math.min(r.bottom + 4, window.innerHeight - pop.offsetHeight - 8) + 'px';
   activeColorPop = pop;
   setTimeout(() => document.addEventListener('mousedown', closePopsOnce), 0);
+}
+
+// 在右键菜单底部附加「外观」控制：亚克力开关 + 透明度滑杆（实时生效并持久化）
+function appendMenuAppearanceFooter(pop) {
+  if (typeof applyMenuAppearance !== 'function') return;
+  const row = document.createElement('div');
+  row.className = 'cm-opacity-row';
+  const op = (state.settings.menuOpacity != null) ? state.settings.menuOpacity : 88;
+  const acrylic = !!state.settings.menuAcrylic;
+  row.innerHTML = `<span>${t('ctx_menu_opacity')}</span>
+    <input type="range" class="cm-opacity" min="30" max="100" value="${op}" />
+    <label><input type="checkbox" class="cm-acrylic" ${acrylic ? 'checked' : ''}/>${t('ctx_menu_acrylic')}</label>`;
+  pop.appendChild(row);
+  const range = row.querySelector('.cm-opacity');
+  const cb = row.querySelector('.cm-acrylic');
+  range.addEventListener('input', (e) => {
+    e.stopPropagation();
+    state.settings.menuOpacity = Number(range.value);
+    applyMenuAppearance();
+    save();
+  });
+  cb.addEventListener('change', (e) => {
+    e.stopPropagation();
+    state.settings.menuAcrylic = cb.checked;
+    applyMenuAppearance();
+    save();
+  });
 }
 

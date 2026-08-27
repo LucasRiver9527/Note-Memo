@@ -37,6 +37,7 @@
     topBarOpacity: 100,
     topBarAcrylic: false,
     sortMode: 'updated',
+    shortcuts: {},
     noteOrder: [],
     groupOrders: {},
     customThemes: [],
@@ -51,6 +52,17 @@
     todoRemindColor: null,
     todoRemindOpacity: 100,
     noteColor: DEFAULT_NOTE_COLOR,
+    noteRadius: 12,
+    noteShadow: 0,
+    noteBorderWidth: 0,
+    noteBorderColor: null,
+    noteLetterSpacing: 0,
+    menuAcrylic: true,
+    menuOpacity: 88,
+    boardZoom: 1,
+    recentGroups: [],
+    collapsedGroups: {},
+    collapseSnapshot: {},
     glass: false,
     desktopMica: false,
     markdown: true,
@@ -82,6 +94,9 @@
     if (!Array.isArray(n.images)) n.images = [];
     if (!Array.isArray(n.files)) n.files = [];
     if (!Array.isArray(n.tables)) n.tables = [];
+    if (typeof n.archived !== 'boolean') n.archived = false;
+    if (typeof n.preview !== 'boolean') n.preview = false;
+    if (typeof n.opacity !== 'number') n.opacity = 100;
     const content = n.content || '';
     const missing = (n.images || []).filter((im) => im && content.indexOf('[[img:' + im.id + ']]') === -1);
     if (missing.length) n.content = content + (content ? '\n' : '') + missing.map((im) => '[[img:' + im.id + ']]').join('');

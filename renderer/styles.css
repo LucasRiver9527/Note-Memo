@@ -115,6 +115,8 @@ body.topbar-acrylic #titlebar {
   -webkit-app-region: no-drag;
 }
 .icon-btn:hover { background: var(--accent-soft); color: var(--fg); }
+.icon-btn:disabled { opacity: 0.4; cursor: default; }
+.icon-btn:disabled:hover { background: transparent; color: var(--fg-dim); }
 /* 窗口置顶：激活态用强调色底 + 强调色内描边，明显但不突兀 */
 .win-btn.active,
 body.topbar-acrylic .win-btn.active {
@@ -150,7 +152,7 @@ body.topbar-acrylic .win-btn.active:hover {
   position: relative; z-index: 1;
   flex: 0 0 42px; height: 42px;
   display: flex; align-items: center; gap: 8px;
-  padding: 0 14px; overflow-x: auto;
+  padding: 0 14px; overflow: hidden;
   border-bottom: 1px solid var(--border);
   background: var(--titlebar-bg);
 }
@@ -171,7 +173,18 @@ body.topbar-acrylic .note-count {
 body.topbar-acrylic .view-btn:not(.active):hover,
 body.topbar-acrylic .chip:not(.active):hover,
 body.topbar-acrylic .icon-btn:hover { color: var(--accent); }
-#filterbar::-webkit-scrollbar { height: 0; }
+/* 分组芯片区：可横向滚动，且可收缩，「＋分组」与右侧视图切换始终固定在两端 */
+#groupChips {
+  flex: 1 1 auto; min-width: 0;
+  display: flex; align-items: center; gap: 8px;
+  overflow-x: auto; scrollbar-width: none;
+  mask-image: linear-gradient(to right, #000 calc(100% - 18px), transparent);
+  -webkit-mask-image: linear-gradient(to right, #000 calc(100% - 18px), transparent);
+}
+#groupChips::-webkit-scrollbar { display: none; }
+#groupChips:empty {
+  flex: 0 1 auto;
+}
 
 .chip {
   flex: 0 0 auto;
@@ -186,6 +199,27 @@ body.topbar-acrylic .icon-btn:hover { color: var(--accent); }
 .chip .dot { width: 8px; height: 8px; border-radius: 50%; }
 .chip-sep { flex: 0 0 auto; width: 1px; height: 18px; background: var(--border); }
 .add-chip { border-style: dashed; }
+
+/* 分组芯片区左右滚动箭头（固定在两端，不随内容滚动；无可滚动时置灰/隐藏） */
+.chip-arrow {
+  flex: 0 0 auto; width: 22px; height: 22px; padding: 0;
+  background: transparent; border: none; color: var(--fg-dim);
+  cursor: pointer; font-family: inherit;
+  display: inline-flex; align-items: center; justify-content: center;
+  border-radius: 6px; opacity: 0.6; transition: color 0.15s, background 0.15s, opacity 0.15s;
+}
+/* 用 CSS 绘制细箭头，避免字符基线导致的「偏下」问题 */
+.chip-arrow::before {
+  content: ''; width: 7px; height: 7px; flex-shrink: 0;
+  border-left: 1.8px solid currentColor; border-bottom: 1.8px solid currentColor;
+  transform: rotate(45deg); margin-right: 1px;
+}
+#btnChipsRight::before {
+  border-left: none; border-right: 1.8px solid currentColor;
+  transform: rotate(-45deg); margin-right: 0; margin-left: 1px;
+}
+.chip-arrow:hover { color: var(--accent); opacity: 1; background: var(--accent-soft); }
+.chip-arrow:disabled { opacity: 0.25; cursor: default; color: var(--fg-dim); background: transparent; }
 
 .view-toggle {
   flex: 0 0 auto; margin-left: auto;
@@ -206,12 +240,65 @@ body.topbar-acrylic .icon-btn:hover { color: var(--accent); }
 
 /* ---------- 画布 ---------- */
 #canvas {
-  flex: 1; position: relative; overflow: auto; z-index: 1;
+  flex: 1; position: relative; overflow: auto;
+  z-index: 1;
 }
 #board {
-  position: relative;
-  width: 2600px; height: 1800px;
+  position: relative; width: 2600px; height: 1800px;
 }
+
+/* 画布右下角缩放/平移工具栏（仅画布视图显示；固定于视口右下角）。
+   默认只显示一个小圆钮，点击展开显示全部缩放/平移功能；观感跟随全局主题（--bg/--border/--fg），
+   <body.glass> 时叠加与便签一致的磨砂效果，避免在背景图上突兀；默认轻微透明、悬停全亮。 */
+#canvasToolbar {
+  position: fixed; bottom: 16px; right: 16px;
+  z-index: 4500; display: flex; align-items: center; gap: 2px;
+  padding: 3px;
+  background: color-mix(in srgb, var(--bg) 80%, transparent);
+  border: 1px solid color-mix(in srgb, var(--border) 82%, transparent);
+  border-radius: 999px;
+  box-shadow: 0 6px 20px rgba(0, 0, 0, 0.16);
+  opacity: 0.9; transition: opacity 0.16s ease, transform 0.16s ease;
+}
+body.glass #canvasToolbar {
+  -webkit-backdrop-filter: blur(14px) saturate(1.3);
+  backdrop-filter: blur(14px) saturate(1.3);
+  background: color-mix(in srgb, var(--bg) 46%, transparent);
+  border-color: color-mix(in srgb, var(--border) 60%, transparent);
+}
+#canvasToolbar:hover { opacity: 1; transform: translateY(-2px); }
+#canvasToolbar .ct-btn {
+  background: transparent; border: none; color: var(--fg);
+  width: 26px; height: 26px; border-radius: 50%; cursor: pointer;
+  font-size: 13px; line-height: 1; font-family: inherit; display: inline-flex;
+  align-items: center; justify-content: center; transition: background 0.14s, color 0.14s;
+  opacity: 0.9;
+}
+#canvasToolbar .ct-btn:hover { background: var(--accent-soft); color: var(--accent); opacity: 1; }
+#canvasToolbar .ct-toggle { font-size: 15px; }
+#canvasToolbar .ct-group { display: none; align-items: center; gap: 2px; }
+#canvasToolbar.expanded .ct-group { display: inline-flex; }
+#canvasToolbar .ct-label {
+  font-size: 11px; color: var(--fg); min-width: 38px; text-align: center;
+  font-variant-numeric: tabular-nums; opacity: 0.9;
+}
+
+/* 框选拉框 */
+#marquee {
+  position: absolute; z-index: 9000; pointer-events: none;
+  border: 1px solid var(--accent, #00b894);
+  background: color-mix(in srgb, var(--accent, #00b894) 14%, transparent);
+  border-radius: 2px;
+}
+
+/* 平移模式：空格命中后的画布手状光标与禁止文本选择 */
+body.pan-mode #canvas { cursor: grab; user-select: none; }
+body.pan-mode #canvas * { cursor: inherit; }
+body.panning #canvas { cursor: grabbing; user-select: none; }
+
+/* 分组芯片：折叠标记 */
+.chip .chip-collapsed { margin-left: 4px; font-size: 10px; color: var(--fg-dim); opacity: 0.8; }
+
 .empty-hint {
   position: absolute; inset: 0;
   display: flex; flex-direction: column; align-items: center; justify-content: center;
@@ -227,16 +314,36 @@ body.topbar-acrylic .icon-btn:hover { color: var(--accent); }
   width: 240px; min-height: 180px;
   background: var(--note-color, #f7d65a);
   color: #2d2f38;
-  border-radius: 12px;
-  box-shadow: 0 6px 20px rgba(0, 0, 0, 0.22);
+  border-radius: var(--note-radius, 12px);
+  box-shadow: var(--note-shadow, 0 6px 20px rgba(0, 0, 0, 0.22));
+  /* 边框宽度 0 时完全无边框（用 var 的 0 兜底；宽度>0 才显示边框颜色） */
+  border: var(--note-border-width, 0) solid var(--note-border-color, rgba(0,0,0,0.12));
   opacity: var(--note-opacity);
   display: flex; flex-direction: column;
   overflow: hidden;
-  transition: box-shadow 0.18s, transform 0.18s;
+  transition: box-shadow 0.18s;
 }
-.note:hover { box-shadow: 0 10px 30px rgba(0, 0, 0, 0.3); }
+.note:hover { box-shadow: var(--note-shadow-hover, 0 10px 30px rgba(0, 0, 0, 0.3)); }
 .note.dragging { box-shadow: 0 18px 50px rgba(0,0,0,0.4); opacity: 0.92; cursor: grabbing; z-index: 1000; transition: none; will-change: transform; }
 .note.pinned { box-shadow: 0 10px 30px rgba(0,0,0,0.34); }
+
+/* 归档置灰：整卡降饱和 + 半透明，弱化视觉、提示已归档 */
+.note.archived, .memo-row.archived, .doc-pick-item.archived { opacity: 0.5; filter: grayscale(0.85); }
+
+/* Markdown 预览：只读展示，隐藏图片删除/缩放手柄与表格编辑手柄 */
+.note-content.note-preview .inline-img .img-del,
+.note-content.note-preview .inline-img .img-resize,
+.doc-content.note-preview .inline-img .img-del,
+.doc-content.note-preview .inline-img .img-resize,
+.note-content.note-preview .note-table-block .tbl-toolbar { display: none; }
+.note-content.note-preview { cursor: default; }
+
+
+/* 便签内容：字距跟随全局设置 */
+.note .note-title,
+.note .note-content,
+.note .todo-item,
+.note .todo-add { letter-spacing: var(--font-letter-spacing, 0); }
 
 /* 批量选中态 */
 .note.selected, .memo-row.selected {
@@ -302,14 +409,14 @@ body.note-dragging .note.dragging {
 }
 .note-title:focus { background: rgba(127,127,127,0.18); }
 .note-tools {
-  display: flex; gap: 2px; flex-shrink: 0;
+  display: flex; gap: 2px; flex: 0 1 auto; margin-left: auto; min-width: 0;
   flex-wrap: wrap; justify-content: flex-start;
   opacity: 0.9; transition: opacity 0.15s;
 }
 .note:hover .note-tools { opacity: 1; }
 .note-tools button {
   background: rgba(127,127,127,0.26); border: none; cursor: pointer;
-  width: 22px; height: 22px; border-radius: 6px; font-size: 13px; line-height: 1;
+  width: 20px; height: 20px; border-radius: 6px; font-size: 12px; line-height: 1;
   color: inherit; display: inline-flex; align-items: center; justify-content: center;
   transition: background 0.12s;
 }
@@ -387,13 +494,15 @@ body.note-dragging .note.dragging {
 .note-foot .date { margin-left: auto; }
 
 .resize-handle {
-  position: absolute; right: 0; bottom: 0; width: 16px; height: 16px;
-  cursor: nwse-resize; border-bottom-right-radius: 12px;
+  position: absolute; right: 0; bottom: 0; width: 18px; height: 18px;
+  cursor: nwse-resize; border-bottom-right-radius: var(--note-radius, 12px);
 }
 .resize-handle::after {
-  content: ""; position: absolute; right: 4px; bottom: 4px;
+  content: ""; position: absolute;
+  right: calc(var(--note-radius, 12px) * 0.33);
+  bottom: calc(var(--note-radius, 12px) * 0.33);
   width: 7px; height: 7px;
-  border-right: 2px solid rgba(0,0,0,0.25); border-bottom: 2px solid rgba(0,0,0,0.25);
+  border-right: 2px solid rgba(0,0,0,0.28); border-bottom: 2px solid rgba(0,0,0,0.28);
 }
 
 /* ---------- 便签内图片 ---------- */
@@ -450,7 +559,7 @@ body.note-dragging .note.dragging {
 }
 .memo-head .note-title:focus { background: var(--accent-soft); }
 
-.memo-tools { display: flex; gap: 2px; flex-shrink: 0; opacity: 0.85; transition: opacity 0.15s; }
+.memo-tools { display: flex; gap: 2px; flex: 1 1 auto; min-width: 0; flex-wrap: wrap; opacity: 0.85; transition: opacity 0.15s; }
 .memo-row:hover .memo-tools { opacity: 1; }
 .memo-tools button {
   background: rgba(127,127,127,0.26); border: none; cursor: pointer;
@@ -492,6 +601,25 @@ body.note-dragging .note.dragging {
   border-radius: 10px; padding: 8px; box-shadow: var(--shadow);
   display: grid; grid-template-columns: repeat(5, 1fr); gap: 6px;
 }
+/* 右键菜单亚克力 + 透明度：背景用 --ctx-opacity 控制，开启磨砂时叠加 backdrop-filter */
+.color-pop.ctx-menu {
+  background: color-mix(in srgb, var(--bg) calc(var(--ctx-opacity, 88) * 1%), transparent);
+}
+body.menu-acrylic .color-pop.ctx-menu {
+  -webkit-backdrop-filter: blur(16px) saturate(1.35);
+  backdrop-filter: blur(16px) saturate(1.35);
+}
+/* 菜单底部「外观」小控件：吸附在菜单可视区底部（菜单可滚动时始终可见） */
+.ctx-menu .cm-opacity-row {
+  display: flex; align-items: center; gap: 6px;
+  padding: 6px 8px 2px; color: var(--fg-dim); font-size: 11px;
+  border-top: 1px solid var(--border); margin-top: 4px;
+  position: sticky; bottom: 0;
+  background: color-mix(in srgb, var(--bg) 86%, transparent);
+}
+.ctx-menu .cm-opacity-row input[type="range"] { flex: 1; accent-color: var(--accent); min-width: 60px; }
+.ctx-menu .cm-opacity-row label { display: inline-flex; align-items: center; gap: 4px; white-space: nowrap; cursor: pointer; }
+.ctx-menu .cm-opacity-row input[type="checkbox"] { width: 13px; height: 13px; accent-color: var(--accent); cursor: pointer; }
 .color-pop .swatch {
   width: 26px; height: 26px; border-radius: 7px; cursor: pointer;
   border: 2px solid transparent; transition: transform 0.1s;
@@ -646,6 +774,38 @@ body.maximized #reminderOverlay { border-radius: 0; }
 #reminderModal footer { padding: 12px 16px; display: flex; gap: 10px; justify-content: flex-end; }
 #reminderModal footer .sp-btn { width: auto; padding: 8px 18px; }
 
+/* 关闭确认弹窗 */
+#closeOverlay {
+  position: fixed; inset: 0; z-index: 5000;
+  background: rgba(0,0,0,0.35); display: flex; align-items: center; justify-content: center;
+  border-radius: 0;
+}
+body.maximized #closeOverlay { border-radius: 0; }
+#closeModal {
+  width: 360px; background: var(--topbar-bg, var(--bg)); border: 1px solid var(--border);
+  border-radius: 14px; box-shadow: var(--shadow); overflow: hidden;
+  animation: fadeIn 0.15s ease; max-width: calc(100vw - 32px);
+  color: var(--fg);
+}
+/* 与顶栏统一样式：开启亚克力时给关闭弹窗同款磨砂模糊（背景由 --topbar-bg 半透明驱动，与顶栏一致） */
+body.topbar-acrylic #closeModal {
+  -webkit-backdrop-filter: blur(18px) saturate(1.4);
+  backdrop-filter: blur(18px) saturate(1.4);
+}
+#closeModal header { padding: 14px 16px; font-weight: 700; border-bottom: 1px solid var(--border); display: flex; align-items: center; gap: 8px; color: var(--fg); }
+#closeModal header .close-head-icon { display: inline-flex; width: 20px; height: 20px; color: var(--accent); }
+#closeModal .close-body { padding: 22px 16px; text-align: center; }
+#closeModal .close-body > div { font-size: 13.5px; color: var(--fg); line-height: 1.6; font-weight: 600; }
+#closeModal footer { padding: 12px 16px; display: flex; gap: 8px; justify-content: center; flex-wrap: wrap; }
+#closeModal footer .sp-btn {
+  width: auto; padding: 8px 16px; font-size: 13px; font-family: inherit;
+  background: color-mix(in srgb, var(--bg) 70%, transparent); color: var(--fg);
+  border: 1px solid color-mix(in srgb, var(--border) 70%, transparent); font-weight: 600;
+}
+#closeModal footer .sp-btn:hover { background: color-mix(in srgb, var(--bg) 88%, transparent); color: var(--fg); }
+#closeModal footer .sp-btn.danger { color: #ff6b6b; border-color: rgba(255, 107, 107, 0.5); }
+#closeModal footer .sp-btn.danger:hover { background: rgba(255, 107, 107, 0.14); }
+
 /* ---------- 更新说明弹窗 ---------- */
 #changelogOverlay {
   position: fixed; inset: 0; z-index: 4000;
@@ -711,6 +871,25 @@ body.maximized #changelogOverlay { border-radius: 0; }
 .sort-item .sort-title { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .sort-item .sort-arrow { border: none; background: transparent; color: var(--fg-dim); cursor: pointer; font-size: 12px; padding: 2px 5px; border-radius: 4px; }
 .sort-item .sort-arrow:hover { background: var(--accent-soft); color: var(--fg); }
+
+/* 快捷键设置列表 */
+.shortcut-list { display: flex; flex-direction: column; gap: 6px; }
+.shortcut-item {
+  display: flex; align-items: center; gap: 10px;
+  background: var(--bg-soft); border: 1px solid var(--border); border-radius: 8px;
+  padding: 9px 10px; font-size: 13px;
+}
+.shortcut-item .sc-label { flex: 1; min-width: 0; }
+.shortcut-item .sc-scope { font-size: 11px; color: var(--fg-dim); opacity: 0.85; margin-top: 2px; }
+.shortcut-item .sc-key {
+  flex-shrink: 0; min-width: 96px; text-align: center;
+  border: 1px solid var(--border); border-radius: 6px; padding: 6px 10px;
+  font-size: 12px; cursor: pointer; background: var(--bg); color: var(--fg);
+  transition: border-color 0.15s, background 0.15s;
+}
+.shortcut-item .sc-key:hover { border-color: var(--accent); }
+.shortcut-item .sc-key.recording { border-color: var(--accent); background: var(--accent-soft); color: var(--accent); }
+.shortcut-item .sc-key.failed { border-color: #e5484d; color: #e5484d; }
 
 .dir-row { display: flex; gap: 8px; align-items: center; }
 .dir-row input {
@@ -824,11 +1003,13 @@ body.glass .memo-row {
   background-color: color-mix(in srgb, var(--note-color, #f7d65a) 46%, transparent) !important;
   -webkit-backdrop-filter: blur(11px) saturate(1.2);
   backdrop-filter: blur(11px) saturate(1.2);
-  border: 1px solid rgba(255, 255, 255, 0.22);
-  box-shadow: 0 8px 34px rgba(0, 0, 0, 0.26);
+  /* 玻璃态下阴影/圆角/边框尊重用户自定义（--note-* 由 applyNoteAppearance 写入）；
+     边框用玻璃专用变量：用户未自定义时保持一条玻璃细边（--note-glass-border-width 1px） */
+  box-shadow: var(--note-shadow, 0 8px 34px rgba(0, 0, 0, 0.26));
+  border: var(--note-glass-border-width, 1px) solid var(--note-glass-border-color, rgba(255, 255, 255, 0.22));
 }
 body.glass .note:hover,
-body.glass .memo-row:hover { box-shadow: 0 12px 40px rgba(0, 0, 0, 0.32); }
+body.glass .memo-row:hover { box-shadow: var(--note-shadow-hover, 0 12px 40px rgba(0, 0, 0, 0.32)); }
 
 /* ---------- 内联图片 ---------- */
 .note-content .inline-img,
@@ -948,6 +1129,13 @@ body.glass .memo-row:hover { box-shadow: 0 12px 40px rgba(0, 0, 0, 0.32); }
 .about-rows { display: flex; flex-direction: column; margin-bottom: 4px; }
 .about-row { display: flex; justify-content: space-between; padding: 9px 0; border-bottom: 1px solid var(--border); font-size: 13.5px; }
 .about-row span:first-child { color: var(--fg-dim); }
+/* 开源仓库按钮 */
+.repo-btn {
+  background: var(--accent-soft); color: var(--accent); border: 1px solid var(--border);
+  padding: 5px 12px; border-radius: 8px; cursor: pointer; font-family: inherit;
+  font-size: 12.5px; transition: background 0.15s, border-color 0.15s, color 0.15s;
+}
+.repo-btn:hover { border-color: var(--accent); background: var(--accent); color: #fff; }
 
 /* ---------- 提醒设置 ---------- */
 .sound-item {
@@ -1045,7 +1233,9 @@ body.bright-bg .doc-fmt-btn,
 body.bright-bg .doc-back {
   background: color-mix(in srgb, var(--bg-soft) 78%, transparent);
   border-color: rgba(127, 127, 127, 0.5);
-  box-shadow: 0 1px 6px rgba(0, 0, 0, 0.3);
+  /* 去掉分组/操作芯片的向下投影：在亚克力/复杂背景下会让边缘出现奇怪阴影，
+     可读性已由半透明底 + 边框保证 */
+  box-shadow: none;
 }
 /* 便签正文在复杂背景下：仅当文字为浅色时加投影提升可读性，深色文字保持锐利 */
 body.bright-bg .note.note-text-light .note-content,
@@ -1092,8 +1282,8 @@ body.maximized #alarmOverlay { border-radius: 0; }
 #alarmModal .alarm-icon { font-size: 42px; }
 #alarmModal .alarm-title { font-size: 16px; font-weight: 700; margin-top: 8px; }
 #alarmModal .alarm-text { font-size: 13px; color: var(--fg-dim); margin-top: 8px; white-space: pre-wrap; word-break: break-word; max-height: 160px; overflow-y: auto; line-height: 1.6; }
-#alarmModal footer { padding: 12px 16px; display: flex; justify-content: center; }
-#alarmModal footer .sp-btn { width: auto; padding: 8px 26px; }
+#alarmModal footer { padding: 12px 16px; display: flex; justify-content: center; flex-wrap: wrap; gap: 6px; }
+#alarmModal footer .sp-btn { width: auto; padding: 8px 18px; }
 
 /* ---------- 表格 ---------- */
 .note-table-block {
@@ -1151,3 +1341,40 @@ body.maximized #alarmOverlay { border-radius: 0; }
 .table-toolbar button:hover { background: var(--accent-soft); color: var(--accent); }
 
 .doc-tb-sep { width: 1px; height: 18px; background: var(--border); margin: 0 2px; flex-shrink: 0; }
+
+/* ---------- 亚克力/透明 + 复杂背景下的顶栏控件可读性 ---------- */
+/* 顶栏图标按钮与分组滚动箭头在「透明/亚克力/背景图」下会因失去局部底而看不清；
+   沿用与「分组芯片 / ＋分组 / 批量选中」一致的磨砂胶囊 + 细边框，保证统一美观且清晰。 */
+body.topbar-acrylic .icon-btn,
+body.topbar-acrylic .chip-arrow,
+body.bright-bg .icon-btn,
+body.bright-bg .chip-arrow {
+  background: var(--bg-soft);
+  border: 1px solid var(--border);
+  color: var(--fg);
+}
+body.topbar-acrylic .chip-arrow,
+body.bright-bg .chip-arrow { opacity: 0.9; }
+body.topbar-acrylic .icon-btn:hover,
+body.bright-bg .icon-btn:hover,
+body.topbar-acrylic .chip-arrow:hover,
+body.bright-bg .chip-arrow:hover {
+  background: var(--accent-soft);
+  border-color: var(--accent);
+  color: var(--accent);
+}
+body.topbar-acrylic .icon-btn:disabled,
+body.bright-bg .icon-btn:disabled,
+body.topbar-acrylic .chip-arrow:disabled,
+body.bright-bg .chip-arrow:disabled {
+  opacity: 0.5;
+  color: var(--fg);
+  background: var(--bg-soft);
+  border-color: var(--border);
+}
+body.topbar-acrylic .icon-btn:disabled:hover,
+body.bright-bg .icon-btn:disabled:hover {
+  background: var(--bg-soft);
+  border-color: var(--border);
+  color: var(--fg);
+}

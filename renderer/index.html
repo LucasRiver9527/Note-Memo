@@ -27,6 +27,8 @@
         <button class="tb-btn secondary" id="btnQuickArrange" data-i18n="quick_arrange" data-i18n-title="quick_arrange" title="一键整理">⚡ 一键整理</button>
         <button class="tb-btn secondary" id="btnSaveOrder" data-i18n="save_current_order" data-i18n-title="save_current_order" title="保存当前排序">💾 保存排序</button>
         <button class="tb-btn secondary" id="btnBatchToggle" data-i18n="batch_select" data-i18n-title="batch_select" title="批量选中">☑ 批量选中</button>
+        <button class="icon-btn" id="btnUndo" data-i18n-title="undo" title="撤销 (Ctrl+Z)" disabled>↩</button>
+        <button class="icon-btn" id="btnRedo" data-i18n-title="redo" title="重做 (Ctrl+Shift+Z)" disabled>↪</button>
         <button class="icon-btn" id="btnSettings" data-i18n-title="global_settings" title="全局设置">⚙</button>
         <span class="tb-divider"></span>
         <button class="icon-btn win-btn" id="btnPin" data-i18n-title="always_on_top" title="窗口置顶">📌</button>
@@ -36,8 +38,11 @@
     <nav id="filterbar">
       <button class="chip active" data-group="all" data-i18n="all">全部</button>
       <button class="chip" data-group="ungrouped" data-i18n="ungrouped">未分组</button>
+      <button class="chip" id="btnArchiveFilter" data-i18n="archive_view">归档</button>
       <span class="chip-sep"></span>
+      <button class="chip-arrow" id="btnChipsLeft" data-i18n-title="chips_scroll_left" title="向左滚动分组" aria-label="向左滚动分组"></button>
       <div id="groupChips"></div>
+      <button class="chip-arrow" id="btnChipsRight" data-i18n-title="chips_scroll_right" title="向右滚动分组" aria-label="向右滚动分组"></button>
       <button class="chip add-chip" id="btnAddGroup" data-i18n="add_group" data-i18n-title="new_group" title="新建分组">＋ 分组</button>
       <div class="view-toggle">
         <button class="view-btn active" id="viewBoard" data-i18n-title="board_view" title="便签视图">▦</button>
@@ -66,6 +71,16 @@
         <p data-i18n="no_notes">还没有便签</p>
         <p class="sub" data-i18n="no_notes_sub">双击空白处或点击右上角「＋ 新建」创建</p>
       </div>
+      <div id="canvasToolbar" class="hidden">
+        <button class="ct-btn ct-toggle" id="ctExpand" data-i18n-title="canvas_zoom_toggle" title="画布缩放 / 平移">⤢</button>
+        <span id="ctGroup" class="ct-group">
+          <button class="ct-btn" id="btnZoomOut" data-i18n-title="canvas_zoom_out" title="缩小">−</button>
+          <span class="ct-label" id="zoomLabel">100%</span>
+          <button class="ct-btn" id="btnZoomIn" data-i18n-title="canvas_zoom_in" title="放大">＋</button>
+          <button class="ct-btn" id="btnZoomReset" data-i18n-title="canvas_zoom_reset" title="重置缩放">⟳</button>
+          <button class="ct-btn" id="btnZoomPan" data-i18n-title="canvas_pan_hint" title="按住空格拖动、或按住鼠标中键平移画布">✋</button>
+        </span>
+      </div>
     </main>
   </div>
 
@@ -82,6 +97,7 @@
           <button class="sp-nav-item" data-tab="font" data-i18n="tab_font">🔤 字体</button>
           <button class="sp-nav-item" data-tab="reminder" data-i18n="tab_reminder">⏰ 提醒</button>
           <button class="sp-nav-item" data-tab="sort" data-i18n="tab_sort">↕ 排序</button>
+          <button class="sp-nav-item" data-tab="shortcuts" data-i18n="tab_shortcuts">⌨ 快捷键</button>
           <button class="sp-nav-item" data-tab="backup" data-i18n="tab_backup">⬇ 备份</button>
           <button class="sp-nav-item" data-tab="trash" data-i18n="tab_trash">🗑 回收站</button>
           <button class="sp-nav-item" data-tab="data" data-i18n="tab_data">📦 数据</button>
@@ -139,20 +155,21 @@
               </label>
               <p class="sp-hint" data-i18n="bg_readability_hint">背景偏亮或较复杂时提升对比保证界面与便签文字清晰，尽量保留背景原色。</p>
 
-              <h4 data-i18n="topbar_bg">顶栏与背景</h4>
+              <h4 data-i18n="topbar_bg">标题栏与操作栏</h4>
               <label class="color-field">
-                <span data-i18n="topbar_color">顶栏底色</span>
+                <span data-i18n="topbar_color">顶部区域底色</span>
                 <input type="color" id="topBarColor" value="#000000" />
               </label>
               <label class="field">
-                <span data-i18n="topbar_opacity">顶栏透明度</span>
+                <span data-i18n="topbar_opacity">顶部区域透明度</span>
                 <input type="range" id="topBarOpacity" min="0" max="100" value="100" />
               </label>
               <label class="field">
-                <span data-i18n="topbar_acrylic">顶栏亚克力模糊</span>
+                <span data-i18n="topbar_acrylic">顶部区域亚克力模糊</span>
                 <input type="checkbox" id="topBarAcrylicToggle" />
               </label>
-              <p class="sp-hint" data-i18n="topbar_follow_hint">与批量选中操作栏、筛选栏统一，跟随此处自定义（颜色 / 透明度 / 亚克力模糊）</p>
+              <p class="sp-hint" data-i18n="topbar_follow_hint">标题栏、筛选栏、批量选中操作栏共用此配色（颜色 / 透明度 / 亚克力模糊）</p>
+              <h4 data-i18n="bg_win_opacity">背景 / 窗口</h4>
               <label class="field">
                 <span data-i18n="bg_opacity">背景图片透明度</span>
                 <input type="range" id="bgOpacity" min="0" max="100" value="100" />
@@ -210,6 +227,25 @@
                 <input type="range" id="noteOpacity" min="60" max="100" value="100" />
               </label>
 
+              <h4 data-i18n="note_style">便签样式</h4>
+              <label class="field">
+                <span data-i18n="note_radius">圆角</span>
+                <input type="range" id="noteRadius" min="0" max="28" value="12" />
+              </label>
+              <label class="field">
+                <span data-i18n="note_shadow">阴影</span>
+                <input type="range" id="noteShadow" min="0" max="3" step="1" value="0" />
+              </label>
+              <label class="field">
+                <span data-i18n="note_border_width">边框粗细</span>
+                <input type="range" id="noteBorderWidth" min="0" max="4" step="1" value="0" />
+              </label>
+              <label class="color-field">
+                <span data-i18n="note_border_color">边框颜色</span>
+                <input type="color" id="noteBorderColor" value="#000000" />
+              </label>
+              <p class="sp-hint" data-i18n="note_style_hint">圆角、阴影、边框实时作用于所有便签卡片。</p>
+
               <h4 data-i18n="effects">效果</h4>
               <label class="field">
                 <span data-i18n="glass">便签玻璃拟态</span>
@@ -244,6 +280,10 @@
             <label class="field">
               <span data-i18n="font_size">字体大小</span>
               <input type="range" id="fontSize" min="11" max="22" value="14" />
+            </label>
+            <label class="field">
+              <span data-i18n="font_letter_spacing">字体字距</span>
+              <input type="range" id="noteLetterSpacing" min="0" max="4" step="0.5" value="0" />
             </label>
             <label class="color-field">
               <span data-i18n="font_color">字体颜色</span>
@@ -306,6 +346,16 @@
             </div>
             <h4 data-i18n="custom_order">自定义顺序</h4>
             <div class="sort-list" id="sortList"></div>
+          </section>
+
+          <!-- 快捷键 -->
+          <section class="sp-tab hidden" data-tab="shortcuts">
+            <h4 data-i18n="shortcuts_title">快捷键</h4>
+            <p class="sp-hint" data-i18n="shortcuts_hint">点击下方的快捷键即可重新按键更改。全局快捷键在应用最小化/隐藏时也生效；编辑快捷键仅在编辑器内生效。若被系统或其它应用占用将无法保存。</p>
+            <div id="shortcutList" class="shortcut-list"></div>
+            <div class="stack" style="margin-top:16px">
+              <button class="sp-btn ghost" id="btnResetShortcuts" data-i18n="shortcuts_reset">♻ 恢复默认快捷键</button>
+            </div>
           </section>
 
           <!-- 备份 -->
@@ -378,13 +428,14 @@
             <div class="about-card">
               <div class="about-logo">▣</div>
               <div class="about-name" data-i18n="app_name">便签</div>
-              <div class="about-ver">v<span id="aboutVersion">1.2.2</span></div>
+              <div class="about-ver">v<span id="aboutVersion">1.2.5-preview</span></div>
               <div class="about-desc" data-i18n="about_desc">美观可定制的 Windows 桌面便签。</div>
             </div>
             <h4 data-i18n="about_info">软件信息</h4>
             <div class="about-rows">
               <div class="about-row"><span data-i18n="about_author">作者</span><span>LucasRiver9527</span></div>
               <div class="about-row"><span data-i18n="about_license">协议</span><span>MIT</span></div>
+              <div class="about-row"><span data-i18n="about_repo">开源地址</span><button class="repo-btn" id="btnOpenRepo" data-i18n-title="about_repo" title="在浏览器中打开开源仓库">GitHub ↗</button></div>
             </div>
             <h4 data-i18n="changelog_title">更新说明</h4>
             <button class="sp-btn ghost" id="btnChangelog" data-i18n="changelog_open" style="width:auto;padding:8px 14px">✨ 查看更新说明</button>
@@ -421,6 +472,9 @@
         <div id="alarmBody" class="alarm-text"></div>
       </div>
       <footer>
+        <button class="sp-btn ghost" id="btnAlarmSnooze5" data-i18n="alarm_snooze_5">⏱ 5 分钟</button>
+        <button class="sp-btn ghost" id="btnAlarmSnooze10" data-i18n="alarm_snooze_10">⏱ 10 分钟</button>
+        <button class="sp-btn ghost" id="btnAlarmSnooze30" data-i18n="alarm_snooze_30">⏱ 30 分钟</button>
         <button class="sp-btn primary" id="btnAlarmDismiss" data-i18n="alarm_dismiss">关闭闹铃</button>
       </footer>
     </div>
@@ -428,12 +482,30 @@
 
   <div id="toast" class="hidden"></div>
 
+  <!-- 关闭确认弹窗（主题化选择：隐藏到任务栏 / 退出应用 / 取消） -->
+  <div id="closeOverlay" class="hidden">
+    <div id="closeModal">
+      <header>
+        <span class="close-head-icon"><svg width="20" height="20" viewBox="0 0 24 24" fill="none" aria-hidden="true"><rect x="3" y="4" width="18" height="16" rx="3" stroke="currentColor" stroke-width="2"/><line x1="3" y1="9" x2="21" y2="9" stroke="currentColor" stroke-width="2"/></svg></span>
+        <span data-i18n="close_title">关闭便签</span>
+      </header>
+      <div class="close-body">
+        <div data-i18n="close_ask">彻底退出应用，还是最小化隐藏到任务栏（托盘）继续运行？</div>
+      </div>
+      <footer>
+        <button class="sp-btn ghost" id="btnCloseHide" data-i18n="close_hide">隐藏到任务栏（托盘）</button>
+        <button class="sp-btn danger" id="btnCloseQuit" data-i18n="close_quit">退出应用</button>
+        <button class="sp-btn ghost" id="btnCloseCancel" data-i18n="cancel">取消</button>
+      </footer>
+    </div>
+  </div>
+
   <!-- 更新说明弹窗 -->
   <div id="changelogOverlay" class="hidden">
     <div id="changelogModal">
       <header>
         <span data-i18n="changelog_title">更新说明</span>
-        <span class="cl-ver" id="clVersion">v1.2.0</span>
+        <span class="cl-ver" id="clVersion">v1.2.5-preview</span>
       </header>
       <div class="cl-body">
         <ul id="changelogList"></ul>
@@ -445,6 +517,7 @@
   </div>
 
   <script src="logic.js"></script>
+<script src="shortcuts.js"></script>
 <script src="state.js"></script>
 <script src="board-layout.js"></script>
 <script src="sort-state.js"></script>

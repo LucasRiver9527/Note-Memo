@@ -9,6 +9,20 @@ test('DEFAULT_SETTINGS 默认值完整且稳定', () => {
   assert.strictEqual(DEFAULT_SETTINGS.viewMode, 'board');
   assert.strictEqual(DEFAULT_SETTINGS.language, 'zh');
   assert.strictEqual(DEFAULT_SETTINGS.markdown, true);
+  // 便签外观自定义默认值（阶段 B：新自定义美化）
+  assert.strictEqual(DEFAULT_SETTINGS.noteRadius, 12);
+  assert.strictEqual(DEFAULT_SETTINGS.noteShadow, 0);
+  assert.strictEqual(DEFAULT_SETTINGS.noteBorderWidth, 0);
+  assert.strictEqual(DEFAULT_SETTINGS.noteBorderColor, null);
+  assert.strictEqual(DEFAULT_SETTINGS.noteLetterSpacing, 0);
+  // 右键菜单外观（阶段 C：亚克力 + 透明度）
+  assert.strictEqual(DEFAULT_SETTINGS.menuAcrylic, true);
+  assert.strictEqual(DEFAULT_SETTINGS.menuOpacity, 88);
+  // 阶段 B：使用逻辑改良（画布缩放 / 最近使用分组 / 分组折叠）
+  assert.strictEqual(DEFAULT_SETTINGS.boardZoom, 1);
+  assert.deepStrictEqual(DEFAULT_SETTINGS.recentGroups, []);
+  assert.deepStrictEqual(DEFAULT_SETTINGS.collapsedGroups, {});
+  assert.deepStrictEqual(DEFAULT_SETTINGS.collapseSnapshot, {});
 });
 
 test('getSetting 取值入口：未定义回退默认值，显式覆盖优先', () => {

@@ -4,6 +4,7 @@ const {
   hexToRgba, isDarkColor, autoTextColor, escapeHtml, luminance, contrastRatio,
   refIdsOf, cleanupRefs, sortNotes, tableToMarkdown, noteToMarkdown, referencedMedia, parseNullSeparated, hdropString,
   setRenderLocale, formatInlineText, tableBlockHtml, renderRichContent, sanitizeCss,
+  noteShadowCss,
   I18N, I18N_MERGED, T, mergeI18n
 } = require('../renderer/logic.js');
 
@@ -350,3 +351,14 @@ function expectNulPaths(str, expected) {
   const got = str.split('\0').filter((p) => p && p.length > 1);
   assert.deepStrictEqual(got, expected);
 }
+
+test('noteShadowCss 阴影强度逐级加深且 clamp 到 0..3', () => {
+  assert.strictEqual(noteShadowCss(0).base, '0 6px 20px rgba(0,0,0,0.22)');
+  assert.strictEqual(noteShadowCss(3).base, '0 16px 46px rgba(0,0,0,0.5)');
+  // hover 至少等于 base，且强度上限为 3
+  assert.strictEqual(noteShadowCss(3).hover, '0 16px 46px rgba(0,0,0,0.5)');
+  assert.strictEqual(noteShadowCss(2).hover, '0 16px 46px rgba(0,0,0,0.5)');
+  // 越界 / 负数都 clamp
+  assert.strictEqual(noteShadowCss(99).base, '0 16px 46px rgba(0,0,0,0.5)');
+  assert.strictEqual(noteShadowCss(-5).base, '0 6px 20px rgba(0,0,0,0.22)');
+});

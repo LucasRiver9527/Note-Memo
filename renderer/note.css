@@ -39,12 +39,13 @@ body.glass #note {
 }
 .dn-btn:hover { background: rgba(127,127,127,0.45); }
 
-.dn-body { flex: 1; padding: 4px 12px 12px; user-select: text; overflow-y: auto; }
+.dn-body { flex: 1; padding: 4px 12px 12px; user-select: text; overflow-y: auto; letter-spacing: var(--font-letter-spacing, 0); }
 .dn-content {
   min-height: 90px;
   white-space: pre-wrap; word-break: break-word; overflow-wrap: anywhere;
   outline: none; user-select: text; cursor: text;
   color: inherit; font-family: inherit; font-size: var(--note-font-size, var(--font-size, 14px)); font-weight: 500; line-height: 1.55;
+  letter-spacing: var(--font-letter-spacing, 0);
 }
 .dn-content:empty::before { content: attr(data-placeholder); color: rgba(127,127,127,0.55); }
 .dn-content a.note-link {
