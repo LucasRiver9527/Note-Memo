@@ -124,11 +124,15 @@ npm test             # 单元测试（Node 内置框架）
 npm run test:e2e     # 端到端测试（Playwright）
 npm run dist         # 打包生成安装包（输出到 release/）
 npm run dist:publish # 打包并上传到 GitHub Releases（需 GH_TOKEN）
+npm run dist:publish:preview # 发布预览版（GitHub Release 标记为 Pre-release）
 ```
 
 - **技术栈**：Electron 33 · electron-builder 25 · electron-updater 6 · Playwright · 原生 HTML / CSS / JS
 - **版本管理**：仅改 `package.json` 的 `version`，应用内由 `app.getVersion()` 统一注入。
-- **自动更新**：经 `electron-updater` 接通 GitHub Releases（`package.json` 的 `build.publish` 已配好）。
+- **自动更新**：经 `electron-updater` 接通 GitHub Releases（`package.json` 的 `build.publish` 已配好）；
+  已显式锁定稳定通道（`allowPrerelease=false` + `channel=latest`），预发布版本也能升级到稳定版。
+- **预览版发布**：版本设为 `x.y.z-preview` 并执行 `npm run dist:publish:preview`，让 GitHub Release 标记为
+  **Pre-release**（否则 `releases/latest` 会把它当成稳定版推给所有用户）。
 - **代码签名**：设 `CSC_LINK`（证书路径/base64）与 `CSC_KEY_PASSWORD` 即自动签名；正式分发建议 OV / EV 证书或 Azure Trusted Signing（未签时会触发 SmartScreen「未知发布者」）。
 
 ## 📄 更新日志

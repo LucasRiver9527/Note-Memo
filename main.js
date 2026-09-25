@@ -949,7 +949,8 @@ function setupIpc() {
     if (!app.isPackaged) return { ok: false, error: 'dev' };
     try {
       const result = await autoUpdater.checkForUpdates();
-      return { ok: true, isUpdateAvailable: !!(result && result.isUpdateAvailable) };
+      const isUpdateAvailable = !!(result && result.isUpdateAvailable) && acceptUpdateInfo(result.updateInfo);
+      return { ok: true, isUpdateAvailable };
     } catch (e) { return { ok: false, error: (e && e.message) || String(e) }; }
   });
   ipcMain.handle('update:download', async () => {
@@ -1076,6 +1077,14 @@ function getShortcutsPayload() {
   };
 }
 
+// 稳定版不接受预发布更新：防止发布流程误把 `x.y.z-preview` 包发成正式版（releases/latest 返回预发布），
+// 把稳定用户也推到预发布版本。返回 true 表示该更新信息可接受。
+function acceptUpdateInfo(info) {
+  if (!info || !info.version) return false;
+  const isPre = (v) => /-/.test(String(v || ''));
+  return !(isPre(app.getVersion()) === false && isPre(info.version));
+}
+
 function setupAutoUpdate() {
   if (!app.isPackaged) return;
   if (process.env.MYNOTES_DISABLE_AUTOUPDATE === '1') return;
@@ -1089,6 +1098,7 @@ function setupAutoUpdate() {
     autoUpdater.channel = 'latest';
     autoUpdater.on('error', (e) => { console.error('[update] error:', e && e.message); });
     autoUpdater.on('update-available', (info) => {
+      if (!acceptUpdateInfo(info)) return;
       if (mainWindow && !mainWindow.isDestroyed()) mainWindow.webContents.send('update:available', info);
     });
     autoUpdater.on('update-downloaded', (info) => {
