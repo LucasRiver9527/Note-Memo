@@ -1528,6 +1528,38 @@ test('右键菜单：默认精简，删除固定一级，开关切换即时生�
   }
 });
 
+test('右键菜单：精简模式展开「格式 ▸」时菜单宽度不变，仅下方展开', async () => {
+  const now = Date.now();
+  const mk = (id, title, x, y) => ({
+    id, title, content: '内容' + id, type: 'note', items: [], images: [], files: [], tables: [],
+    color: '#93f1ce', textColor: null, groupId: null, pinned: false, desktopPin: false, reminder: null,
+    x, y, positionAll: { x, y }, w: 240, h: 200, z: 1, createdAt: now, updatedAt: now
+  });
+  const seed = { version: 2, settings: { viewMode: 'board', sortMode: 'updated' }, groups: [], trash: [], notes: [mk('a', '标题A', 20, 20)] };
+  const ctx = await openApp({ seed });
+  try {
+    await ctx.win.locator('#board .note .note-content').first().click({ button: 'right', force: true });
+    const pop = ctx.win.locator('.ctx-menu');
+    await expect(pop).toBeVisible();
+    const widthOf = () => pop.evaluate((el) => Math.round(el.getBoundingClientRect().width));
+    const collapsedW = await widthOf();
+
+    // 展开「格式 ▸」（精简模式下第一个二级开关）
+    const fmt = pop.locator('button[aria-expanded]').first();
+    await expect(fmt).toBeEnabled();
+    await fmt.click({ force: true });
+    // 对齐项与高亮色板在下方展开
+    await expect(pop.locator('button', { hasText: '左对齐' })).toBeVisible();
+    await expect(pop.locator('button', { hasText: '右对齐' })).toBeVisible();
+    await expect(pop.getByText('高亮颜色')).toBeVisible();
+
+    // 关键：展开后菜单宽度不变（不再被高亮色板撑成完整模式那样宽）
+    expect(await widthOf()).toBe(collapsedW);
+  } finally {
+    await closeApp(ctx);
+  }
+});
+
 test('菜单外观归位：右键菜单不再挂透明度/亚克力页脚，改由设置页控制', async () => {
   const now = Date.now();
   const mk = (id, x, y) => ({

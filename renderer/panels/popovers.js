@@ -329,6 +329,10 @@ function showNoteContextMenu(e, n) {
     addItem('🗑', t('delete'), fnDelete, true);
 
     // 菜单外观（透明度/亚克力）已归位到「设置 → 外观」，不再挂在每个右键菜单底部
+    // 改为：精简模式固定为「收起时」的宽度 → 展开二级（尤其「格式」里的高亮色板）时菜单不再被撑宽，
+    // 只在下方展开内容（与「便签 ▸」一致）；完整模式保持自适应宽度。
+    pop.style.width = '';
+    if (compact) pop.style.width = pop.offsetWidth + 'px';
     positionMenu();
   };
 
