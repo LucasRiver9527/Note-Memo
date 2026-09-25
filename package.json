@@ -49,7 +49,8 @@
       {
         "provider": "github",
         "owner": "LucasRiver9527",
-        "repo": "Note-Memo"
+        "repo": "Note-Memo",
+        "releaseType": "release"
       }
     ],
     "artifactName": "MyNotes-Setup-${version}.${ext}"
