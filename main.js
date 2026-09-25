@@ -954,7 +954,7 @@ function setupIpc() {
     } catch (e) { return { ok: false, error: (e && e.message) || String(e) }; }
   });
   ipcMain.handle('update:download', async () => {
-    try { autoUpdater.downloadUpdate(); return { ok: true }; }
+    try { await autoUpdater.downloadUpdate(); return { ok: true }; }
     catch (e) { return { ok: false, error: (e && e.message) || String(e) }; }
   });
   ipcMain.handle('update:install', async () => {

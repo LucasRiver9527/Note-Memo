@@ -111,7 +111,11 @@ function registerIpc() {
   window.api.onUpdateAvailable(async (info) => {
     const ver = (info && info.version) || '';
     const ok = await confirmModal(t('update_available_title'), t('update_available_msg').replace('{v}', ver));
-    if (ok) window.api.downloadUpdate();
+    if (ok) {
+      // 下载失败不再静默：主进程 downloadUpdate 的异常会回传（此前未 await 导致点了没反应）
+      const r = await window.api.downloadUpdate();
+      if (r && r.ok === false) toast(t('update_download_fail') + (r.error ? (' ' + r.error) : ''));
+    }
   });
   window.api.onUpdateDownloaded(async (info) => {
     const ver = (info && info.version) || '';
