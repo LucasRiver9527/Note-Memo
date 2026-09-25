@@ -1082,6 +1082,11 @@ function setupAutoUpdate() {
   try {
     autoUpdater.autoDownload = false;
     autoUpdater.autoInstallOnAppQuit = true;
+    // 固定走稳定通道：若版本号带 -preview 等预发布段，electron-updater 会自动 allowPrerelease=true
+    // 并把预发布段（如 preview）当作更新通道，导致永远收不到稳定版更新（v1.2.5 发布时踩到）。
+    // 显式锁定稳定通道：预发布构建也能升级到稳定版，不再被卡在 preview 通道。
+    autoUpdater.allowPrerelease = false;
+    autoUpdater.channel = 'latest';
     autoUpdater.on('error', (e) => { console.error('[update] error:', e && e.message); });
     autoUpdater.on('update-available', (info) => {
       if (mainWindow && !mainWindow.isDestroyed()) mainWindow.webContents.send('update:available', info);
