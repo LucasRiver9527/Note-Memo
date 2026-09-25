@@ -1,0 +1,29 @@
+{
+  "compilerOptions": {
+    "allowJs": true,
+    "checkJs": true,
+    "noEmit": true,
+    "target": "ES2022",
+    "module": "CommonJS",
+    "moduleResolution": "node",
+    "lib": ["ES2022", "DOM"],
+    "types": ["node"],
+    "skipLibCheck": true,
+    "strict": false,
+    "forceConsistentCasingInFileNames": true
+  },
+  "include": [
+    "types.d.ts",
+    "data-io.js",
+    "ipc-contract.js",
+    "renderer/logic.js",
+    "renderer/state.js",
+    "renderer/sort-state.js",
+    "renderer/table-logic.js",
+    "renderer/shortcuts.js",
+    "renderer/board-layout.js",
+    "renderer/core/dom.js",
+    "renderer/core/app-state.js",
+    "renderer/core/undo-history.js"
+  ]
+}

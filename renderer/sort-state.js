@@ -7,7 +7,7 @@
     module.exports = factory();
   } else {
     const fns = factory();
-    root.SortState = fns;
+    root['SortState'] = fns;
     Object.keys(fns).forEach((k) => { root[k] = fns[k]; });
   }
 }(typeof self !== 'undefined' ? self : this, function () {
@@ -31,12 +31,14 @@
   }
 
   // 取便签在当前视图作用域下的位置：「全部」用 positionAll，其余用便签自身 x,y。
+  /** @param {Note} n @param {string} filterGroup @returns {Partial<Pos>} */
   function posOf(n, filterGroup) {
     if (filterGroup === ALL && n && n.positionAll && typeof n.positionAll.x === 'number') return n.positionAll;
     return n;
   }
 
   // 写便签在当前视图作用域下的位置：「全部」写 positionAll，其余写 x,y。
+  /** @param {Note} n @param {number} x @param {number} y @param {string} filterGroup @returns {Note} */
   function writePos(n, x, y, filterGroup) {
     if (filterGroup === ALL) n.positionAll = { x, y };
     else { n.x = x; n.y = y; }
@@ -46,6 +48,7 @@
   // 由画布布局读序：先按「行」（~rowBand 带宽量化 y）再按「列」（x），返回按阅读顺序的 id 列表。
   // 位置通过 posOf 取（「全部」取 positionAll，否则取 x,y），保证保存的顺序与画面一致。
   // 行分组用 floor + 极小容差：round 半带宽边界会因浮点误差把同排便签拆到不同行，导致“保存排序后位置偏移”。
+  /** @param {Note[]} notes @param {string} filterGroup @param {number} [rowBand] @returns {string[]} */
   function readOrderFromLayout(notes, filterGroup, rowBand) {
     const band = rowBand || 100;
     const eps = 0.001;
@@ -72,6 +75,7 @@
 
   // 规整排序数组：剔除已删除便签、补入缺失便签；每个分组各自维护顺序。就地更新 groupOrders（保持原对象引用），
   // 返回 { noteOrder, groupOrders }。
+  /** @param {Note[]} notes @param {Group[]} groups @param {string[]} noteOrder @param {Record<string, string[]>} groupOrders */
   function ensureOrderRefs(notes, groups, noteOrder, groupOrders) {
     const order = (noteOrder || []).filter((id) => notes.some((n) => n.id === id));
     notes.forEach((n) => { if (!order.includes(n.id)) order.push(n.id); });
@@ -111,6 +115,7 @@
   // 返回 id 列表（非便签对象），便于渲染层映射。缺省/未知策略回退 'updated'。
   //   - custom：基准顺序优先，缺失（新建）便签追加到末尾 → 新便签一定参与排序。
   //   - 非 custom：按策略排序（置顶 pinned 便签排最前，其余按策略），不改动存储。
+  /** @param {Note[]} notes @param {string} strategy @param {string} filterGroup @param {string[]} storedNoteOrder @param {Record<string, string[]>} storedGroupOrders @returns {string[]} */
   function applySortStrategy(notes, strategy, filterGroup, storedNoteOrder, storedGroupOrders) {
     const { orderGid } = resolveScope(filterGroup);
     const baseOrder = orderGid ? ((storedGroupOrders || {})[orderGid] || []) : (storedNoteOrder || []);

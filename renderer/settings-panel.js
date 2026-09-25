@@ -349,6 +349,13 @@ function syncSettingsInputs() {
   const dm = $('#desktopMicaToggle'); if (dm) dm.checked = !!state.settings.desktopMica;
   const md = $('#markdownToggle'); if (md) md.checked = state.settings.markdown !== false;
   const hc = $('#highlightColorInput'); if (hc) hc.value = state.settings.highlightColor || '#fff59d';
+  // 菜单外观（原在右键菜单底部，已归位到设置页）
+  const mo = $('#menuOpacity'); if (mo) mo.value = (state.settings.menuOpacity != null) ? state.settings.menuOpacity : 88;
+  const ma = $('#menuAcrylicToggle'); if (ma) ma.checked = !!state.settings.menuAcrylic;
+  // 便签工具栏：精简开关 + 每个按钮显隐
+  const ntc = $('#noteToolbarCompact'); if (ntc) ntc.checked = state.settings.noteToolbarCompact !== false;
+  const hiddenTools = new Set(state.settings.noteToolbarHidden || []);
+  $$('#noteToolbarVis input[data-tool]').forEach((cb) => { cb.checked = !hiddenTools.has(cb.dataset.tool); });
   const rs = $('#reminderSoundToggle'); if (rs) rs.checked = !!state.settings.reminderSound;
   const rv = $('#reminderVolume'); if (rv) rv.value = state.settings.reminderVolume != null ? state.settings.reminderVolume : 70;
   const sn = $('#soundName'); if (sn) {

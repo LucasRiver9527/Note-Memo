@@ -31,3 +31,6 @@ cert/
 out/
 release-latest/
 优化改进待办.txt
+
+# 本地开发笔记 / 诊断脚本 / 阶段备份（仅个人使用，不进仓库）
+.workbuddy/

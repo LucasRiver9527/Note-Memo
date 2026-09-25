@@ -6,7 +6,7 @@
     module.exports = factory();
   } else {
     const fns = factory();
-    root.BoardLayout = fns;
+    root['BoardLayout'] = fns;
     Object.keys(fns).forEach((k) => { root[k] = fns[k]; });
   }
 }(typeof self !== 'undefined' ? self : this, function () {

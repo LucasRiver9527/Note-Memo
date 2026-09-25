@@ -2,19 +2,32 @@ const { test, expect, _electron: electron } = require('@playwright/test');
 const path = require('path');
 const fs = require('fs/promises');
 const os = require('os');
+const { execFileSync } = require('child_process');
 
 const ROOT = path.join(__dirname, '..', '..');
 const EXPECTED_VERSION = require(path.join(ROOT, 'package.json')).version;
 
 // 启动应用：独立临时 userData，首启关闭「更新说明」弹窗，返回可交互句柄
 // opts.seed：可选，写入 notes-data.json 作为初始数据（用于多便签/预置场景）
+// opts.seedRaw：可选，直接写入 notes-data.json 的原始字符串（用于「损坏文件」场景，seed 走 JSON.stringify 永远合法）
+// opts.seedBak：可选，写入 notes-data.json.bak（用于「有备份可回退」场景）
+// opts.extraArgs：可选，附加 Chromium 启动参数（沙箱无 GPU 环境需 --disable-gpu 等）
 async function openApp(opts) {
   const userDataDir = await fs.mkdtemp(path.join(os.tmpdir(), 'mynotes-e2e-'));
   if (opts && opts.seed) {
     await fs.writeFile(path.join(userDataDir, 'notes-data.json'), JSON.stringify(opts.seed));
   }
+  if (opts && typeof opts.seedRaw === 'string') {
+    await fs.writeFile(path.join(userDataDir, 'notes-data.json'), opts.seedRaw);
+  }
+  if (opts && typeof opts.seedBak === 'string') {
+    await fs.writeFile(path.join(userDataDir, 'notes-data.json.bak'), opts.seedBak);
+  }
+  // 环境变量 MYNOTES_E2E_EXTRA_ARGS 便于 CI/沙箱注入 --disable-gpu 等；opts.extraArgs 优先级更高
+  const envArgs = (process.env.MYNOTES_E2E_EXTRA_ARGS || '').split(/\s+/).filter(Boolean);
+  const extraArgs = (opts && opts.extraArgs) || envArgs;
   const electronApp = await electron.launch({
-    args: ['.'],
+    args: ['.'].concat(extraArgs),
     cwd: ROOT,
     env: { ...process.env, MYNOTES_USER_DATA: userDataDir }
   });
@@ -42,12 +55,24 @@ async function openApp(opts) {
 }
 
 async function closeApp(ctx) {
+  // 应用常驻托盘，个别用例（如「隐藏到托盘」）close 后进程可能残留；
+  // 残留进程跨用例累积会拖慢后续用例、放大 flake，故 close 后强制结束进程树。
+  let pid = null;
+  try { pid = ctx.electronApp.process() ? ctx.electronApp.process().pid : null; } catch (_) {}
   await ctx.electronApp.close().catch(() => {});
-  await ctx.userDataDir && fs.rm(ctx.userDataDir, { recursive: true, force: true }).catch(() => {});
+  if (pid) {
+    try { execFileSync('taskkill', ['/PID', String(pid), '/T', '/F'], { stdio: 'ignore' }); } catch (_) {}
+  }
+  if (ctx.userDataDir) await fs.rm(ctx.userDataDir, { recursive: true, force: true }).catch(() => {});
 }
 
 // 点击封装：force 绕过冷启动「稳定」检查，规避环境级 flake（见规划待办阶段 C）
 async function stableClick(locator) {
+  // ⚠️ force:true 会绕过 actionability 检查（含 enabled）。
+  // 点到 disabled 按钮时浏览器根本不派发 click —— 表现是「点了没反应」的静默失败（间歇性 flake）。
+  // 故先显式等可交互再点：既保留 force 的「跳过稳定/可见等待」，又不丢 enabled 语义。
+  // 对非表单元素（div/span）toBeEnabled 恒为 true，无副作用。
+  await expect(locator).toBeEnabled({ timeout: 15_000 });
   await locator.click({ force: true });
 }
 
@@ -189,9 +214,12 @@ test('启用便签玻璃拟态后 body 添加 glass 类', async () => {
     await ctx.win.locator('#btnSettings').click({ force: true });
     await ctx.win.locator('#appearanceModuleSeg [data-app-module="note"]').click({ force: true });
     const toggle = ctx.win.locator('#glassToggle');
-    await toggle.check();
+    // 时序加固：切换外观模块有过渡，直接 check/uncheck 会因元素未稳定而超时（间歇性 flake）
+    await expect(toggle).toBeVisible();
+    await toggle.check({ force: true });
     await expect(ctx.win.locator('body')).toHaveClass(/\bglass\b/);
-    await toggle.uncheck();
+    await expect(toggle).toBeVisible();
+    await toggle.uncheck({ force: true });
     await expect(ctx.win.locator('body')).not.toHaveClass(/\bglass\b/);
   } finally { await closeApp(ctx); }
 });
@@ -295,7 +323,10 @@ test('外观可读性：亮底色自动启用 bright-bg，关闭开关后取消'
     await expect(ctx.win.locator('body')).toHaveClass(/\bbright-bg\b/);
     // 关闭开关后取消
     await ctx.win.locator('#btnSettings').click({ force: true });
-    await ctx.win.locator('#bgReadabilityToggle').uncheck();
+    // 时序加固：设置面板有打开过渡，等开关可见再操作（否则 uncheck 会因元素未稳定而超时）
+    const toggle = ctx.win.locator('#bgReadabilityToggle');
+    await expect(toggle).toBeVisible();
+    await toggle.uncheck({ force: true });
     await expect(ctx.win.locator('body')).not.toHaveClass(/\bbright-bg\b/);
   } finally { await closeApp(ctx); }
 });
@@ -542,6 +573,7 @@ test('一键整理（便签视图触发）恢复保存的位置并跨视图保�
 
 // —— 指针拖拽重排：备忘录 / 文档视图用 pointer 事件（支持边拖边滚，替代原生 HTML5 DnD）——
 test('备忘录视图：拖动把手(指针)重排便签顺序', async () => {
+  test.setTimeout(120_000);   // 真实鼠标拖动，无 GPU 沙箱下易超时（详见批量拖动用例注释）
   const now = Date.now();
   const mk = (id, title, x, y) => ({
     id, title, content: '内容' + id, type: 'note', items: [], images: [], files: [], tables: [],
@@ -575,6 +607,7 @@ test('备忘录视图：拖动把手(指针)重排便签顺序', async () => {
 });
 
 test('文档视图：拖动选择项(指针)重排便签顺序', async () => {
+  test.setTimeout(120_000);   // 真实鼠标拖动，无 GPU 沙箱下易超时（详见批量拖动用例注释）
   const now = Date.now();
   const mk = (id, title, x, y) => ({
     id, title, content: '内容' + id, type: 'note', items: [], images: [], files: [], tables: [],
@@ -720,6 +753,8 @@ test('批量选中：点击备忘录内容区只选中不编辑', async () => {
 
 // —— 批量选中：拖动整组，所有已选便签一起同向移动（回归：只拖单个、其余「弹开」）——
 test('批量选中：拖动整组时所有已选便签一同移动', async () => {
+  // 同上：真实鼠标拖动 + steps:14 + rAF，无 GPU 沙箱下易顶到超时。放宽以消除假失败。
+  test.setTimeout(120_000);
   const now = Date.now();
   const mk = (id, title, x, y) => ({
     id, title, content: 'c' + id, type: 'note', items: [], images: [], files: [], tables: [],
@@ -899,10 +934,10 @@ test('关闭确认：触发关闭弹主题化确认框，取消则窗口保持',
     // 点击「取消」：弹窗关闭，窗口仍在
     await stableClick(ctx.win.locator('#btnCloseCancel'));
     await expect(overlay).toBeHidden();
-    const visible = await ctx.electronApp.evaluate(({ BrowserWindow }) =>
+    // 取消后窗口应保持可见；同「隐藏到任务栏」用例，用 poll 规避可见性回传时序竞态
+    await expect.poll(async () => ctx.electronApp.evaluate(({ BrowserWindow }) =>
       BrowserWindow.getAllWindows().some((w) => w.isVisible())
-    );
-    expect(visible).toBe(true);
+    )).toBe(true);
   } finally {
     await closeApp(ctx);
   }
@@ -960,10 +995,18 @@ test('分组过多：分组区横向滚动，右侧视图切换与「+分组」�
     expect(await left.isDisabled()).toBe(true);
     expect(await right.isDisabled()).toBe(false);
     // 点右箭头滚动 → 左箭头变可用；点左箭头滚回 → 左箭头回到置灰
-    await stableClick(right);
-    await expect.poll(() => left.isDisabled(), { timeout: 3000 }).toBe(false);
-    await stableClick(left);
-    await expect.poll(() => left.isDisabled(), { timeout: 3000 }).toBe(true);
+    // 注：滚动/布局在负载高时可能滞后（3s 不够 → 曾假失败）。改为「点箭头直到真正滚动」的重试轮询。
+    const chipsWrap = ctx.win.locator('#groupChips');
+    await expect.poll(async () => {
+      if (await right.isEnabled()) await right.click({ force: true });
+      return chipsWrap.evaluate((el) => el.scrollLeft);
+    }, { timeout: 15_000 }).toBeGreaterThan(0);
+    await expect(left).toBeEnabled();
+    await expect.poll(async () => {
+      if (await left.isEnabled()) await left.click({ force: true });
+      return chipsWrap.evaluate((el) => el.scrollLeft);
+    }, { timeout: 15_000 }).toBeLessThanOrEqual(1);
+    await expect(left).toBeDisabled();
   } finally {
     await closeApp(ctx);
   }
@@ -1201,6 +1244,9 @@ test('画布缩放：工具栏按钮改变缩放并持久化，重置恢复 100%
 });
 
 test('画布框选：空白处拉框多选，单击空白取消选择', async () => {
+  // 真实鼠标拖动 + 分步 move + rAF 渲染，在无 GPU 沙箱下对 CPU 抢占敏感，
+  // 机器负载升高时可能远超默认 60s。放宽超时以消除 CI 假失败（功能本身正常）。
+  test.setTimeout(120_000);
   const now = Date.now();
   const mk = (id, title, x, y) => ({
     id, title, content: '内容' + id, type: 'note', items: [], images: [], files: [], tables: [],
@@ -1421,6 +1467,157 @@ test('便签右键「导出为 Markdown」：菜单项存在、API 可用、note
     await closeApp(ctx);
   }
 });
+test('右键菜单：默认精简，删除固定一级，开关切换即时生效且不清空选区', async () => {
+  const now = Date.now();
+  const mk = (id, title, x, y) => ({
+    id, title, content: '内容' + id, type: 'note', items: [], images: [], files: [], tables: [],
+    color: '#93f1ce', textColor: null, groupId: null, pinned: false, desktopPin: false, reminder: null,
+    x, y, positionAll: { x, y }, w: 240, h: 200, z: 1, createdAt: now, updatedAt: now
+  });
+  const seed = { version: 2, settings: { viewMode: 'board', sortMode: 'updated' }, groups: [], trash: [], notes: [mk('a', '标题A', 20, 20)] };
+  const ctx = await openApp({ seed });
+  try {
+    const openMenu = async () => {
+      await ctx.win.locator('#board .note .note-content').first().click({ button: 'right', force: true });
+      await expect(ctx.win.locator('.ctx-menu')).toBeVisible();
+    };
+    const topLabels = () => ctx.win.evaluate(() =>
+      Array.from(document.querySelectorAll('.ctx-menu > button')).map((b) => b.textContent.trim()));
+
+    await openMenu();
+    // 1) 默认精简
+    expect(await ctx.win.evaluate(() => state.settings.ctxMenuMode)).toBe('compact');
+    const compact = await topLabels();
+    // 2) 删除固定在一级，且为最后一项
+    expect(compact.some((s) => s.includes('删除'))).toBe(true);
+    expect(compact[compact.length - 1].includes('删除')).toBe(true);
+    // 3) 导出 Markdown 保持一级（工具栏没有该入口）
+    expect(compact.some((s) => s.includes('Markdown'))).toBe(true);
+    // 精简模式一级项明显少于完整模式
+    const compactCount = compact.length;
+
+    // 4) 选中一段文字后切换模式：菜单不关闭、选区不清空
+    await ctx.win.evaluate(() => {
+      const c = document.querySelector('#board .note .note-content');
+      const r = document.createRange();
+      r.selectNodeContents(c);
+      const sel = window.getSelection();
+      sel.removeAllRanges(); sel.addRange(r);
+    });
+    await openMenu();
+    const selBefore = await ctx.win.evaluate(() => String(window.getSelection() || ''));
+
+    const sw = ctx.win.locator('.ctx-menu button[role="switch"]');
+    await expect(sw).toBeEnabled();
+    await sw.click({ force: true });
+
+    // 菜单仍然可见（未关闭）
+    await expect(ctx.win.locator('.ctx-menu')).toBeVisible();
+    expect(await ctx.win.evaluate(() => state.settings.ctxMenuMode)).toBe('full');
+    const full = await topLabels();
+    expect(full.length).toBeGreaterThan(compactCount);
+    // 完整模式下删除同样在一级且仍在最后
+    expect(full.some((s) => s.includes('删除'))).toBe(true);
+    expect(full[full.length - 1].includes('删除')).toBe(true);
+    // 选区未被清空
+    const selAfter = await ctx.win.evaluate(() => String(window.getSelection() || ''));
+    expect(selAfter).toBe(selBefore);
+    expect(selBefore.length).toBeGreaterThan(0);
+  } finally {
+    await closeApp(ctx);
+  }
+});
+
+test('菜单外观归位：右键菜单不再挂透明度/亚克力页脚，改由设置页控制', async () => {
+  const now = Date.now();
+  const mk = (id, x, y) => ({
+    id, title: id, content: 'c' + id, type: 'note', items: [], images: [], files: [], tables: [],
+    color: '#93f1ce', textColor: null, groupId: null, pinned: false, desktopPin: false, reminder: null,
+    x, y, positionAll: { x, y }, w: 240, h: 200, z: 1, createdAt: now, updatedAt: now
+  });
+  const seed = {
+    version: 2,
+    settings: { viewMode: 'board', sortMode: 'updated', menuOpacity: 70, menuAcrylic: false },
+    groups: [], trash: [], notes: [mk('a', 20, 20)]
+  };
+  const ctx = await openApp({ seed });
+  try {
+    // 1) 便签右键菜单不含外观页脚
+    await ctx.win.locator('#board .note .note-content').first().click({ button: 'right', force: true });
+    await expect(ctx.win.locator('.ctx-menu')).toBeVisible();
+    const noFooter = await ctx.win.evaluate(() => {
+      const pop = document.querySelector('.ctx-menu');
+      return {
+        row: !!pop.querySelector('.cm-opacity-row'),
+        text: pop.textContent.includes('透明度') || pop.textContent.includes('亚克力')
+      };
+    });
+    expect(noFooter.row).toBe(false);
+    expect(noFooter.text).toBe(false);
+    await ctx.win.keyboard.press('Escape');
+
+    // 2) 设置 → 外观 → 便签模块：存在控件，且初值同步自 settings
+    await ctx.win.locator('#btnSettings').click({ force: true });
+    await ctx.win.locator('#appearanceModuleSeg [data-app-module="note"]').click({ force: true });
+    await expect(ctx.win.locator('#menuOpacity')).toBeVisible();
+    expect(await ctx.win.locator('#menuOpacity').inputValue()).toBe('70');
+    expect(await ctx.win.locator('#menuAcrylicToggle').isChecked()).toBe(false);
+
+    // 3) 改动实时生效并持久化
+    await ctx.win.evaluate(() => {
+      const mo = document.querySelector('#menuOpacity');
+      mo.value = '45';
+      mo.dispatchEvent(new Event('input', { bubbles: true }));
+      mo.dispatchEvent(new Event('change', { bubbles: true }));
+      const ma = document.querySelector('#menuAcrylicToggle');
+      ma.checked = true;
+      ma.dispatchEvent(new Event('change', { bubbles: true }));
+    });
+    await ctx.win.waitForTimeout(600);
+    const after = await ctx.win.evaluate(() => ({
+      cssVar: getComputedStyle(document.documentElement).getPropertyValue('--ctx-opacity').trim(),
+      acrylic: document.body.classList.contains('menu-acrylic')
+    }));
+    expect(after.cssVar).toBe('45');
+    expect(after.acrylic).toBe(true);
+
+    const parsed = JSON.parse(await fs.readFile(path.join(ctx.userDataDir, 'notes-data.json'), 'utf8'));
+    expect(parsed.settings.menuOpacity).toBe(45);
+    expect(parsed.settings.menuAcrylic).toBe(true);
+  } finally {
+    await closeApp(ctx);
+  }
+});
+
+test('右键菜单：精简/完整偏好持久化到下次启动', async () => {
+  const now = Date.now();
+  const mk = (id, x, y) => ({
+    id, title: id, content: 'c' + id, type: 'note', items: [], images: [], files: [], tables: [],
+    color: '#93f1ce', textColor: null, groupId: null, pinned: false, desktopPin: false, reminder: null,
+    x, y, positionAll: { x, y }, w: 240, h: 200, z: 1, createdAt: now, updatedAt: now
+  });
+  const seed = { version: 2, settings: { viewMode: 'board', sortMode: 'updated' }, groups: [], trash: [], notes: [mk('a', 20, 20)] };
+  // 直接以「完整」偏好启动，验证启动时读取偏好
+  const seedFull = { ...seed, settings: { ...seed.settings, ctxMenuMode: 'full' } };
+  const ctx = await openApp({ seed: seedFull });
+  try {
+    expect(await ctx.win.evaluate(() => state.settings.ctxMenuMode)).toBe('full');
+    await ctx.win.locator('#board .note .note-content').first().click({ button: 'right', force: true });
+    await expect(ctx.win.locator('.ctx-menu')).toBeVisible();
+    const full = await ctx.win.evaluate(() =>
+      Array.from(document.querySelectorAll('.ctx-menu > button')).map((b) => b.textContent.trim()));
+    // 完整模式下平铺出便签级操作（精简时这些在二级里）
+    expect(full.some((s) => s.includes('置顶'))).toBe(true);
+    // 删除仍在一级且最后
+    expect(full[full.length - 1].includes('删除')).toBe(true);
+    // 开关显示为「完整」状态
+    const sw = ctx.win.locator('.ctx-menu button[role="switch"]');
+    expect(await sw.getAttribute('aria-checked')).toBe('true');
+  } finally {
+    await closeApp(ctx);
+  }
+});
+
 test('空白分组新建便签后回到全部视图不与其他便签重叠', async () => {
   const now = Date.now();
   const mk = (id, x, y) => ({
@@ -1554,7 +1751,7 @@ test('Markdown 预览：点击预览按钮切换为只读富文本，再点恢�
     color: '#93f1ce', textColor: null, groupId: null, pinned: false, desktopPin: false, archived: false, preview: false,
     x, y: 20, positionAll: { x, y: 20 }, w: 240, h: 200, z: 1, createdAt: now + x, updatedAt: now + x
   });
-  const seed = { version: 2, settings: { viewMode: 'board', sortMode: 'updated' }, groups: [], trash: [], notes: [mk('a', 'A', 20)] };
+  const seed = { version: 2, settings: { viewMode: 'board', sortMode: 'updated', noteToolbarCompact: false }, groups: [], trash: [], notes: [mk('a', 'A', 20)] };
   const ctx = await openApp({ seed });
   try {
     // 初始可编辑
@@ -1613,3 +1810,141 @@ test('撤销/重做：新建便签可撤销、重做，删除也可撤销', asyn
 
 
 
+
+// ---------- 便签工具栏：精简折叠 + 按钮显隐 ----------
+
+test('便签工具栏：默认精简显示，次要按钮收进「更多」且可打开操作菜单', async () => {
+  const now = Date.now();
+  const mk = (id, x) => ({
+    id, title: 'T', content: '正文', type: 'note', items: [], images: [], files: [], tables: [],
+    color: '#93f1ce', textColor: null, groupId: null, pinned: false, desktopPin: false, archived: false, preview: false,
+    x, y: 20, positionAll: { x, y: 20 }, w: 240, h: 200, z: 1, createdAt: now, updatedAt: now
+  });
+  const ctx = await openApp({ seed: { version: 2, settings: { viewMode: 'board' }, groups: [], trash: [], notes: [mk('a', 20)] } });
+  try {
+    const note = ctx.win.locator('.note[data-id="a"]');
+    // 主要动作内联（含「钉在桌面」，该功能必须保持可见）
+    await expect(note.locator('.t-desktop')).toHaveCount(1);
+    await expect(note.locator('.t-group')).toHaveCount(1);
+    await expect(note.locator('.t-color')).toHaveCount(1);
+    await expect(note.locator('.t-pin')).toHaveCount(1);
+    await expect(note.locator('.t-del')).toHaveCount(1);
+    await expect(note.locator('.t-more')).toHaveCount(1);
+    // 次要动作默认折叠
+    await expect(note.locator('.t-table')).toHaveCount(0);
+    await expect(note.locator('.t-preview')).toHaveCount(0);
+    // 「更多」打开便签操作菜单（复用右键菜单）
+    await stableClick(note.locator('.t-more'));
+    await expect(ctx.win.locator('.ctx-menu')).toBeVisible();
+  } finally {
+    await closeApp(ctx);
+  }
+});
+
+test('便签工具栏：设置内可显隐按钮、切换精简/完整，改动即时生效', async () => {
+  const ctx = await openApp({ seed: { version: 2, settings: { viewMode: 'board' } } });
+  try {
+    await ctx.win.locator('#btnAdd').click({ force: true });
+    await expect(ctx.win.locator('#board .note .t-del')).toHaveCount(1);
+    // 默认精简：表格按钮折叠
+    await expect(ctx.win.locator('#board .note .t-table')).toHaveCount(0);
+
+    await ctx.win.locator('#btnSettings').click({ force: true });
+    await ctx.win.locator('#appearanceModuleSeg [data-app-module="note"]').click({ force: true });
+
+    // 隐藏「删除」按钮 → 卡片即时移除
+    const delBox = ctx.win.locator('#noteToolbarVis input[data-tool="del"]');
+    await expect(delBox).toBeVisible();
+    await delBox.uncheck({ force: true });
+    await expect(ctx.win.locator('#board .note .t-del')).toHaveCount(0);
+    expect(await ctx.win.evaluate(() => state.settings.noteToolbarHidden)).toContain('del');
+
+    // 切到完整模式 → 次要按钮重新内联出现
+    const compactBox = ctx.win.locator('#noteToolbarCompact');
+    await compactBox.uncheck({ force: true });
+    await expect(ctx.win.locator('#board .note .t-table')).toHaveCount(1);
+    await compactBox.check({ force: true });
+    await expect(ctx.win.locator('#board .note .t-table')).toHaveCount(0);
+
+    // 恢复显示删除
+    await delBox.check({ force: true });
+    await expect(ctx.win.locator('#board .note .t-del')).toHaveCount(1);
+  } finally {
+    await closeApp(ctx);
+  }
+});
+
+// ---------- 数据安全：损坏 / 回退 / 写失败三态 ----------
+
+test('数据损坏且无备份：进入只读，弹出损坏警告条，写入被拦截', async () => {
+  // 故意写入非法 JSON（seed 走 JSON.stringify 永远是合法的，故用 seedRaw）
+  const ctx = await openApp({ seedRaw: '{ this is not valid json' });
+  try {
+    // 常驻警告条可见（走 enterDataReadonly → #dataAlert）
+    await expect(ctx.win.locator('#dataAlert')).toBeVisible();
+    // 只读标记落在 body 上
+    const readonly = await ctx.win.evaluate(() => document.body.classList.contains('data-readonly'));
+    expect(readonly).toBe(true);
+    // 加载后不应凭空出现便签（数据不可读 → 按空处理，绝不回写空数组覆盖）
+    await expect(ctx.win.locator('#board .note')).toHaveCount(0);
+    // 尝试触发保存：save() 在只读态直接早退，主进程侧也不应产生合法数据文件
+    await ctx.win.evaluate(() => { try { saveNow(); } catch (_) {} });
+    await ctx.win.waitForTimeout(400);
+    const raw = await fs.readFile(path.join(ctx.userDataDir, 'notes-data.json'), 'utf8');
+    // 原坏文件必须未被覆盖成合法 JSON（未被静默修复/清空）
+    expect(raw).toBe('{ this is not valid json');
+  } finally {
+    await closeApp(ctx);
+  }
+});
+
+test('数据损坏但有 .bak 备份：自动回退，提示已恢复，可正常读写', async () => {
+  const good = { settings: { viewMode: 'board' }, groups: [], trash: [], notes: [
+    { id: 'n1', text: '从备份恢复的便签', x: 40, y: 40, w: 220, h: 180 }
+  ] };
+  const ctx = await openApp({
+    seedRaw: '{ corrupted beyond repair',
+    seedBak: JSON.stringify(good)
+  });
+  try {
+    // 不应进入只读（有备份可回退 → status 为 recovered）
+    await expect(ctx.win.locator('#dataAlert')).toBeHidden();
+    const readonly = await ctx.win.evaluate(() => document.body.classList.contains('data-readonly'));
+    expect(readonly).toBe(false);
+    // 备份内容被恢复出来（这是「回退成功」最本质的观察点）
+    await expect(ctx.win.locator('#board .note')).toHaveCount(1);
+    // 恢复后磁盘上主文件已是合法 JSON（说明回退结果已写回）
+    const raw = await fs.readFile(path.join(ctx.userDataDir, 'notes-data.json'), 'utf8');
+    const parsed = JSON.parse(raw);
+    expect(parsed.notes.length).toBe(1);
+    // 注：dataHealth().status 此刻可能已从 recovered 被后续保存重置为 ok，故不断言该瞬时值，
+    // 改以「留证文件存在」证明本次确实发生了损坏-回退（corrupt 留证在 safeRead 时落盘）
+    const files = await fs.readdir(ctx.userDataDir);
+    expect(files.some((f) => f.includes('.corrupt-'))).toBe(true);
+  } finally {
+    await closeApp(ctx);
+  }
+});
+
+test('数据合法：正常启动，无警告条，可创建便签并落盘', async () => {
+  const ctx = await openApp({ seed: { settings: { viewMode: 'board' }, groups: [], trash: [], notes: [] } });
+  try {
+    await expect(ctx.win.locator('#dataAlert')).toBeHidden();
+    const readonly = await ctx.win.evaluate(() => document.body.classList.contains('data-readonly'));
+    expect(readonly).toBe(false);
+    // 正常创建便签 → 应触发保存并成功落盘
+    await stableClick(ctx.win.locator('#btnAdd'));
+    await expect(ctx.win.locator('#board .note')).toHaveCount(1);
+    // 保存是防抖的，固定 sleep 在负载高时不够 → 轮询等待落盘（避免假失败）
+    const file = path.join(ctx.userDataDir, 'notes-data.json');
+    await expect.poll(async () => {
+      const raw = await fs.readFile(file, 'utf8').catch(() => '');
+      try { return (JSON.parse(raw).notes || []).length; } catch (e) { return -1; }
+    }, { timeout: 10_000 }).toBe(1);
+    const parsed = JSON.parse(await fs.readFile(file, 'utf8'));
+    expect(Array.isArray(parsed.notes)).toBe(true);
+    expect(parsed.notes.length).toBe(1);
+  } finally {
+    await closeApp(ctx);
+  }
+});

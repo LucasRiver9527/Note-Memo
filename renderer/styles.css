@@ -408,8 +408,11 @@ body.note-dragging .note.dragging {
   padding: 2px 4px; border-radius: 4px;
 }
 .note-title:focus { background: rgba(127,127,127,0.18); }
+/* 标题与 grip 同组：标题短→工具栏留在右侧同行；标题长→整组占满、工具栏换行（自适应） */
+.note-title-row { display: flex; align-items: center; gap: 4px; flex: 1 1 auto; min-width: 0; }
+.note-title-row .note-title { flex: 0 1 auto; min-width: 60px; max-width: 100%; field-sizing: content; }
 .note-tools {
-  display: flex; gap: 2px; flex: 0 1 auto; margin-left: auto; min-width: 0;
+  display: flex; gap: 2px; flex: 0 1 auto; margin-left: 0; min-width: 0;
   flex-wrap: wrap; justify-content: flex-start;
   opacity: 0.9; transition: opacity 0.15s;
 }
@@ -735,6 +738,11 @@ body.maximized #settingsOverlay { border-radius: 0; }
   border-radius: 7px; padding: 5px 8px; font-family: inherit; font-size: calc(var(--font-size) - 1px);
   flex: 0 1 auto; min-width: 0; max-width: 100%;
 }
+/* 便签工具栏按钮显隐（设置 → 外观 → 便签 → 便签工具栏） */
+.tool-vis { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 6px 10px; margin-bottom: 10px; }
+.tool-vis-item { display: flex; align-items: center; gap: 6px; cursor: pointer; font-size: calc(var(--font-size) - 2px); color: var(--fg-dim); }
+.tool-vis-item input[type="checkbox"] { width: 16px; height: 16px; accent-color: var(--accent); cursor: pointer; flex-shrink: 0; }
+.tool-vis-item span { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .color-field { display: flex; align-items: center; justify-content: space-between; margin-bottom: 12px; font-size: calc(var(--font-size) - 1px); flex-wrap: nowrap; }
 .color-field span { color: var(--fg-dim); white-space: nowrap; flex-shrink: 0; }
 .color-field input[type="color"] {
@@ -842,6 +850,17 @@ body.maximized #changelogOverlay { border-radius: 0; }
   padding: 10px 18px; border-radius: 999px; box-shadow: var(--shadow);
   font-size: 13px; z-index: 5000; animation: fadeIn 0.2s ease;
 }
+
+/* ---------- 数据损坏常驻警告条（只读态） ---------- */
+#dataAlert {
+  position: fixed; top: 0; left: 0; right: 0; z-index: 5001;
+  background: #b3261e; color: #fff;
+  padding: 8px 16px; font-size: 13px; line-height: 1.4;
+  text-align: center; box-shadow: var(--shadow);
+}
+/* 只读态：置灰画布交互，但仍允许打开设置面板「导入备份」自救 */
+body.data-readonly #canvas,
+body.data-readonly #board { pointer-events: none; }
 
 /* ---------- 提示气泡 ---------- */
 #tooltip {

@@ -6,7 +6,19 @@ const APP_VERSION = ((process.argv || []).find((a) => a.startsWith('--app-versio
 contextBridge.exposeInMainWorld('api', {
   appVersion: APP_VERSION,
   loadData: () => ipcRenderer.invoke('data:load'),
-  saveData: (data) => ipcRenderer.invoke('data:save', data),
+  // 只读：返回 { status, corruptPath }，渲染层据此决定是否锁定保存
+  dataHealth: () => ipcRenderer.invoke('data:health'),
+  // 纵深防御：只拦明显非法的入参，不在此处判定「数据是否损坏」
+  // （损坏锁由主进程 _dataStatus 与渲染层 dataLoadFailed 负责，避免误伤 migrateData 瞬态）
+  saveData: (data, opts) => {
+    if (!data || typeof data !== 'object' || Array.isArray(data)) {
+      return Promise.reject(new Error('invalid data shape'));
+    }
+    if ('notes' in data && !Array.isArray(data.notes)) {
+      return Promise.reject(new Error('invalid data shape: notes'));
+    }
+    return ipcRenderer.invoke('data:save', data, opts);
+  },
   exportData: (data) => ipcRenderer.invoke('data:export', data),
   importData: () => ipcRenderer.invoke('data:import'),
   pickImage: () => ipcRenderer.invoke('dialog:pick-image'),

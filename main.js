@@ -4,6 +4,7 @@ const fs = require('fs');
 const { pathToFileURL } = require('url');
 const logic = require('./renderer/logic.js');
 const Shortcuts = require('./renderer/shortcuts.js');
+const DataIO = require('./data-io.js');
 const { autoUpdater } = require('electron-updater');
 
 const isDev = !app.isPackaged;
@@ -88,26 +89,46 @@ function clipboardImageToDataUrl() {
   }
 }
 
-function readData() {
-  let raw;
-  try {
-    raw = fs.readFileSync(dataPath(), 'utf-8');
-  } catch (e) {
-    // 文件不存在（首次运行）属正常；其它读取错误记日志，便于排查
-    if (e && e.code !== 'ENOENT') console.error('[data] 读取数据文件失败：', e.message);
-    return null;
-  }
-  try {
-    return JSON.parse(raw);
-  } catch (e) {
-    // 数据损坏：记日志（避免静默当成「首次运行」清空），调用方可决定回退
-    console.error('[data] 数据文件损坏，无法解析：', e.message);
-    return null;
-  }
+// 数据健康状态：'ok' | 'first-run' | 'recovered' | 'corrupt'（null 表示尚未读取过）
+// 一旦判定为 corrupt 就锁定写入，直到成功落盘一次才解除（data:save 可带 force 主动解锁）。
+// 缓存状态同时避免了 readData 被 17 处反复调用时重复生成留证文件、重复打日志。
+let _dataStatus = null;
+let _corruptPath = null;
+
+function dataHealth() {
+  return { status: _dataStatus || 'unknown', corruptPath: _corruptPath };
 }
 
-function writeData(data) {
-  fs.writeFileSync(dataPath(), JSON.stringify(data, null, 2), 'utf-8');
+function isDataLocked() {
+  return _dataStatus === 'corrupt';
+}
+
+function readData() {
+  // 已判定损坏：直接返回 null，不再读盘，避免每次调用都新增一份留证
+  if (_dataStatus === 'corrupt') return null;
+  const r = DataIO.safeRead(dataPath());
+  _dataStatus = r.status;
+  _corruptPath = r.corruptPath || null;
+  if (r.status === 'recovered') {
+    console.warn('[data] 数据文件曾损坏，已从 .bak 自动恢复；损坏件留证于：', r.corruptPath);
+  }
+  return r.data;
+}
+
+// 返回 true 表示已落盘。data 损坏锁定时拒绝写入（force 可越过锁，供「导入备份」自救）。
+function writeData(data, opts) {
+  const force = !!(opts && opts.force);
+  if (_dataStatus === 'corrupt' && !force) {
+    console.error('[data] 已锁定写入：数据文件损坏且无可用 .bak，拒绝覆盖以保护用户数据');
+    return false;
+  }
+  const ok = DataIO.atomicWrite(dataPath(), data);
+  if (ok) {
+    // 成功落盘说明磁盘上已是合法 JSON，解除锁定
+    _dataStatus = 'ok';
+    _corruptPath = null;
+  }
+  return ok;
 }
 
 // ---- 窗口状态持久化：把 bounds / maximized 记到数据文件的 settings.windowState ----
@@ -131,7 +152,9 @@ function persistWindowState() {
         normalBounds: { x: normal.x, y: normal.y, width: normal.width, height: normal.height },
         maximized: mainWindow.isMaximized()
       };
-      const data = readData() || {};
+      // 数据不可用时直接放弃：绝不能用 {} 兜底，否则会把整个数据文件覆盖成只剩 windowState
+      const data = readData();
+      if (!data) return;
       data.settings = data.settings || {};
       data.settings.windowState = state;
       writeData(data);
@@ -394,13 +417,33 @@ function readDataNotes() {
 
 // ---- IPC ----
 function setupIpc() {
+  // 返回 { data, status, corruptPath }：
+  //   data  —— 数据对象；首次运行或损坏不可读时为 null
+  //   status—— 'ok' | 'first-run' | 'recovered' | 'corrupt'
+  // 渲染层据此区分「首次运行」与「损坏」，损坏时进入只读并引导导入备份。
   ipcMain.handle('data:load', () => {
-    return readData();
+    const data = readData();
+    const health = dataHealth();
+    return { data: data || null, status: health.status, corruptPath: health.corruptPath };
   });
 
-  ipcMain.handle('data:save', (e, data) => {
-    writeData(data);
-    if (data && Array.isArray(data.notes)) {
+  // 只读通道：单独查询数据健康状态（供渲染层随时重查，无需重新读盘）。
+  ipcMain.handle('data:health', () => {
+    return dataHealth();
+  });
+
+  // opts.force 仅供「导入备份」等自救路径越过损坏锁使用。
+  // 校验失败 / 写入被锁时「抛错」而非返回 false：渲染层 save()/saveNow() 只挂了
+  // .catch(reportSaveError)，不检查 resolved 值，返回 false 会导致静默失败、用户以为已保存。
+  ipcMain.handle('data:save', (e, data, opts) => {
+    if (!DataIO.isValidDataShape(data)) {
+      throw new Error('invalid data shape: 拒绝写入非法数据结构，以保护现有存档');
+    }
+    const ok = writeData(data, opts);
+    if (!ok) {
+      throw new Error(isDataLocked() ? '数据文件损坏且无可用备份，已锁定写入' : '数据写入失败');
+    }
+    if (Array.isArray(data.notes)) {
       // 重新武装的提醒（fired=false 且启用的便签）允许再次调度——解除最近触发标记（「稍后再响」依赖此机制）。
       data.notes.forEach((n) => {
         if (n && n.reminder && n.reminder.enabled && !n.reminder.fired) recentlyFired.delete(n.id);
@@ -408,7 +451,7 @@ function setupIpc() {
       scheduleReminders(data.notes);
     }
     // 设置变更（含快捷键）后同步全局快捷键；失败仅记录，不阻塞保存
-    if (data && data.settings && typeof data.settings === 'object') {
+    if (data.settings && typeof data.settings === 'object') {
       const reg = registerGlobalShortcuts(data.settings);
       if (reg.failures.length) console.warn('[shortcuts] 注册失败:', reg.failures.join(','));
     }
@@ -716,14 +759,16 @@ function setupIpc() {
     return { note: null, settings: null };
   });
   ipcMain.handle('note:update', (e, note) => {
-    const data = readData() || { settings: {}, groups: [], notes: [] };
+    // 数据不可用时返回 false，让渲染层知道未落盘，避免「显示已保存但磁盘是空的」
+    const data = readData();
+    if (!data) return false;
     data.notes = (data.notes || []).map((n) => (n.id === note.id ? note : n));
-    writeData(data);
+    const ok = writeData(data);
     // 重新武装的提醒允许再次调度（稍后再响）
     if (note && note.reminder && note.reminder.enabled && !note.reminder.fired) recentlyFired.delete(note.id);
     scheduleReminders(data.notes);
     if (mainWindow) mainWindow.webContents.send('note:changed', note);
-    return true;
+    return ok;
   });
   ipcMain.handle('note:unpin', (e, id) => {
     const win = detachedWindows.get(id);
@@ -737,7 +782,8 @@ function setupIpc() {
     return true;
   });
   ipcMain.handle('note:delete', (e, id) => {
-    const data = readData() || { settings: {}, groups: [], notes: [], trash: [] };
+    const data = readData();
+    if (!data) return false;
     const idx = (data.notes || []).findIndex((n) => n.id === id);
     if (idx >= 0) {
       const note = data.notes.splice(idx, 1)[0];
@@ -753,11 +799,14 @@ function setupIpc() {
     return true;
   });
   ipcMain.handle('settings:set-font-size', (e, size) => {
-    const data = readData() || { settings: {}, notes: [], groups: [], trash: [] };
-    data.settings = data.settings || {};
-    data.settings.fontSize = Math.min(22, Math.max(11, Number(size) || 14));
-    writeData(data);
-    const v = data.settings.fontSize;
+    const v = Math.min(22, Math.max(11, Number(size) || 14));
+    // 数据不可用时只同步到窗口，不落盘：字号是次要偏好，不值得为它冒覆盖存档的风险
+    const data = readData();
+    if (data) {
+      data.settings = data.settings || {};
+      data.settings.fontSize = v;
+      writeData(data);
+    }
     if (mainWindow && !mainWindow.isDestroyed()) mainWindow.webContents.send('settings:font-size', v);
     detachedWindows.forEach((w) => { if (w && !w.isDestroyed()) w.webContents.send('settings:font-size', v); });
     return v;
@@ -817,7 +866,13 @@ function setupIpc() {
 
   ipcMain.handle('media:cleanup-orphans', async () => {
     try {
-      const data = readData() || { settings: {}, groups: [], notes: [], trash: [] };
+      // 数据不可用时必须拒绝清理：空骨架会让引用集为空，导致 images/backgrounds/fonts/sounds
+      // 下所有媒体文件被 unlinkSync 永久删除（不进回收站）。即便日后从 .bak 恢复出便签数据，
+      // 图片也已丢失，全部便签集体破图。
+      const data = readData();
+      if (!data || isDataLocked()) {
+        return { ok: false, error: '数据文件不可用，已跳过清理以保护媒体文件' };
+      }
       const refs = logic.referencedMedia(data);
       let freedCount = 0, freedBytes = 0;
       for (const dirName of ['images', 'backgrounds', 'fonts', 'sounds']) {
@@ -867,17 +922,23 @@ function setupIpc() {
   });
   ipcMain.handle('shortcuts:set', (e, overrides) => {
     try {
-      const data = readData() || {};
-      data.settings = data.settings || {};
       // 覆盖项对象（{ id: accel }）；设空值即恢复默认（从 settings 里移除该 id）
       const clean = {};
       Object.entries(overrides && typeof overrides === 'object' ? overrides : {}).forEach(([id, accel]) => {
         if (accel && Shortcuts.isValidAccelerator(accel)) clean[id] = accel;
       });
-      data.settings.shortcuts = clean;
-      writeData(data);
-      const reg = registerGlobalShortcuts(data.settings);
-      return { ok: true, overrides: clean, failures: reg.failures };
+      // 数据不可用时只在本次运行内生效、不落盘，避免用 {} 覆盖整个数据文件
+      const data = readData();
+      let persisted = false;
+      if (data) {
+        data.settings = data.settings || {};
+        data.settings.shortcuts = clean;
+        persisted = writeData(data);
+      }
+      // effectiveShortcuts 只读 settings.shortcuts，故这里包一层，形状与原实现一致；
+      // 数据不可用时也能让新键位在本次运行内立即生效
+      const reg = registerGlobalShortcuts({ shortcuts: clean });
+      return { ok: true, overrides: clean, failures: reg.failures, persisted };
     } catch (err) {
       return { ok: false, error: (err && err.message) || String(err) };
     }
@@ -945,10 +1006,13 @@ function setupIpc() {
   });
   // 钉窗右键菜单「便签透明度」滑杆：持久化全局 noteOpacity 并同步主窗口（复用到所有便签卡片）
   ipcMain.on('note:save-note-opacity', (e, opacity) => {
-    const data = readData() || {};
-    data.settings = data.settings || {};
-    data.settings.noteOpacity = opacity;
-    writeData(data);
+    // 数据不可用时只同步到窗口、不落盘，避免用 {} 覆盖整个数据文件
+    const data = readData();
+    if (data) {
+      data.settings = data.settings || {};
+      data.settings.noteOpacity = opacity;
+      writeData(data);
+    }
     if (mainWindow && !mainWindow.isDestroyed()) mainWindow.webContents.send('window:note-opacity-setting', opacity);
   });
   ipcMain.on('window:set-effects', (e, fx) => {

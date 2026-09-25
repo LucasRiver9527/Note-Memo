@@ -7,7 +7,7 @@
     module.exports = factory();
   } else {
     const fns = factory();
-    root.Shortcuts = fns;
+    root['Shortcuts'] = fns;
     Object.keys(fns).forEach((k) => { root[k] = fns[k]; });
   }
 }(typeof self !== 'undefined' ? self : this, function () {
@@ -62,7 +62,7 @@
   const MOD_ALIASES = {
     'ctrl': 'ctrl', 'control': 'ctrl',
     'cmd': 'meta', 'command': 'meta', 'super': 'meta', 'meta': 'meta',
-    'cmdorctrl': 'cmdcntrl', 'cmdorctrl': 'cmdcntrl', 'commandorcontrol': 'cmdcntrl', 'cmdorcontrol': 'cmdcntrl',
+    'cmdorctrl': 'cmdcntrl', 'commandorcontrol': 'cmdcntrl', 'cmdorcontrol': 'cmdcntrl',
     'alt': 'alt', 'option': 'alt',
     'shift': 'shift'
   };

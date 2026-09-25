@@ -4,9 +4,10 @@ const {
   hexToRgba, isDarkColor, autoTextColor, escapeHtml, luminance, contrastRatio,
   refIdsOf, cleanupRefs, sortNotes, tableToMarkdown, noteToMarkdown, referencedMedia, parseNullSeparated, hdropString,
   setRenderLocale, formatInlineText, tableBlockHtml, renderRichContent, sanitizeCss,
-  noteShadowCss,
-  I18N, I18N_MERGED, T, mergeI18n
+  noteShadowCss
 } = require('../renderer/logic.js');
+// i18n 已拆到 core/i18n.js（单一来源），分层设计见该文件头部说明
+const { I18N, I18N_MERGED, T, mergeI18n } = require('../renderer/core/i18n.js');
 
 test('hexToRgba 解析颜色', () => {
   assert.strictEqual(hexToRgba('#ff0000', 0.5), 'rgba(255, 0, 0, 0.5)');
@@ -326,6 +327,15 @@ test('I18N_MERGED 并集：保留主表与钉窗全部键，note 覆盖 color', 
   assert.strictEqual(I18N_MERGED.en.color, 'Change color');
   assert.strictEqual(I18N.zh.color, '颜色');
   assert.strictEqual(I18N.en.color, 'Color');
+});
+
+test('I18N 主表不应含钉窗专属键（分层边界，防止被"好心补齐"破坏设计）', () => {
+  // 背景：notfound/opacity/unpin 是 note.js（钉窗）专属，只应存在于 I18N_MERGED。
+  // 曾误判为「I18N 缺译」而试图补齐 —— 这会破坏分层，故反向固化。
+  for (const k of ['notfound', 'opacity', 'unpin']) {
+    assert.ok(!(k in I18N.zh), `主表 I18N.zh 不应含钉窗专属键: ${k}`);
+    assert.ok(!(k in I18N.en), `主表 I18N.en 不应含钉窗专属键: ${k}`);
+  }
 });
 
 test('T 按语言取值并回退 zh/key', () => {

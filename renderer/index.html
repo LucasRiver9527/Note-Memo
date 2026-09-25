@@ -258,6 +258,36 @@
               </label>
               <p class="sp-hint" data-i18n="desktop_mica_hint">钉在桌面的便签使用与应用内一致的半透明磨砂玻璃效果。</p>
 
+              <h4 data-i18n="note_toolbar">便签工具栏</h4>
+              <label class="field">
+                <span data-i18n="note_toolbar_compact">精简显示（次要按钮收进「更多」）</span>
+                <input type="checkbox" id="noteToolbarCompact" />
+              </label>
+              <div class="tool-vis" id="noteToolbarVis">
+                <label class="tool-vis-item"><input type="checkbox" data-tool="desktop" /><span data-i18n="desktop">钉在桌面</span></label>
+                <label class="tool-vis-item"><input type="checkbox" data-tool="todo" /><span data-i18n="todo_mode">待办模式</span></label>
+                <label class="tool-vis-item"><input type="checkbox" data-tool="group" /><span data-i18n="add_to_group">添加到分组</span></label>
+                <label class="tool-vis-item"><input type="checkbox" data-tool="image" /><span data-i18n="insert_image">插入图片</span></label>
+                <label class="tool-vis-item"><input type="checkbox" data-tool="table" /><span data-i18n="insert_table">插入表格</span></label>
+                <label class="tool-vis-item"><input type="checkbox" data-tool="remind" /><span data-i18n="todo_remind">设置提醒</span></label>
+                <label class="tool-vis-item"><input type="checkbox" data-tool="color" /><span data-i18n="color">颜色</span></label>
+                <label class="tool-vis-item"><input type="checkbox" data-tool="preview" /><span data-i18n="note_preview">预览</span></label>
+                <label class="tool-vis-item"><input type="checkbox" data-tool="pin" /><span data-i18n="pin">置顶</span></label>
+                <label class="tool-vis-item"><input type="checkbox" data-tool="del" /><span data-i18n="delete">删除</span></label>
+              </div>
+              <p class="sp-hint" data-i18n="note_toolbar_hint">勾选要显示的按钮；精简模式下次要按钮收进「更多」，右键菜单仍可访问全部功能。</p>
+
+              <h4 data-i18n="ctx_menu_appearance">菜单外观</h4>
+              <label class="field">
+                <span data-i18n="ctx_menu_opacity">菜单透明度</span>
+                <input type="range" id="menuOpacity" min="30" max="100" value="88" />
+              </label>
+              <label class="field">
+                <span data-i18n="ctx_menu_acrylic">亚克力</span>
+                <input type="checkbox" id="menuAcrylicToggle" />
+              </label>
+              <p class="sp-hint" data-i18n="ctx_menu_appearance_hint">控制右键菜单的透明度与磨砂效果，实时生效。</p>
+
               <h4 data-i18n="markdown_title">Markdown 格式</h4>
               <label class="field">
                 <span data-i18n="markdown_enable">启用加粗 / 高亮</span>
@@ -428,7 +458,7 @@
             <div class="about-card">
               <div class="about-logo">▣</div>
               <div class="about-name" data-i18n="app_name">便签</div>
-              <div class="about-ver">v<span id="aboutVersion">1.2.5-preview</span></div>
+              <div class="about-ver">v<span id="aboutVersion">1.2.5</span></div>
               <div class="about-desc" data-i18n="about_desc">美观可定制的 Windows 桌面便签。</div>
             </div>
             <h4 data-i18n="about_info">软件信息</h4>
@@ -480,6 +510,8 @@
     </div>
   </div>
 
+  <div id="dataAlert" class="hidden"></div>
+
   <div id="toast" class="hidden"></div>
 
   <!-- 关闭确认弹窗（主题化选择：隐藏到任务栏 / 退出应用 / 取消） -->
@@ -505,7 +537,7 @@
     <div id="changelogModal">
       <header>
         <span data-i18n="changelog_title">更新说明</span>
-        <span class="cl-ver" id="clVersion">v1.2.5-preview</span>
+        <span class="cl-ver" id="clVersion">v1.2.5</span>
       </header>
       <div class="cl-body">
         <ul id="changelogList"></ul>
@@ -516,15 +548,40 @@
     </div>
   </div>
 
+  <script src="core/i18n.js"></script>
   <script src="logic.js"></script>
-<script src="shortcuts.js"></script>
-<script src="state.js"></script>
-<script src="board-layout.js"></script>
-<script src="sort-state.js"></script>
-<script src="rich-content.js"></script>
-<script src="settings-panel.js"></script>
-<script src="table-logic.js"></script>
-<script src="notes-view.js"></script>
-<script src="app.js"></script>
+  <script src="core/dom.js"></script>
+  <script src="shortcuts.js"></script>
+  <script src="state.js"></script>
+  <script src="core/app-state.js"></script>
+  <script src="core/undo-history.js"></script>
+  <script src="board-layout.js"></script>
+  <script src="sort-state.js"></script>
+  <script src="rich-content.js"></script>
+  <script src="settings-panel.js"></script>
+  <script src="table-logic.js"></script>
+  <script src="board/note-media.js"></script>
+  <script src="board/table-editor.js"></script>
+  <script src="board/note-drag.js"></script>
+  <script src="board/note-card.js"></script>
+  <script src="board/canvas-zoom.js"></script>
+  <script src="editors/rich-tools.js"></script>
+  <script src="editors/doc-view.js"></script>
+  <script src="editors/todo-view.js"></script>
+  <script src="panels/popovers.js"></script>
+  <script src="panels/trash-panel.js"></script>
+  <script src="panels/batch-select.js"></script>
+  <script src="panels/sort-panel.js"></script>
+  <script src="system/arrange.js"></script>
+  <script src="system/shortcuts-panel.js"></script>
+  <script src="system/alarm.js"></script>
+  <script src="system/dialogs.js"></script>
+  <script src="system/ipc-bridge.js"></script>
+  <script src="bind/board-bind.js"></script>
+  <script src="bind/batch-bind.js"></script>
+  <script src="bind/settings-bind.js"></script>
+  <script src="bind/appearance-bind.js"></script>
+  <script src="notes-view.js"></script>
+  <script src="app.js"></script>
 </body>
 </html>
