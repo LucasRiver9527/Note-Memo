@@ -57,7 +57,7 @@ function renderDocView(visible) {
     ? `<ul class="todo-list" style="margin-top:12px">${(n.items || []).map((it) => `<li class="todo-item ${it.done ? 'done' : ''}"><span style="font-size:16px">${it.done ? '☑' : '☐'}</span><span style="margin-left:8px;${it.done ? 'text-decoration:line-through;opacity:.5' : ''}">${escapeHtml(it.text || t('empty_item'))}</span></li>`).join('')}</ul>`
     : '';
   list.innerHTML = `
-    <div class="doc-toolbar">
+    <div class="doc-toolbar" style="--note-color:${n.color};color:${textColor}">
       <button class="doc-back" id="btnDocBack">${t('doc_back')}</button>
       ${!isTodo ? `<button class="doc-fmt-btn" id="btnDocBold" title="${t('bold')}"><b>B</b></button>
       <button class="doc-fmt-btn" id="btnDocHighlight" title="${t('highlight')}">🖍</button>
@@ -76,6 +76,8 @@ function renderDocView(visible) {
       <button class="doc-fmt-btn" id="btnDocRemind" title="${t('todo_remind')}">⏰</button>
       <button class="doc-fmt-btn" id="btnDocColor" title="${t('color')}">🎨</button>
       <button class="doc-fmt-btn" id="btnDocPin" title="${t('pin')}">🔝</button>
+      <span class="doc-tb-sep"></span>
+      <button class="doc-fmt-btn doc-export-btn" id="btnDocExportMd" title="${t('export_markdown')}" aria-label="${t('export_markdown')}">MD↓</button>
       <button class="doc-fmt-btn" id="btnDocDel" title="${t('delete')}">🗑</button>
       <span class="doc-hint">${t('doc_hint')}</span>
     </div>
@@ -116,7 +118,7 @@ function wireDocView(n, isTodo) {
     else openGroupPop(noteAnchor(n), n);
   };
   const desktopBtn = $('#btnDocDesktop');
-  if (desktopBtn) desktopBtn.onclick = () => { n.desktopPin = true; n.updatedAt = Date.now(); saveNow(); window.api.pinToDesktop(n.id); renderAll(); toast(t('toast_pinned')); };
+  if (desktopBtn) desktopBtn.onclick = () => pinNoteToDesktop(n);
   const imageBtn = $('#btnDocImage');
   if (imageBtn) imageBtn.onclick = async () => { const r = await window.api.pickNoteImage(); if (r.ok) insertImageByUrl(n, r.url); };
   const tableBtn = $('#btnDocTable');
@@ -127,6 +129,8 @@ function wireDocView(n, isTodo) {
   if (colorBtn) colorBtn.onclick = () => openColorPop(noteAnchor(n), n);
   const delBtn = $('#btnDocDel');
   if (delBtn) delBtn.onclick = () => deleteNote(n.id);
+  const exportBtn = $('#btnDocExportMd');
+  if (exportBtn) exportBtn.onclick = () => exportNoteAsMarkdown(n);
   const previewBtn = $('#btnDocPreview');
   if (previewBtn) previewBtn.onclick = () => { n.preview = !n.preview; n.updatedAt = Date.now(); save(); renderAll(); };
 

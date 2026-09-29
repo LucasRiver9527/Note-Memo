@@ -27,6 +27,10 @@
         <button class="tb-btn secondary" id="btnQuickArrange" data-i18n="quick_arrange" data-i18n-title="quick_arrange" title="一键整理">⚡ 一键整理</button>
         <button class="tb-btn secondary" id="btnSaveOrder" data-i18n="save_current_order" data-i18n-title="save_current_order" title="保存当前排序">💾 保存排序</button>
         <button class="tb-btn secondary" id="btnBatchToggle" data-i18n="batch_select" data-i18n-title="batch_select" title="批量选中">☑ 批量选中</button>
+        <div class="tb-more-wrap hidden" id="toolbarMoreWrap">
+          <button class="icon-btn" id="btnToolbarMore" type="button" aria-haspopup="true" aria-expanded="false" aria-controls="toolbarMoreMenu" data-i18n-title="more" title="更多操作">⋯</button>
+          <div class="tb-more-menu hidden" id="toolbarMoreMenu" role="menu"></div>
+        </div>
         <button class="icon-btn" id="btnUndo" data-i18n-title="undo" title="撤销 (Ctrl+Z)" disabled>↩</button>
         <button class="icon-btn" id="btnRedo" data-i18n-title="redo" title="重做 (Ctrl+Shift+Z)" disabled>↪</button>
         <button class="icon-btn" id="btnSettings" data-i18n-title="global_settings" title="全局设置">⚙</button>
@@ -67,9 +71,11 @@
       <div id="todoList" class="hidden"></div>
       <div id="docList" class="hidden"></div>
       <div class="empty-hint hidden" id="emptyHint">
-        <div class="empty-icon">🗒️</div>
+        <div class="empty-icon" id="emptyHintIcon">🗒️</div>
         <p data-i18n="no_notes">还没有便签</p>
-        <p class="sub" data-i18n="no_notes_sub">双击空白处或点击右上角「＋ 新建」创建</p>
+        <button id="btnEmptyCreate" class="tb-btn empty-create" type="button" data-i18n="new_note">＋ 新建</button>
+        <button id="btnClearFilters" class="tb-btn empty-create hidden" type="button" data-i18n="clear_filters">清除搜索与筛选</button>
+        <p class="sub" data-i18n="no_notes_sub">也可以双击空白处创建</p>
       </div>
       <div id="canvasToolbar" class="hidden">
         <button class="ct-btn ct-toggle" id="ctExpand" data-i18n-title="canvas_zoom_toggle" title="画布缩放 / 平移">⤢</button>
@@ -78,7 +84,7 @@
           <span class="ct-label" id="zoomLabel">100%</span>
           <button class="ct-btn" id="btnZoomIn" data-i18n-title="canvas_zoom_in" title="放大">＋</button>
           <button class="ct-btn" id="btnZoomReset" data-i18n-title="canvas_zoom_reset" title="重置缩放">⟳</button>
-          <button class="ct-btn" id="btnZoomPan" data-i18n-title="canvas_pan_hint" title="按住空格拖动、或按住鼠标中键平移画布">✋</button>
+          <button class="ct-btn" id="btnZoomPan" data-i18n-title="canvas_pan_hint" title="平移画布：按住空格键＋鼠标左键拖动，或按住鼠标中键拖动；单按空格不会移动画布（编辑时空格仍用于输入）">✋</button>
         </span>
       </div>
     </main>
@@ -458,7 +464,7 @@
             <div class="about-card">
               <div class="about-logo">▣</div>
               <div class="about-name" data-i18n="app_name">便签</div>
-              <div class="about-ver">v<span id="aboutVersion">1.2.5</span></div>
+              <div class="about-ver">v<span id="aboutVersion">1.2.6</span></div>
               <div class="about-desc" data-i18n="about_desc">美观可定制的 Windows 桌面便签。</div>
             </div>
             <h4 data-i18n="about_info">软件信息</h4>
@@ -537,7 +543,7 @@
     <div id="changelogModal">
       <header>
         <span data-i18n="changelog_title">更新说明</span>
-        <span class="cl-ver" id="clVersion">v1.2.5</span>
+        <span class="cl-ver" id="clVersion">v1.2.6</span>
       </header>
       <div class="cl-body">
         <ul id="changelogList"></ul>

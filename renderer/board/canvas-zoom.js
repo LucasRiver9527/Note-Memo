@@ -188,6 +188,7 @@ function nextAllPosition() {
 }
 
 function createNote(x, y) {
+  prepareNewNoteVisibility();
   pushUndo();
   const pos = (x != null && y != null) ? { x, y } : nextGridPosition();
   // 仅在「全部」视图时 positionAll 与当前作用域一致；分组/未分组视图独立算一个不重叠的「全部」空位。
@@ -265,30 +266,36 @@ function ensureMultiSelectActive() {
   syncSelectedVisual();
 }
 
-// 平移画布：通过修改 #canvas 的 scrollLeft/scrollTop 实现（缩放后内容超出视口才可平移）。
-// 触发：空格+左键 或 鼠标中键（已在 app.js 的 mousedown 判定 target 为空白背景后调用）。
+// 平移画布：通过修改 #canvas 的 scrollLeft/scrollTop 实现。
+// 触发：空格+左键或鼠标中键，可从便签区域开始拖动。
 function startCanvasPan(e) {
   const canvas = $('#canvas');
+  const pointerId = e.pointerId;
   const startX = e.clientX;
   const startY = e.clientY;
   const sl = canvas.scrollLeft;
   const st = canvas.scrollTop;
   canvas.style.cursor = 'grabbing';
   document.body.classList.add('panning');
+  canvas.setPointerCapture(pointerId);
   const onMove = (ev) => {
+    if (ev.pointerId !== pointerId) return;
     canvas.scrollLeft = Math.max(0, sl - (ev.clientX - startX));
     canvas.scrollTop = Math.max(0, st - (ev.clientY - startY));
   };
   const onUp = () => {
-    document.removeEventListener('mousemove', onMove);
-    document.removeEventListener('mouseup', onUp);
-    canvas.removeEventListener('mouseleave', onUp);
+    document.removeEventListener('pointermove', onMove);
+    document.removeEventListener('pointerup', onUp);
+    document.removeEventListener('pointercancel', onUp);
+    window.removeEventListener('blur', onUp);
+    if (canvas.hasPointerCapture(pointerId)) canvas.releasePointerCapture(pointerId);
     canvas.style.cursor = '';
     document.body.classList.remove('panning');
   };
-  document.addEventListener('mousemove', onMove);
-  document.addEventListener('mouseup', onUp);
-  canvas.addEventListener('mouseleave', onUp);
+  document.addEventListener('pointermove', onMove);
+  document.addEventListener('pointerup', onUp);
+  document.addEventListener('pointercancel', onUp);
+  window.addEventListener('blur', onUp);
 }
 
 // 框选：空白背景左键拖拽画出一个选择框，框内（与框相交）的可见便签被选中并进入批量 UI。

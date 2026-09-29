@@ -112,14 +112,33 @@ function getSelectedImageSrc() {
 }
 
 function save() {
+  cleanupRefs();
+  const draftToken = window.api.captureNoteDraft(note);
+  if (!draftToken) console.error('[note] 恢复草稿写入失败');
   clearTimeout(saveTimer);
-  saveTimer = setTimeout(() => {
-    if (note) {
-      cleanupRefs();
-      window.api.noteUpdate(note);
-    }
-  }, 300);
+  saveTimer = setTimeout(() => { saveNow(draftToken); }, 300);
 }
+
+async function saveNow(pendingToken) {
+  clearTimeout(saveTimer);
+  saveTimer = null;
+  if (!note) return true; // 尚未加载出便签时没有本窗口的待保存编辑
+  cleanupRefs();
+  const draftToken = pendingToken || window.api.captureNoteDraft(note);
+  if (!draftToken) console.error('[note] 恢复草稿写入失败');
+  let ok = false;
+  try { ok = await window.api.noteUpdate(note, { draftToken }) === true; }
+  catch (err) { console.error('[note] 保存失败：', err); }
+  const unpinBtn = $('#dnUnpin');
+  if (unpinBtn) {
+    unpinBtn.textContent = ok ? '📌' : '⚠';
+    unpinBtn.title = ok ? tr('unpin') : tr('toast_save_failed');
+  }
+  return ok;
+}
+
+// 主进程执行更新安装前使用；窗口仍在时才能读取最新编辑态并等待落盘。
+window.flushNoteForClose = saveNow;
 
 // 富文本/表格 HTML 构建已统一到 logic.js（单一来源），此处由 logic.js 全局提供；
 // 仅在此注入本窗口翻译器与 Markdown 开关。
@@ -1047,7 +1066,10 @@ async function init() {
 
   const unpinBtn = $('#dnUnpin');
   unpinBtn.title = tr('unpin');
-  unpinBtn.onclick = () => window.api.unpinFromDesktop(noteId);
+  unpinBtn.onclick = async () => {
+    // 取消置顶会立即关闭窗口，先等最后一次编辑得到落盘确认。
+    if (await saveNow()) await window.api.unpinFromDesktop(noteId);
+  };
 
   document.addEventListener('contextmenu', (e) => {
     e.preventDefault();
@@ -1066,7 +1088,7 @@ async function init() {
     }
   });
 
-  window.addEventListener('beforeunload', () => { if (note) { cleanupRefs(); window.api.noteUpdate(note); } });
+  // 正常关闭由主进程先调用 flushNoteForClose；异常退出靠同步草稿恢复。
 }
 
 init();

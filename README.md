@@ -130,9 +130,19 @@ npm run dist:publish:preview # 发布预览版（GitHub Release 标记为 Pre-re
 - **技术栈**：Electron 33 · electron-builder 25 · electron-updater 6 · Playwright · 原生 HTML / CSS / JS
 - **版本管理**：仅改 `package.json` 的 `version`，应用内由 `app.getVersion()` 统一注入。
 - **自动更新**：经 `electron-updater` 接通 GitHub Releases（`package.json` 的 `build.publish` 已配好）；
-  已显式锁定稳定通道（`allowPrerelease=false` + `channel=latest`），预发布版本也能升级到稳定版。
-- **预览版发布**：版本设为 `x.y.z-preview` 并执行 `npm run dist:publish:preview`，让 GitHub Release 标记为
-  **Pre-release**（否则 `releases/latest` 会把它当成稳定版推给所有用户）。
+  工作区当前代码（1.2.6 起）显式锁定稳定通道（`allowPrerelease=false` + `channel='latest'`），并在收到更新信息时
+  拦截版本号含 `-` 的预发布包。
+- **已安装的 1.2.5 二进制没有这段显式逻辑**：`electron-updater` 对稳定版号默认 `allowPrerelease=false`，GitHub
+  provider 也只会取最新的正常 Release，因此 1.2.5 实际同样只走稳定通道；旧二进制无法回溯修改。
+- **预览版发布（一般流程）**：版本设为 `x.y.z-preview` 并执行 `npm run dist:publish:preview`，让 GitHub Release
+  标记为 **Pre-release**（否则 `releases/latest` 会把它当成稳定版推给所有用户）。
+- **1.2.6 测试版发布（特殊例外）**：要让已安装的 1.2.5 用户经由应用内更新流程收到 1.2.6 测试版，本次发布必须满足：
+  - 版本号用 `1.2.6`（**不带** `-preview` 等后缀），`package.json` 与 `package-lock.json` 的版本字段三处一致；
+  - 发布为 GitHub **正常 Release**（**不是** Pre-release），走 `latest` 通道，这样 `releases/latest` 才会把它返回给
+    稳定版的 1.2.5 用户；
+  - GitHub Release 的**标题与说明显著标注「测试版」**，让用户明确这是测试版本，而不是稳定正式版。
+  - 这是对上面「预览版 = Pre-release」一般流程的**有意例外**：本次**不要**执行 `npm run dist:publish:preview`，
+    改用 `npm run dist:publish`；只有带 `-preview` 后缀的常规预览版才走 `dist:publish:preview`。
 - **代码签名**：设 `CSC_LINK`（证书路径/base64）与 `CSC_KEY_PASSWORD` 即自动签名；正式分发建议 OV / EV 证书或 Azure Trusted Signing（未签时会触发 SmartScreen「未知发布者」）。
 
 ## 📄 更新日志

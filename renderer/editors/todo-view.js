@@ -14,6 +14,7 @@
 
 /* ============ 待办区 ============ */
 function createTodoNote(text, x, y) {
+  prepareNewNoteVisibility();
   pushUndo();
   const pos = (x != null && y != null) ? { x, y } : nextGridPosition();
   const allPos = (filter.group === 'all') ? pos : nextAllPosition();
@@ -49,6 +50,7 @@ function createTodoNote(text, x, y) {
 }
 
 function createEmptyTodoNote() {
+  prepareNewNoteVisibility();
   pushUndo();
   const pos = nextGridPosition();
   const allPos = (filter.group === 'all') ? pos : nextAllPosition();
@@ -84,35 +86,38 @@ function createEmptyTodoNote() {
   return n;
 }
 
-function renderTodoView() {
+function renderTodoView(visible, query) {
   const list = $('#todoList');
-  if (!list) return;
+  if (!list) return 0;
 
-  const visible = state.notes.filter((n) => {
-    if (n.desktopPin) return false;
-    if (!!n.archived !== !!filter.archive) return false;
-    if (filter.group === 'ungrouped' && n.groupId) return false;
-    if (filter.group !== 'all' && filter.group !== 'ungrouped' && n.groupId !== filter.group) return false;
-    return true;
-  });
+  query = query || '';
+  visible = visible || [];
 
   const todoEntries = [];
   getSortedNotes(visible).forEach((n) => {
     if (n.type === 'todo') {
-      (n.items || []).forEach((it) => todoEntries.push({ note: n, item: it }));
+      const group = state.groups.find((g) => g.id === n.groupId);
+      const noteMatch = !query || ((n.title || '') + ' ' + (group ? group.name : '')).toLowerCase().includes(query);
+      (n.items || []).filter((it) => noteMatch || (it.text || '').toLowerCase().includes(query))
+        .forEach((it) => todoEntries.push({ note: n, item: it }));
     }
   });
   const openCount = todoEntries.filter((e) => !e.item.done).length;
 
   const remindEntries = visible
     .filter((n) => n.reminder && n.reminder.enabled && n.reminder.time)
+    .filter((n) => {
+      if (!query) return true;
+      const group = state.groups.find((g) => g.id === n.groupId);
+      return ((n.title || '') + ' ' + (n.content || '') + ' ' + (group ? group.name : '')).toLowerCase().includes(query);
+    })
     .sort((a, b) => new Date(a.reminder.time) - new Date(b.reminder.time));
 
   let html = '';
-  html += `<div class="todo-panel-head"><h3>${t('todo_items')}</h3><span class="count">${openCount}</span></div>
+  html += `<div class="todo-panel-head"><h3>${t('todo_items')}</h3><span class="count">${t('todo_open_count')} ${openCount}</span></div>
     <div class="todo-add-box"><input id="todoQuickInput" type="text" placeholder="${t('add_todo_ph')}" /><button class="sp-btn" id="btnQuickAdd" style="width:auto;padding:0 18px">${t('add')}</button></div>`;
 
-  html += `<div class="todo-section items"><h4>${t('todo_items')}（${todoEntries.length}）</h4>`;
+  html += `<div class="todo-section items"><h4>${t('todo_all_items')}（${todoEntries.length}）</h4>`;
   if (todoEntries.length === 0) {
     html += `<div class="todo-empty">${t('no_todos')}</div>`;
   } else {
@@ -160,6 +165,7 @@ function renderTodoView() {
 
   list.innerHTML = html;
   wireTodoView();
+  return todoEntries.length + remindEntries.length;
 }
 
 function wireTodoView() {

@@ -12,6 +12,28 @@
 }(typeof self !== 'undefined' ? self : this, function () {
   'use strict';
 
+const compactToolbar = typeof window === 'undefined'
+  ? { matches: false, addEventListener() {} }
+  : window.matchMedia('(max-width: 1050px)');
+function syncToolbarMore() {
+  const wrap = $('#toolbarMoreWrap');
+  const menu = $('#toolbarMoreMenu');
+  const undoBtn = $('#btnUndo');
+  if (!wrap || !menu || !undoBtn) return;
+  const actions = ['btnQuickArrange', 'btnSaveOrder', 'btnBatchToggle'].map((id) => $('#' + id));
+  if (compactToolbar.matches) {
+    actions.forEach((button) => { if (button.parentElement !== menu) menu.appendChild(button); });
+    wrap.classList.toggle('hidden', !actions.some((button) => !button.classList.contains('hidden')));
+    actions.forEach((button) => button.setAttribute('role', 'menuitem'));
+  } else {
+    actions.forEach((button) => { if (button.parentElement !== undoBtn.parentElement) undoBtn.before(button); });
+    actions.forEach((button) => button.removeAttribute('role'));
+    wrap.classList.add('hidden');
+    menu.classList.add('hidden');
+    $('#btnToolbarMore').setAttribute('aria-expanded', 'false');
+  }
+}
+
 function bindBatch() {
   $('#btnAdd').onclick = () => {
     if (state.settings.viewMode === 'todo') {
@@ -29,6 +51,21 @@ function bindBatch() {
   $('#btnSaveOrder').onclick = () => saveCurrentOrder();
 
   $('#btnBatchToggle').onclick = () => toggleMultiSelect();
+  $('#btnEmptyCreate').onclick = () => $('#btnAdd').click();
+  const moreWrap = $('#toolbarMoreWrap');
+  const moreMenu = $('#toolbarMoreMenu');
+  const moreButton = $('#btnToolbarMore');
+  const closeMore = () => { moreMenu.classList.add('hidden'); moreButton.setAttribute('aria-expanded', 'false'); };
+  moreButton.onclick = () => {
+    const opening = moreMenu.classList.contains('hidden');
+    moreMenu.classList.toggle('hidden', !opening);
+    moreButton.setAttribute('aria-expanded', String(opening));
+  };
+  moreMenu.addEventListener('click', (event) => { if (event.target.closest('button')) closeMore(); });
+  document.addEventListener('pointerdown', (event) => { if (!moreWrap.contains(event.target)) closeMore(); });
+  document.addEventListener('keydown', (event) => { if (event.key === 'Escape') closeMore(); });
+  compactToolbar.addEventListener('change', syncToolbarMore);
+  syncToolbarMore();
   $('#btnBatchExit').onclick = () => { if (multiSelect) toggleMultiSelect(); };
   $('#btnBatchSelectAll').onclick = selectAllVisible;
   $('#btnBatchClear').onclick = () => { selectedNotes.clear(); syncSelectedVisual(); };
@@ -81,5 +118,5 @@ function bindBatch() {
   }
 }
 
-  return { bindBatch };
+  return { bindBatch, syncToolbarMore };
 }));

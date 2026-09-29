@@ -20,6 +20,8 @@ function bindGlobalInput() {
     if (e.code !== 'Space') return;
     const t = e.target;
     if (t && t.closest && t.closest('input, textarea, select, [contenteditable="true"]')) return;
+    if (state.settings.viewMode !== 'board') return;
+    e.preventDefault();
     spaceDown = true;
     document.body.classList.add('pan-mode');
   });
@@ -104,9 +106,15 @@ function registerIpc() {
   // 关闭确认：主进程询问 → 弹主题化选择框 → 回传决定
   window.api.onCloseRequest(async () => {
     const choice = await showCloseDecisionModal();
+    // 正常退出前等待主进程确认落盘；失败时留在应用中，避免把未保存改动丢掉。
+    if (choice === 'quit' && !dataReadonly && !(await saveNow())) {
+      window.api.replyCloseDecision('cancel');
+      return;
+    }
     if (choice) window.api.replyCloseDecision(choice);
     else window.api.replyCloseDecision('cancel');
   });
+  window.api.onWindowSaveFailed(() => reportSaveError(new Error('独立便签保存失败')));
 
   window.api.onUpdateAvailable(async (info) => {
     const ver = (info && info.version) || '';
@@ -120,7 +128,15 @@ function registerIpc() {
   window.api.onUpdateDownloaded(async (info) => {
     const ver = (info && info.version) || '';
     const ok = await confirmModal(t('update_ready_title'), t('update_ready_msg').replace('{v}', ver));
-    if (ok) window.api.quitAndInstall();
+    if (!ok) return;
+    // 更新处理会直接销毁窗口，先等待主窗口及独立便签的待保存内容落盘。
+    if (!dataReadonly && !(await saveNow())) return;
+    try {
+      const result = await window.api.quitAndInstall();
+      if (result && result.ok === false) toast(t('toast_save_failed') + (result.error ? (' ' + result.error) : ''));
+    } catch (err) {
+      reportSaveError(err);
+    }
   });
 
   window.api.onReminderFired((id) => {

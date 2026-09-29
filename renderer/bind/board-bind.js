@@ -16,6 +16,7 @@ function bindBoard() {
   const search = $('#searchInput');
   search.addEventListener('input', () => {
     filter.query = search.value;
+    if (state.settings.viewMode === 'doc' && docNoteId) docNoteId = null;
     $('#searchClear').classList.toggle('hidden', !search.value);
     renderAll();
   });
@@ -50,18 +51,18 @@ function bindBoard() {
     applyBoardZoomRatio(boardZoom() + dir * LAYOUT.zoomStep, { mode: 'cursor', x: e.clientX, y: e.clientY });
   }, { passive: false });
 
-  // 平移：空格+左键拖 或 鼠标中键拖（仅空白背景）
-  canvas.addEventListener('mousedown', (e) => {
+  // 在捕获阶段接管空格+左键/中键，避免按在便签上时先触发卡片拖动或编辑。
+  canvas.addEventListener('pointerdown', (e) => {
     if (state.settings.viewMode !== 'board') return;
-    if (!(e.target === canvas || e.target === board)) return;
     if ((e.button === 1) || (e.button === 0 && spaceDown)) {
       e.preventDefault();
+      e.stopPropagation();
       startCanvasPan(e);
-    } else if (e.button === 0) {
+    } else if (e.button === 0 && (e.target === canvas || e.target === board)) {
       // 左键空白背景：开启框选（拖拽拉框多选）
       startBoxSelect(e);
     }
-  });
+  }, true);
 
   // 空白画布右键：快捷插入
   canvas.addEventListener('contextmenu', (e) => {

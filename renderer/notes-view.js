@@ -81,6 +81,7 @@ function renderAll() {
     return true;
   });
 
+  let resultCount = visible.length;
   if (state.settings.viewMode === 'todo') {
     board.classList.add('hidden');
     memoList.classList.add('hidden');
@@ -90,7 +91,7 @@ function renderAll() {
     memoList.innerHTML = '';
     docList.innerHTML = '';
     lastRenderView = 'todo';
-    renderTodoView();
+    resultCount = renderTodoView(visible, query);
   } else if (state.settings.viewMode === 'memo') {
     board.classList.add('hidden');
     memoList.classList.remove('hidden');
@@ -110,6 +111,7 @@ function renderAll() {
     memoList.innerHTML = '';
     todoList.innerHTML = '';
     lastRenderView = 'doc';
+    if (docNoteId && !visible.some((n) => n.id === docNoteId)) docNoteId = null;
     renderDocView(visible);
   } else {
     board.classList.remove('hidden');
@@ -144,11 +146,64 @@ function renderAll() {
 
   $('#noteCount').textContent = state.notes.length;
   const empty = state.notes.length === 0;
-  $('#emptyHint').classList.toggle('hidden', !empty || state.settings.viewMode === 'todo' || state.settings.viewMode === 'doc');
+  const hasFilter = !!query || !!filter.archive || filter.group !== 'all' ||
+    Object.values(state.settings.collapsedGroups || {}).some(Boolean);
+  const noMatches = !empty && hasFilter && resultCount === 0;
+  const showEmpty = empty && state.settings.viewMode !== 'todo';
+  const emptyHint = $('#emptyHint');
+  emptyHint.classList.toggle('hidden', !showEmpty && !noMatches);
+  $('.empty-icon', emptyHint).textContent = noMatches ? '⌕' : '🗒️';
+  $('p:not(.sub)', emptyHint).textContent = t(noMatches ? 'no_matches' : 'no_notes');
+  $('.sub', emptyHint).textContent = t(noMatches ? 'no_matches_sub' : 'no_notes_sub');
+  $('#btnEmptyCreate').classList.toggle('hidden', !showEmpty);
+  $('#btnClearFilters').classList.toggle('hidden', !noMatches);
+  $('#btnClearFilters').onclick = clearViewFilters;
+  if (noMatches && state.settings.viewMode === 'todo') todoList.classList.add('hidden');
+  if ((noMatches || showEmpty) && state.settings.viewMode === 'doc') docList.classList.add('hidden');
+  $('#btnBatchToggle').classList.toggle('hidden', empty);
+  $('#btnQuickArrange').classList.toggle('hidden', empty || state.settings.viewMode !== 'board');
+  $('#btnSaveOrder').classList.toggle('hidden', empty || state.settings.viewMode !== 'board');
+  if (typeof syncToolbarMore === 'function') syncToolbarMore();
   if (multiSelect) syncSelectedVisual();
 
   if (state.settings.viewMode === 'board') syncBoardSize();
   if (typeof syncZoomToolbar === 'function') syncZoomToolbar();
+}
+
+function clearViewFilters() {
+  filter.query = '';
+  filter.group = 'all';
+  filter.archive = false;
+  sortPanelGroupId = 'all';
+  const search = $('#searchInput');
+  search.value = '';
+  $('#searchClear').classList.add('hidden');
+  const collapsed = state.settings.collapsedGroups || {};
+  const snapshots = state.settings.collapseSnapshot || {};
+  const collapsedIds = Object.keys(collapsed).filter((id) => collapsed[id]);
+  collapsedIds.forEach((id) => {
+    if (snapshots[id]) restoreBoardLayout(snapshots[id]);
+    delete snapshots[id];
+    collapsed[id] = false;
+  });
+  if (collapsedIds.length) save();
+  renderGroupChips();
+  renderAll();
+  search.focus();
+}
+
+// 新建内容必须立即可见：保留当前分组归属，仅退出会把空白新便签藏起来的条件。
+function prepareNewNoteVisibility() {
+  if (filter.query) {
+    filter.query = '';
+    $('#searchInput').value = '';
+    $('#searchClear').classList.add('hidden');
+  }
+  if (filter.archive) {
+    filter.archive = false;
+    renderGroupChips();
+  }
+  if (isGroupCollapsed(filter.group)) toggleGroupCollapse(filter.group);
 }
 
 // 自适应画布尺寸：让「画布」高度/宽度至少等于视口，随便签内容增大。

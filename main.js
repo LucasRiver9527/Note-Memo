@@ -37,6 +37,99 @@ const recentlyFired = new Set();
 const detachedWindows = new Map();
 
 const dataPath = () => path.join(app.getPath('userData'), 'notes-data.json');
+const recoveryPath = () => path.join(app.getPath('userData'), 'notes-recovery.json');
+let recoveryState = null;
+let recoveryToken = 0;
+
+function readRecovery() {
+  if (recoveryState) return recoveryState;
+  try {
+    const parsed = JSON.parse(fs.readFileSync(recoveryPath(), 'utf8'));
+    if (parsed.version !== 1 || !parsed.notes || typeof parsed.notes !== 'object' || Array.isArray(parsed.notes)) throw new Error('invalid recovery shape');
+    recoveryState = parsed;
+    recoveryToken = Math.max(0, Number(parsed.main && parsed.main.token) || 0,
+      ...Object.values(parsed.notes).map((item) => Number(item && item.token) || 0));
+  } catch (err) {
+    if (err.code !== 'ENOENT') {
+      console.error('[recovery] 草稿读取失败，原文件已保留：', err);
+      return null;
+    }
+    recoveryState = { version: 1, main: null, notes: {} };
+  }
+  return recoveryState;
+}
+
+function writeRecovery(next) {
+  const file = recoveryPath();
+  const tmp = `${file}.${process.pid}.tmp`;
+  try {
+    if (!next.main && !Object.keys(next.notes).length) fs.rmSync(file, { force: true });
+    else {
+      fs.writeFileSync(tmp, JSON.stringify(next), 'utf8');
+      fs.renameSync(tmp, file);
+    }
+    recoveryState = next;
+    return true;
+  } catch (err) {
+    console.error('[recovery] 草稿写入失败：', err);
+    try { fs.rmSync(tmp, { force: true }); } catch (_) {}
+    return false;
+  }
+}
+
+function captureRecovery(kind, value) {
+  if (kind === 'main' ? !DataIO.isValidDataShape(value) : !value || typeof value.id !== 'string') return false;
+  const current = readRecovery();
+  if (!current) return false;
+  const token = ++recoveryToken;
+  const next = { version: 1, main: current.main, notes: { ...current.notes } };
+  if (kind === 'main') next.main = { token, data: value };
+  else next.notes[value.id] = { token, note: value };
+  return writeRecovery(next) ? token : false;
+}
+
+function clearRecovery(kind, id, token, savedData) {
+  if (!token) return;
+  const current = readRecovery();
+  if (!current) return;
+  const entry = kind === 'main' ? current.main : current.notes[id];
+  if (!entry || entry.token !== token) return;
+  // 主窗口草稿仍可能包含旧版独立便签；此时保留独立草稿供恢复时覆盖。
+  if (kind === 'note' && current.main) return;
+  const next = { version: 1, main: current.main, notes: { ...current.notes } };
+  if (kind === 'main') {
+    next.main = null;
+    for (const [noteId, item] of Object.entries(next.notes)) {
+      const savedNote = (savedData.notes || []).find((note) => note.id === noteId);
+      if (savedNote && JSON.stringify(savedNote) === JSON.stringify(item.note)) delete next.notes[noteId];
+    }
+  }
+  else delete next.notes[id];
+  writeRecovery(next);
+}
+
+function recoveryCandidate(base) {
+  const current = readRecovery();
+  if (!current) return null;
+  const source = current.main && DataIO.isValidDataShape(current.main.data) ? current.main.data : base;
+  if (!source || !DataIO.isValidDataShape(source)) return null;
+  const entries = Object.values(current.notes).filter((item) => item && item.note && typeof item.note.id === 'string');
+  if (!current.main && !entries.length) return null;
+  const candidate = JSON.parse(JSON.stringify(source));
+  candidate.notes = candidate.notes || [];
+  for (const item of entries) {
+    const index = candidate.notes.findIndex((n) => n.id === item.note.id);
+    if (index >= 0) candidate.notes[index] = item.note;
+    else candidate.notes.push(item.note);
+  }
+  return candidate;
+}
+
+function openStartupPinned(data) {
+  if (!data || !Array.isArray(data.notes)) return;
+  scheduleReminders(data.notes);
+  data.notes.forEach((note) => { if (note.desktopPin) createDetachedWindow(note.id); });
+}
 
 function clipboardImageToDataUrl() {
   const img = clipboard.readImage();
@@ -202,21 +295,28 @@ function createWindow() {
     }
   });
 
-  mainWindow.loadFile(path.join(__dirname, 'renderer', 'index.html'));
-
   mainWindow.on('maximize', () => { mainWindow.webContents.send('window:maximized', true); persistWindowState(); });
   mainWindow.on('unmaximize', () => { mainWindow.webContents.send('window:maximized', false); persistWindowState(); });
   mainWindow.on('resize', persistWindowState);
   mainWindow.on('move', persistWindowState);
   mainWindow.on('hide', persistWindowState);
 
-  mainWindow.once('ready-to-show', () => {
+  let initialShowPending = true;
+  const showInitialWindow = () => {
+    if (!initialShowPending || !mainWindow || mainWindow.isDestroyed()) return;
+    initialShowPending = false;
     mainWindow.show();
     // 恢复最大化状态（还原到最大化前尺寸 max；若最大化失败则保持普通）
     if (saved && saved.maximized) {
       try { mainWindow.maximize(); } catch (e) { /* ignore */ }
     }
-  });
+  };
+  mainWindow.once('ready-to-show', showInitialWindow);
+  // Windows 上透明窗口可能迟迟不触发 ready-to-show；页面加载完后兜底显示。
+  // 共用一次性门闩，避免较晚的 ready-to-show 在用户隐藏窗口后再次 show()。
+  mainWindow.webContents.once('did-finish-load', () => setTimeout(showInitialWindow, 150));
+
+  mainWindow.loadFile(path.join(__dirname, 'renderer', 'index.html'));
 
   mainWindow.on('close', (e) => {
     if (isQuitting) return;
@@ -240,8 +340,12 @@ function requestCloseMainWindow() {
 }
 
 // 处理 renderer 回传的关闭决定
-function handleCloseDecision(decision) {
+async function handleCloseDecision(decision) {
   if (decision === 'quit') {
+    if (!(await flushDetachedNotes())) {
+      if (mainWindow && !mainWindow.isDestroyed()) mainWindow.webContents.send('window:save-failed');
+      return;
+    }
     isQuitting = true;
     app.quit();
   } else if (decision === 'hide') {
@@ -251,7 +355,7 @@ function handleCloseDecision(decision) {
 }
 
 function createDetachedWindow(noteId) {
-  if (detachedWindows.has(noteId)) return;
+  if (detachedWindows.has(noteId)) return detachedWindows.get(noteId);
   const win = new BrowserWindow({
     width: 300,
     height: 240,
@@ -272,7 +376,7 @@ function createDetachedWindow(noteId) {
       additionalArguments: ['--app-version=' + app.getVersion()]
     }
   });
-  win.loadFile(path.join(__dirname, 'renderer', 'note.html'), { query: { id: noteId } });
+  win.noteLoadPromise = win.loadFile(path.join(__dirname, 'renderer', 'note.html'), { query: { id: noteId } });
   win.setAlwaysOnTop(true, 'screen-saver');
   // 桌面便签玻璃拟态：Windows 11 亚克力材质，提供背后桌面的磨砂模糊
   if (process.platform === 'win32' && typeof win.setBackgroundMaterial === 'function') {
@@ -290,8 +394,29 @@ function createDetachedWindow(noteId) {
   detachedWindows.set(noteId, win);
   win.on('closed', () => {
     if (detachedWindows.get(noteId) === win) detachedWindows.delete(noteId);
-    if (mainWindow) mainWindow.webContents.send('note:unpinned', noteId);
+    if (mainWindow && !win.notePinFailed) mainWindow.webContents.send('note:unpinned', noteId);
   });
+  return win;
+}
+
+async function flushDetachedNote(win) {
+  if (!win || win.isDestroyed()) return true;
+  try {
+    // 静态脚本，只调用独立便签暴露的本地保存函数，不插入用户内容。
+    return await win.webContents.executeJavaScript(
+      'typeof window.flushNoteForClose === "function" && window.flushNoteForClose()'
+    ) === true;
+  } catch (err) {
+    console.error('[note] 独立便签保存失败：', err);
+    return false;
+  }
+}
+
+async function flushDetachedNotes() {
+  for (const win of detachedWindows.values()) {
+    if (!(await flushDetachedNote(win))) return false;
+  }
+  return true;
 }
 
 function createTray() {
@@ -424,7 +549,25 @@ function setupIpc() {
   ipcMain.handle('data:load', () => {
     const data = readData();
     const health = dataHealth();
-    return { data: data || null, status: health.status, corruptPath: health.corruptPath };
+    return { data: data || null, status: health.status, corruptPath: health.corruptPath,
+      recovery: recoveryCandidate(data) };
+  });
+
+  ipcMain.on('data:draft', (event, data) => {
+    event.returnValue = isDataLocked() ? false : captureRecovery('main', data);
+  });
+  ipcMain.on('note:draft', (event, note) => {
+    event.returnValue = isDataLocked() ? false : captureRecovery('note', note);
+  });
+  ipcMain.handle('data:recovery:resolve', (event, decision) => {
+    if (decision !== 'restore' && decision !== 'discard') throw new Error('invalid recovery decision');
+    const original = readData();
+    const candidate = recoveryCandidate(original);
+    if (!candidate) return { ok: false };
+    if (decision === 'restore' && !writeData(candidate, { force: true })) return { ok: false };
+    if (!writeRecovery({ version: 1, main: null, notes: {} })) return { ok: false };
+    openStartupPinned(decision === 'restore' ? candidate : original);
+    return { ok: true, data: decision === 'restore' ? candidate : null };
   });
 
   // 只读通道：单独查询数据健康状态（供渲染层随时重查，无需重新读盘）。
@@ -443,6 +586,7 @@ function setupIpc() {
     if (!ok) {
       throw new Error(isDataLocked() ? '数据文件损坏且无可用备份，已锁定写入' : '数据写入失败');
     }
+    clearRecovery('main', null, opts && opts.draftToken, data);
     if (Array.isArray(data.notes)) {
       // 重新武装的提醒（fired=false 且启用的便签）允许再次调度——解除最近触发标记（「稍后再响」依赖此机制）。
       data.notes.forEach((n) => {
@@ -738,17 +882,29 @@ function setupIpc() {
   });
 
   // 桌面便签（独立窗口）
-  ipcMain.handle('note:pin', (e, id) => {
+  ipcMain.handle('note:pin', async (e, id) => {
     const data = readData();
-    if (data && Array.isArray(data.notes)) {
-      const note = data.notes.find((n) => n.id === id);
-      if (note) {
-        note.desktopPin = true;
-        writeData(data);
+    if (!data || !Array.isArray(data.notes)) return false;
+    const note = data.notes.find((n) => n.id === id);
+    if (!note) return false;
+    const wasPinned = !!note.desktopPin;
+    note.desktopPin = true;
+    if (!writeData(data)) return false;
+    let win;
+    try {
+      win = createDetachedWindow(id);
+      await win.noteLoadPromise;
+      return true;
+    } catch (err) {
+      console.error('[note] 钉到桌面失败：', err);
+      if (win && !win.isDestroyed()) {
+        win.notePinFailed = true;
+        win.destroy();
       }
+      note.desktopPin = wasPinned;
+      if (!writeData(data)) console.error('[note] 钉桌失败后回滚存档失败');
+      return false;
     }
-    createDetachedWindow(id);
-    return true;
   });
   ipcMain.handle('note:get', (e, id) => {
     const data = readData();
@@ -758,30 +914,36 @@ function setupIpc() {
     }
     return { note: null, settings: null };
   });
-  ipcMain.handle('note:update', (e, note) => {
+  ipcMain.handle('note:update', (e, note, opts) => {
     // 数据不可用时返回 false，让渲染层知道未落盘，避免「显示已保存但磁盘是空的」
     const data = readData();
     if (!data) return false;
     data.notes = (data.notes || []).map((n) => (n.id === note.id ? note : n));
     const ok = writeData(data);
+    if (!ok) return false;
+    clearRecovery('note', note.id, opts && opts.draftToken);
     // 重新武装的提醒允许再次调度（稍后再响）
     if (note && note.reminder && note.reminder.enabled && !note.reminder.fired) recentlyFired.delete(note.id);
     scheduleReminders(data.notes);
     if (mainWindow) mainWindow.webContents.send('note:changed', note);
     return ok;
   });
-  ipcMain.handle('note:unpin', (e, id) => {
+  ipcMain.handle('note:unpin', async (e, id) => {
     const win = detachedWindows.get(id);
+    if (!(await flushDetachedNote(win))) return false;
     if (win) win.close();
     else if (mainWindow) mainWindow.webContents.send('note:unpinned', id);
     return true;
   });
-  ipcMain.handle('note:close-all', () => {
+  ipcMain.handle('note:close-all', async () => {
+    if (!(await flushDetachedNotes())) return false;
     detachedWindows.forEach((w) => w.close());
     detachedWindows.clear();
     return true;
   });
-  ipcMain.handle('note:delete', (e, id) => {
+  ipcMain.handle('note:delete', async (e, id) => {
+    const win = detachedWindows.get(id);
+    if (!(await flushDetachedNote(win))) return false;
     const data = readData();
     if (!data) return false;
     const idx = (data.notes || []).findIndex((n) => n.id === id);
@@ -793,7 +955,6 @@ function setupIpc() {
       writeData(data);
       scheduleReminders(data.notes);
     }
-    const win = detachedWindows.get(id);
     if (win) win.close();
     if (mainWindow && !mainWindow.isDestroyed()) mainWindow.webContents.send('note:deleted', id);
     return true;
@@ -959,6 +1120,8 @@ function setupIpc() {
   });
   ipcMain.handle('update:install', async () => {
     try {
+      // 独立便签各自持有尚未写盘的编辑态；任何一个保存失败都不能销毁窗口。
+      if (!(await flushDetachedNotes())) return { ok: false, error: '独立便签保存失败，请检查后重试' };
       isQuitting = true;
       for (const win of detachedWindows.values()) {
         if (!win.isDestroyed()) win.destroy();
@@ -980,7 +1143,9 @@ function setupIpc() {
   });
   ipcMain.on('window:hide', () => mainWindow && mainWindow.hide());
   ipcMain.on('window:close', () => requestCloseMainWindow());
-  ipcMain.on('window:close-decision', (e, decision) => handleCloseDecision(decision));
+  ipcMain.on('window:close-decision', (e, decision) => {
+    handleCloseDecision(decision).catch((err) => console.error('[window] 退出失败：', err));
+  });
   ipcMain.on('window:always-on-top', (e, flag) => {
     if (mainWindow) mainWindow.setAlwaysOnTop(!!flag);
   });
@@ -1178,12 +1343,7 @@ if (!gotLock) {
     setupAutoUpdate();
 
     const initial = readData();
-    if (initial && Array.isArray(initial.notes)) {
-      scheduleReminders(initial.notes);
-      initial.notes.forEach((n) => {
-        if (n.desktopPin) createDetachedWindow(n.id);
-      });
-    }
+    if (!recoveryCandidate(initial)) openStartupPinned(initial);
 
     // 从持久化设置注册全局快捷键（缺省用 shortcuts.js 默认，避免与系统默认冲突）
     const reg = registerGlobalShortcuts(initial ? (initial.settings || {}) : {});

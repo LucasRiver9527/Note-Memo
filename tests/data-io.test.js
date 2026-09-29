@@ -47,6 +47,16 @@ test('isValidDataShape 拒绝字段类型错误', () => {
   assert.strictEqual(isValidDataShape({ groups: {} }), false);
   assert.strictEqual(isValidDataShape({ trash: 3 }), false);
   assert.strictEqual(isValidDataShape({ settings: 'x' }), false);
+  assert.strictEqual(isValidDataShape({ settings: [] }), false);
+  assert.strictEqual(isValidDataShape({ notes: [null] }), false);
+  assert.strictEqual(isValidDataShape({ notes: [{ id: 'n1', images: {} }] }), false);
+  assert.strictEqual(isValidDataShape({ notes: [{ content: 42, images: [{ id: 'i1' }] }] }), false);
+  assert.strictEqual(isValidDataShape({ groups: [null] }), false);
+  assert.strictEqual(isValidDataShape({ trash: [{ note: null }] }), false);
+});
+
+test('isValidDataShape 保留旧版缺字段便签供迁移', () => {
+  assert.strictEqual(isValidDataShape({ notes: [{ content: 'old' }], groups: [], trash: [] }), true);
 });
 
 // ---- BOM 处理 ----
@@ -90,6 +100,39 @@ test('safeRead 正常文件返回 ok', () => {
     const r = safeRead(file);
     assert.strictEqual(r.status, 'ok');
     assert.strictEqual(r.data.notes[0].id, 'n1');
+  });
+});
+
+test('safeRead 合法 JSON 中的错误结构进入损坏锁，保留原文件', () => {
+  withTmp((file) => {
+    const raw = JSON.stringify({ notes: [null], groups: [], trash: [] });
+    fs.writeFileSync(file, raw, 'utf-8');
+    const r = safeRead(file);
+    assert.strictEqual(r.status, 'corrupt');
+    assert.strictEqual(r.data, null);
+    assert.strictEqual(fs.readFileSync(file, 'utf-8'), raw);
+    assert.strictEqual(fs.readFileSync(r.corruptPath, 'utf-8'), raw);
+  });
+});
+
+test('safeRead 主文件结构错误时只从结构有效的 .bak 恢复', () => {
+  withTmp((file) => {
+    fs.writeFileSync(file, JSON.stringify({ notes: [null] }), 'utf-8');
+    fs.writeFileSync(file + '.bak', JSON.stringify(GOOD), 'utf-8');
+    const r = safeRead(file);
+    assert.strictEqual(r.status, 'recovered');
+    assert.deepStrictEqual(r.data.notes, GOOD.notes);
+  });
+});
+
+test('safeRead 拒绝结构错误的 .bak，不以它覆盖损坏主文件', () => {
+  withTmp((file) => {
+    const raw = JSON.stringify({ notes: [null] });
+    fs.writeFileSync(file, raw, 'utf-8');
+    fs.writeFileSync(file + '.bak', JSON.stringify({ notes: 'bad' }), 'utf-8');
+    const r = safeRead(file);
+    assert.strictEqual(r.status, 'corrupt');
+    assert.strictEqual(fs.readFileSync(file, 'utf-8'), raw);
   });
 });
 
@@ -176,6 +219,14 @@ test('atomicWrite 正常写入并可读回', () => {
   });
 });
 
+test('atomicWrite 拒绝错误结构，不覆盖现有存档', () => {
+  withTmp((file) => {
+    fs.writeFileSync(file, JSON.stringify(GOOD), 'utf-8');
+    assert.strictEqual(atomicWrite(file, { notes: [null] }), false);
+    assert.deepStrictEqual(JSON.parse(fs.readFileSync(file, 'utf-8')), GOOD);
+  });
+});
+
 test('atomicWrite 首次写入不产生 .bak（无旧文件可备份）', () => {
   withTmp((file) => {
     assert.strictEqual(atomicWrite(file, GOOD), true);
@@ -216,6 +267,15 @@ test('atomicWrite 旧文件损坏时不用损坏内容覆盖好 .bak', () => {
     // .bak 仍是完好内容，没有被损坏主文件污染
     const bak = JSON.parse(fs.readFileSync(file + '.bak', 'utf-8'));
     assert.strictEqual(bak.notes[0].id, 'n1', '.bak 必须保持完好，供二次损坏时恢复');
+  });
+});
+
+test('atomicWrite 不把结构错误的旧文件写进唯一好备份', () => {
+  withTmp((file) => {
+    fs.writeFileSync(file + '.bak', JSON.stringify(GOOD), 'utf-8');
+    fs.writeFileSync(file, JSON.stringify({ notes: [null] }), 'utf-8');
+    assert.strictEqual(atomicWrite(file, { ...GOOD, notes: [{ id: 'n2' }] }), true);
+    assert.deepStrictEqual(JSON.parse(fs.readFileSync(file + '.bak', 'utf-8')), GOOD);
   });
 });
 

@@ -94,16 +94,19 @@ body.topbar-acrylic #titlebar {
   padding: 2px 8px; border-radius: 999px; font-weight: 600;
 }
 
-.tb-center { flex: 1 1 auto; display: flex; justify-content: flex-start; min-width: 0; }
+.tb-center { flex: 1 1 0; display: flex; min-width: 0; }
 .search-box {
   display: flex; align-items: center; gap: 6px;
   background: var(--bg-soft); border: 1px solid var(--border);
-  border-radius: 8px; padding: 5px 10px; flex: 1 1 280px; max-width: 480px; min-width: 200px;
+  border-radius: 10px; padding: 6px 12px; min-height: 36px;
+  width: 100%; min-width: 0;
+  transition: border-color 0.15s, box-shadow 0.15s;
   -webkit-app-region: no-drag;
 }
+.search-box:focus-within { border-color: var(--accent); box-shadow: 0 0 0 3px var(--accent-soft); }
 .search-icon { color: var(--fg-dim); }
 .search-box input {
-  flex: 1; background: transparent; border: none; outline: none;
+  flex: 1; min-width: 0; background: transparent; border: none; outline: none;
   color: var(--fg); font-size: calc(var(--font-size) - 1px); font-family: inherit;
   user-select: text;
 }
@@ -144,8 +147,31 @@ body.topbar-acrylic .win-btn.active:hover {
   border: 1px solid var(--border);
 }
 .tb-btn.secondary:hover { box-shadow: 0 4px 14px rgba(0,0,0,0.18); border-color: var(--accent); }
+.tb-more-wrap { position: relative; -webkit-app-region: no-drag; }
+.tb-more-menu {
+  position: absolute; right: 0; top: calc(100% + 8px); z-index: 12;
+  min-width: 180px; padding: 6px; display: flex; flex-direction: column; gap: 3px;
+  background: var(--bg); border: 1px solid var(--border); border-radius: 10px;
+  box-shadow: var(--shadow);
+}
+.tb-more-menu .tb-btn {
+  width: 100%; height: 36px; padding: 0 10px; text-align: left;
+  background: transparent; border: 0; box-shadow: none;
+}
+.tb-more-menu .tb-btn:hover { background: var(--accent-soft); transform: none; }
 
 .tb-divider { width: 1px; height: 20px; background: var(--border); margin: 0 4px; }
+
+@media (max-width: 1050px) {
+  #titlebar {
+    z-index: 10; height: 94px; flex: 0 0 94px; flex-wrap: wrap;
+    align-content: center; column-gap: 8px; row-gap: 4px;
+    padding: 6px 12px;
+  }
+  .tb-left { order: 1; }
+  .tb-right { order: 2; margin-left: auto; margin-right: 138px; }
+  .tb-center { order: 3; flex: 0 0 100%; width: 100%; }
+}
 
 /* ---------- 分组筛选栏 ---------- */
 #filterbar {
@@ -307,6 +333,7 @@ body.panning #canvas { cursor: grabbing; user-select: none; }
 .empty-icon { font-size: 52px; opacity: 0.6; }
 .empty-hint p { font-size: 15px; }
 .empty-hint .sub { font-size: 12.5px; opacity: 0.7; }
+.empty-hint .empty-create { margin-top: 8px; pointer-events: auto; }
 
 /* ---------- 便签卡片 ---------- */
 .note {
@@ -562,7 +589,7 @@ body.note-dragging .note.dragging {
 }
 .memo-head .note-title:focus { background: var(--accent-soft); }
 
-.memo-tools { display: flex; gap: 2px; flex: 1 1 auto; min-width: 0; flex-wrap: wrap; opacity: 0.85; transition: opacity 0.15s; }
+.memo-tools { display: flex; gap: 2px; flex: 0 1 auto; min-width: 0; margin-left: auto; justify-content: flex-end; flex-wrap: wrap; opacity: 0.85; transition: opacity 0.15s; }
 .memo-row:hover .memo-tools { opacity: 1; }
 .memo-tools button {
   background: rgba(127,127,127,0.26); border: none; cursor: pointer;
@@ -653,7 +680,7 @@ body.menu-acrylic .color-pop.ctx-menu {
 }
 body.maximized #settingsOverlay { border-radius: 0; }
 #settingsPanel {
-  width: 460px; max-width: 94vw; height: 100%;
+  width: 540px; max-width: 94vw; height: 100%;
   background: var(--bg); border-left: 1px solid var(--border);
   box-shadow: -10px 0 40px rgba(0,0,0,0.3);
   display: flex; flex-direction: column;
@@ -667,7 +694,7 @@ body.maximized #settingsOverlay { border-radius: 0; }
 }
 .sp-layout { flex: 1; display: flex; min-height: 0; }
 .sp-nav {
-  width: 128px; flex: 0 0 128px; padding: 12px 8px;
+  width: 120px; flex: 0 0 120px; padding: 12px 8px;
   border-right: 1px solid var(--border); display: flex; flex-direction: column; gap: 4px;
   overflow-y: auto;
 }
@@ -679,7 +706,7 @@ body.maximized #settingsOverlay { border-radius: 0; }
 }
 .sp-nav-item:hover { color: var(--fg); background: var(--bg-soft); }
 .sp-nav-item.active { background: var(--accent-soft); color: var(--accent); font-weight: 600; }
-.sp-content { flex: 1; overflow-y: auto; padding: 16px 18px 40px; min-width: 0; }
+.sp-content { flex: 1; overflow-y: auto; padding: 16px 16px 40px; min-width: 0; }
 .sp-tab { display: block; }
 .sp-content h4 { font-size: calc(var(--font-size) - 2px); color: var(--fg-dim); text-transform: uppercase; letter-spacing: 1px; margin: 20px 0 10px; }
 .sp-content h4:first-child { margin-top: 0; }
@@ -758,6 +785,9 @@ body.maximized #settingsOverlay { border-radius: 0; }
 .sp-btn.ghost { background: transparent; color: var(--fg-dim); border: 1px solid var(--border); }
 .sp-btn.primary { background: var(--accent); }
 .bg-actions { display: flex; gap: 8px; margin-bottom: 12px; }
+.sp-tab[data-tab="backup"] .bg-actions .sp-btn { min-width: 0; }
+.sp-tab[data-tab="backup"] .bg-actions #btnBackupNow { flex: 1 1 auto; }
+.sp-tab[data-tab="backup"] .bg-actions #btnOpenDir { flex: 0 0 auto; white-space: nowrap; }
 
 /* ---------- 提醒弹窗 ---------- */
 @keyframes fadeIn { from { opacity: 0; transform: translateY(-6px); } to { opacity: 1; } }
@@ -1099,29 +1129,31 @@ body.glass .memo-row:hover { box-shadow: var(--note-shadow-hover, 0 12px 40px rg
   padding: 6px 8px;
   border: 1px solid var(--border);
   border-radius: 12px;
-  background: color-mix(in srgb, var(--bg-soft) 55%, transparent);
-  -webkit-backdrop-filter: blur(12px) saturate(1.3);
-  backdrop-filter: blur(12px) saturate(1.3);
-  box-shadow: 0 4px 16px rgba(0, 0, 0, 0.14);
+  background: var(--note-color, var(--bg));
+  box-shadow: 0 6px 20px rgba(0, 0, 0, 0.18);
+  opacity: var(--note-opacity);
 }
 .doc-toolbar .doc-back {
-  background: transparent; border: 1px solid var(--border); color: var(--fg);
+  background: rgba(127,127,127,0.26); border: 1px solid rgba(127,127,127,0.28); color: inherit;
   border-radius: 8px; padding: 6px 12px; cursor: pointer; font-family: inherit; font-size: 13px;
 }
 .doc-toolbar .doc-back:hover { border-color: var(--accent); }
 .doc-toolbar .doc-fmt-btn {
-  background: var(--bg-soft); border: 1px solid var(--border); color: var(--fg);
+  background: rgba(127,127,127,0.26); border: 1px solid rgba(127,127,127,0.28); color: inherit;
   width: 32px; height: 32px; border-radius: 8px; cursor: pointer; font-size: 14px; font-family: inherit;
   display: inline-flex; align-items: center; justify-content: center; transition: all 0.12s;
 }
 .doc-toolbar .doc-fmt-btn:hover { border-color: var(--accent); color: var(--accent); }
+.doc-toolbar .doc-fmt-btn:focus-visible,
+.doc-toolbar .doc-back:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
+.doc-toolbar .doc-export-btn { width: 42px; font-size: 11px; font-weight: 700; letter-spacing: -0.2px; }
 .doc-toolbar .doc-hl-color {
-  width: 32px; height: 32px; border: 1px solid var(--border); border-radius: 8px;
-  background: transparent; cursor: pointer; padding: 2px; flex-shrink: 0;
+  width: 32px; height: 32px; border: 1px solid rgba(127,127,127,0.28); border-radius: 8px;
+  background: rgba(127,127,127,0.26); cursor: pointer; padding: 2px; flex-shrink: 0;
 }
 .doc-toolbar .doc-hl-color:hover { border-color: var(--accent); }
 .doc-toolbar .doc-spacer { flex: 1; }
-.doc-toolbar .doc-hint { font-size: 12px; color: var(--fg-dim); }
+.doc-toolbar .doc-hint { font-size: 12px; color: inherit; opacity: 0.82; }
 .doc-title-input {
   width: 100%; font-size: 22px; font-weight: 700; background: transparent; border: none;
   border-bottom: 1px solid var(--border); color: var(--fg); padding: 8px 4px; outline: none;
@@ -1195,6 +1227,13 @@ body.glass .doc-editor {
   border: 1px solid rgba(255, 255, 255, 0.22);
   box-shadow: 0 8px 34px rgba(0, 0, 0, 0.26);
 }
+body.glass .doc-toolbar {
+  background-color: color-mix(in srgb, var(--note-color, #f7d65a) 46%, transparent) !important;
+  -webkit-backdrop-filter: blur(11px) saturate(1.2);
+  backdrop-filter: blur(11px) saturate(1.2);
+  border: 1px solid rgba(255, 255, 255, 0.22);
+  box-shadow: 0 8px 34px rgba(0, 0, 0, 0.26);
+}
 
 /* 玻璃拟态统一：文档模式「选择区」便签卡片同样应用 */
 body.glass .doc-pick-item {
@@ -1235,7 +1274,6 @@ body.bright-bg .note-count,
 body.bright-bg .search-icon,
 body.bright-bg .view-btn:not(.active),
 body.bright-bg .chip:not(.active),
-body.bright-bg .doc-hint,
 body.bright-bg .icon-btn,
 body.bright-bg .win-btn:not(.active) {
   color: var(--fg);
@@ -1247,9 +1285,7 @@ body.bright-bg .win-btn:not(.active) {
 }
 body.bright-bg .chip:not(.active),
 body.bright-bg .view-btn:not(.active),
-body.bright-bg .tb-btn.secondary,
-body.bright-bg .doc-fmt-btn,
-body.bright-bg .doc-back {
+body.bright-bg .tb-btn.secondary {
   background: color-mix(in srgb, var(--bg-soft) 78%, transparent);
   border-color: rgba(127, 127, 127, 0.5);
   /* 去掉分组/操作芯片的向下投影：在亚克力/复杂背景下会让边缘出现奇怪阴影，

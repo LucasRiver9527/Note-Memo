@@ -26,6 +26,33 @@ function noteText(n) {
   return txt;
 }
 
+// 三个钉桌入口共用同一事务：先保存最新编辑，再请求主进程落盘并开窗。
+const desktopPinPending = new Set();
+async function pinNoteToDesktop(n) {
+  if (desktopPinPending.has(n.id)) return false;
+  desktopPinPending.add(n.id);
+  try {
+    if (!(await saveNow())) return false;
+    let pinned;
+    try {
+      pinned = await window.api.pinToDesktop(n.id);
+    } catch (err) {
+      console.error('[note] 钉到桌面失败：', err);
+    }
+    if (pinned !== true) {
+      toast(t('toast_pin_failed'));
+      return false;
+    }
+    pushUndo();
+    n.desktopPin = true;
+    renderAll();
+    toast(t('toast_pinned'));
+    return true;
+  } finally {
+    desktopPinPending.delete(n.id);
+  }
+}
+
 /* —— 便签卡片工具栏（单一来源）——
    按钮 id 同时用于 settings.noteToolbarHidden（显示/隐藏）。
    primary：精简模式下直接显示；其余在精简模式收进「⋯ 更多」。
@@ -319,13 +346,7 @@ function wireCommon(el, n) {
   });
   onTool('.t-desktop', (e) => {
     e.stopPropagation();
-    pushUndo();
-    n.desktopPin = true;
-    n.updatedAt = Date.now();
-    saveNow();
-    window.api.pinToDesktop(n.id);
-    renderAll();
-    toast(t('toast_pinned'));
+    pinNoteToDesktop(n);
   });
   onTool('.t-image', async (e) => {
     e.stopPropagation();
@@ -466,5 +487,5 @@ function refreshFoot(el, n) {
   if (date) date.textContent = formatDate(n.updatedAt || n.createdAt);
 }
 
-  return { noteText, buildNoteEl, buildMemoEl, wireCommon, wireNoteEvents, wireMemoEvents, bringToFront, refreshFoot };
+  return { noteText, pinNoteToDesktop, buildNoteEl, buildMemoEl, wireCommon, wireNoteEvents, wireMemoEvents, bringToFront, refreshFoot };
 }));

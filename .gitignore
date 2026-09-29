@@ -27,10 +27,15 @@ cert/
 *.p12
 *.key
 
-# 构建产物与本地待办，不入仓库
+# 构建产物（仅本机，不入仓库）
 out/
 release-latest/
-优化改进待办.txt
 
-# 本地开发笔记 / 诊断脚本 / 阶段备份（仅个人使用，不进仓库）
+# Agent / AI 面向的本地私有材料，绝不进入仓库或发布资产
+# 注意：.gitignore 对已跟踪文件无效，提交 / 发布前仍须做暂存文件检查
+AGENTS.md
+agent.md
+优化改进待办.md
+优化改进待办.txt
+docs/release-checklist.md
 .workbuddy/

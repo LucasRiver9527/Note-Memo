@@ -6,6 +6,8 @@ const APP_VERSION = ((process.argv || []).find((a) => a.startsWith('--app-versio
 contextBridge.exposeInMainWorld('api', {
   appVersion: APP_VERSION,
   loadData: () => ipcRenderer.invoke('data:load'),
+  captureDraft: (data) => ipcRenderer.sendSync('data:draft', data),
+  resolveRecovery: (decision) => ipcRenderer.invoke('data:recovery:resolve', decision),
   // 只读：返回 { status, corruptPath }，渲染层据此决定是否锁定保存
   dataHealth: () => ipcRenderer.invoke('data:health'),
   // 纵深防御：只拦明显非法的入参，不在此处判定「数据是否损坏」
@@ -47,6 +49,7 @@ contextBridge.exposeInMainWorld('api', {
   maximize: () => ipcRenderer.send('window:maximize'),
   onMaximized: (cb) => ipcRenderer.on('window:maximized', (e, flag) => cb(flag)),
   onCloseRequest: (cb) => ipcRenderer.on('window:close-request', () => cb()),
+  onWindowSaveFailed: (cb) => ipcRenderer.on('window:save-failed', () => cb()),
   replyCloseDecision: (decision) => ipcRenderer.send('window:close-decision', decision),
   openExternal: (url) => ipcRenderer.invoke('open-external', url),
   readClipboard: () => ipcRenderer.invoke('clipboard:read-text'),
@@ -74,7 +77,8 @@ contextBridge.exposeInMainWorld('api', {
   unpinFromDesktop: (id) => ipcRenderer.invoke('note:unpin', id),
   closeAllDetached: () => ipcRenderer.invoke('note:close-all'),
   noteGet: (id) => ipcRenderer.invoke('note:get', id),
-  noteUpdate: (note) => ipcRenderer.invoke('note:update', note),
+  captureNoteDraft: (note) => ipcRenderer.sendSync('note:draft', note),
+  noteUpdate: (note, opts) => ipcRenderer.invoke('note:update', note, opts),
   showNativeMenu: (opts) => ipcRenderer.invoke('note:show-menu', opts),
   onNoteChanged: (cb) => ipcRenderer.on('note:changed', (e, note) => cb(note)),
   onNoteUnpinned: (cb) => ipcRenderer.on('note:unpinned', (e, id) => cb(id)),

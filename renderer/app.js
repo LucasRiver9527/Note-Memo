@@ -48,28 +48,19 @@ function t(key) {
   return T(key, lang);
 }
 
-// v1.2.5 更新说明：仅列本版本新增/改进，之前版本内容不再列出。
+// v1.2.6 更新说明：仅列本版本新增/改进，之前版本内容不再列出。
 const CHANGELOG = [
-  { zh: '一键排列改良：可切换策略（紧凑 / 书架 / 网格 / 置顶优先 / 按分组分段）', en: 'Arrange improvements: switchable strategies (compact / shelf / grid / pinned-first / by group segments)' },
-  { zh: '保存当前排序 ↔ 一键整理 联动：保存排序记录顺序+位置快照，一键整理在所有视图精确恢复', en: 'Save-order + one-click-arrange: saving records order & position snapshot; arrange restores it precisely in every view' },
-  { zh: '画布缩放 / 平移：Ctrl+滚轮缩放、空格或中键平移，右下角工具栏一键恢复 100%', en: 'Canvas zoom & pan: Ctrl+wheel to zoom, Space/middle-drag to pan, toolbar to reset to 100%' },
-  { zh: '便签框选：空白处拖框多选，配合批量删除、移动分组、整组拖动', en: 'Box select: drag a box on empty canvas to multi-select for batch delete / move-to-group / drag group' },
-  { zh: '分组折叠：折叠隐藏分组便签，取消折叠精确恢复折叠前布局', en: 'Group collapse: fold a group to hide its notes, un-collapse restores the exact prior layout' },
-  { zh: '最近使用分组：常用分组自动置顶，切换更顺手', en: 'Recently-used groups: frequently used groups moved to the front for quicker switching' },
-  { zh: '空白画布右键快捷插入：新建便签 / 新建待办 / 粘贴为新便签 / 一键整理', en: 'Right-click quick insert on empty canvas: new note / new to-do / paste as note / arrange all' },
-  { zh: 'Markdown 预览：便签与文档可切换为只读预览，直接看到加粗、高亮、图片、表格等渲染效果', en: 'Markdown preview: toggle notes & docs to a read-only view showing bold, highlight, images, tables rendered' },
-  { zh: '便签归档 / 置灰：归档便签移出常规视图，提供单独「归档」入口查看与恢复', en: 'Archive / gray-out: archived notes leave the normal view, with a dedicated Archive entry to view & restore' },
-  { zh: '撤销 / 重做完善：新建、删除、移动、缩放、分组等结构操作可撤销重做', en: 'Fuller undo/redo: undo & redo for create, delete, move, resize and group operations' },
-  { zh: '撤销 / 重做加入全局快捷键：Ctrl+Z / Ctrl+Shift+Z，可在全局设置内改键', en: 'Undo/redo shortcuts added: Ctrl+Z / Ctrl+Shift+Z, rebindable in global settings' },
-  { zh: '提醒稍后再响：闹铃可延后 5 / 10 / 30 分钟再次提醒', en: 'Reminder snooze: postpone the alarm by 5 / 10 / 30 minutes' },
-  { zh: '标签建议：按笔记内容在「添加到分组」里自动推荐最合适的分组', en: 'Group suggestions: auto-suggest the best-matching group when assigning a note' },
-  { zh: '快捷键系统：全局唤起 / 新建 + 编辑器加粗、高亮、对齐等，均可在设置内改键与恢复默认', en: 'Shortcut system: global & editor shortcuts, all rebindable and resettable in settings' },
-  { zh: '分组芯片左右滚动箭头；画布滚动条随内容自适应', en: 'Left/right scroll arrows for group chips; adaptive canvas scrollbar' },
-  { zh: '主题化关闭确认弹窗；窗口尺寸与最大化状态跨重启记忆；亚克力下顶栏控件更清晰统一', en: 'Themed close-confirm dialog; window size & maximized state remembered across restarts; clearer title-bar controls under acrylic' },
-  { zh: '右键菜单「精简 / 完整」双模式：默认精简，低频操作收进二级子菜单，删除固定在最后；偏好持久化', en: 'Context menu compact/full modes: compact by default with low-frequency actions in submenus, Delete always last; preference persisted' },
-  { zh: '菜单外观归位：透明度 / 亚克力移到「设置 → 外观 → 便签」，不再挂在右键菜单底部', en: 'Menu appearance moved to Settings → Appearance → Notes (opacity & acrylic), no longer a footer in the context menu' },
-  { zh: '便签工具栏：精简模式次要按钮收进「更多」，可在设置内显示 / 隐藏按钮；标题短时工具栏靠右，标题长时自动换行', en: 'Note toolbar: secondary buttons fold under “More” in compact mode, per-button show/hide in settings; stays right of short titles and wraps for long ones' },
-  { zh: '修复表格越界行列 / 负数索引导致的崩溃与数据错乱（3 个边界 bug）', en: 'Fixed table crashes and data corruption from out-of-range rows/cols or negative indices (3 boundary bugs)' }
+  { zh: '测试版说明：这是面向 1.2.5 稳定版用户的 1.2.6 测试版，功能与稳定性仍可能继续调整，更新前请先备份重要数据，使用中遇到问题欢迎反馈', en: 'Test build: this is the 1.2.6 test build for 1.2.5 stable users; features and stability may still change, so back up important data before updating and report any issues you find' },
+  { zh: '数据恢复：异常退出或保存中断时，本机保留恢复草稿，下次启动由你选择恢复或丢弃，不会自动覆盖正式存档', en: 'Data recovery: if the app exits abnormally or a save is interrupted, a local recovery draft is kept and offered at next launch — you choose to restore or discard; saved data is never overwritten automatically' },
+  { zh: '更稳妥的保存与退出：退出、安装更新、钉到桌面等操作会等待便签保存成功，失败时明确提示，避免改动丢失', en: 'Safer saving & exit: quitting, installing updates and pinning to desktop wait for notes to save and warn on failure so changes are not lost' },
+  { zh: '存档结构校验：读取存档与 .bak 时做最低限度结构检查，发现明显损坏时保留原文件证据并进入恢复 / 只读保护', en: 'Save-file checks: main data and .bak are structure-checked on load; obvious corruption is preserved as evidence and the app falls back to recovery / read-only protection' },
+  { zh: '搜索与空结果：搜索框随窗口宽度自适应；画布、备忘录、文档、待办筛选无结果时明确提示「没有匹配的内容」并提供「清除筛选」', en: 'Search & empty results: the search box stretches with the window; canvas, memo, doc and to-do views clearly show “no matching content” with a “clear filters” action when nothing matches' },
+  { zh: '窄窗口布局：顶部在窄窗口拆分为操作行与搜索行，整理 / 保存排序 / 批量选择收入「更多」；空画布提供「＋ 新建」按钮', en: 'Narrow layout: the top bar splits into an actions row and a search row, with arrange / save order / batch select under “More”; an empty canvas offers a “＋ New” button' },
+  { zh: '画布平移：空格＋左键或鼠标中键可从便签区域起拖平移画布，输入区空格仍用于输入', en: 'Canvas panning: Space+left-drag or middle-drag pans the canvas from the note area, while Space still types in input fields' },
+  { zh: '文档导出 Markdown：文档模式新增「导出为 Markdown」，工具栏在背景图上更清晰', en: 'Doc Markdown export: docs can be exported to Markdown; the toolbar stays legible over background images' },
+  { zh: '工具栏整理：备忘录操作键靠右排列；切换语言或 Markdown 开关后画布卡片即时刷新，无需重启', en: 'Toolbar polish: memo actions align to the right; toggling language or Markdown refreshes existing canvas cards immediately, no restart needed' },
+  { zh: '稳定更新通道：显式锁定稳定通道，预览版不会卡在预发布通道，稳定版也不会收到预发布更新', en: 'Stable update channel: explicitly locked to the stable channel, so preview builds are not stuck on pre-release updates and stable builds reject pre-release ones' },
+  { zh: '修复：精简右键菜单展开「格式 ▸」子菜单时被撑宽的问题', en: 'Fixed: compact context menu widened when expanding the “Format ▸” submenu' }
 ];
 
 const APP_VERSION = (window.api && window.api.appVersion) || '';
@@ -117,6 +108,9 @@ function noteFingerprint(n) {
     // 工具栏全局外观：变化时需重建卡片才能反映显隐/精简（否则增量渲染会复用旧 DOM）
     state.settings.noteToolbarCompact !== false ? 'c' : 'f',
     (state.settings.noteToolbarHidden || []).join(','),
+    // 语言和 Markdown 会改变现有卡片的提示及富文本呈现。
+    state.settings.language || 'zh',
+    state.settings.markdown !== false ? 'md' : 'plain',
     JSON.stringify(n.images || []), JSON.stringify(n.files || []), JSON.stringify(n.tables || [])
   ].join('|');
 }
@@ -271,26 +265,38 @@ function exitDataReadonly() {
 
 function save() {
   if (dataReadonly) return; // 损坏只读：不发起写入，避免覆盖唯一坏文件
+  state.notes.forEach(cleanupRefs);
+  const draftToken = window.api.captureDraft({ settings: state.settings, groups: state.groups, notes: state.notes, trash: state.trash });
+  if (!draftToken) reportSaveError(new Error('恢复草稿写入失败'));
   clearTimeout(saveTimer);
   saveTimer = setTimeout(() => {
     state.notes.forEach(cleanupRefs);
-    window.api.saveData({ settings: state.settings, groups: state.groups, notes: state.notes, trash: state.trash }).catch(reportSaveError);
+    window.api.saveData({ settings: state.settings, groups: state.groups, notes: state.notes, trash: state.trash }, { draftToken }).catch(reportSaveError);
   }, 300);
 }
 
 function saveNow() {
-  if (dataReadonly) return;
+  if (dataReadonly) return Promise.resolve(false);
   clearTimeout(saveTimer);
+  saveTimer = null;
   state.notes.forEach(cleanupRefs);
-  window.api.saveData({ settings: state.settings, groups: state.groups, notes: state.notes, trash: state.trash }).catch(reportSaveError);
+  const draftToken = window.api.captureDraft({ settings: state.settings, groups: state.groups, notes: state.notes, trash: state.trash });
+  if (!draftToken) reportSaveError(new Error('恢复草稿写入失败'));
+  return window.api.saveData({ settings: state.settings, groups: state.groups, notes: state.notes, trash: state.trash }, { draftToken })
+    .then(() => true, (err) => {
+      reportSaveError(err);
+      return false;
+    });
 }
 
 // 「一键整理 / 保存当前排序」只在便签视图显示；其它视图排序简单，无需这两个按键（避免无关 bug）。
 function syncSortToolbar(viewMode) {
   const arrangeBtn = $('#btnQuickArrange');
   const saveOrderBtn = $('#btnSaveOrder');
-  if (arrangeBtn) arrangeBtn.classList.toggle('hidden', viewMode !== 'board');
-  if (saveOrderBtn) saveOrderBtn.classList.toggle('hidden', viewMode !== 'board');
+  const hidden = viewMode !== 'board' || state.notes.length === 0;
+  if (arrangeBtn) arrangeBtn.classList.toggle('hidden', hidden);
+  if (saveOrderBtn) saveOrderBtn.classList.toggle('hidden', hidden);
+  if (typeof syncToolbarMore === 'function') syncToolbarMore();
 }
 
 /* ============ 主题 / 字体 / 语言 / 设置面板（已拆分到 settings-panel.js，见全局 SettingsPanel） ============ */
@@ -340,6 +346,18 @@ async function init() {
     if (r && typeof r === 'object' && 'status' in r) {
       data = r.data || null;
       loadStatus = r.status || 'ok';
+      if (r.recovery) {
+        const restore = await confirmModal(t('recovery_title'), t('recovery_message'));
+        try {
+          const resolved = await window.api.resolveRecovery(restore ? 'restore' : 'discard');
+          if (!resolved.ok) throw new Error('recovery resolve failed');
+          if (restore) { data = resolved.data; loadStatus = 'ok'; }
+        } catch (err) {
+          console.error('[recovery] 恢复草稿处理失败：', err);
+          loadStatus = 'error';
+          reportSaveError(err);
+        }
+      }
     } else {
       data = r || null;
     }
@@ -358,7 +376,7 @@ async function init() {
     state.trash = migrated.trash;
   }
   // 损坏且无可用备份：进入只读，防止任何写入覆盖用户仅存的坏文件（留待「导入备份」自救）
-  if (loadStatus === 'corrupt') enterDataReadonly();
+  if (loadStatus === 'corrupt' || loadStatus === 'error') enterDataReadonly();
 
   ensureOrder();
   initAllLayout();

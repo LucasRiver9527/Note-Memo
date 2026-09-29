@@ -18,6 +18,15 @@ function closePops() {
   if (activeGroupPop) { activeGroupPop.remove(); activeGroupPop = null; }
 }
 
+async function exportNoteAsMarkdown(n) {
+  const fname = ((n.title || '').replace(/[\\/:*?"<>|]/g, '_').trim() || '便签') + '.md';
+  const md = noteToMarkdown(n, { image: (src) => src });
+  const r = await window.api.exportNoteMarkdown(md, fname);
+  if (r.ok) toast(t('toast_exported') + r.path);
+  else if (!r.canceled) toast(t('toast_export_fail') + r.error);
+  return r;
+}
+
 function showNoteContextMenu(e, n) {
   e.preventDefault();
   e.stopPropagation();
@@ -229,14 +238,7 @@ function showNoteContextMenu(e, n) {
     if (n.groupId) { n.groupId = null; n.updatedAt = Date.now(); save(); renderAll(); }
     else openGroupPop(noteAnchor(n), n);
   };
-  const fnDesktop = () => {
-    n.desktopPin = true;
-    n.updatedAt = Date.now();
-    saveNow();
-    window.api.pinToDesktop(n.id);
-    renderAll();
-    toast(t('toast_pinned'));
-  };
+  const fnDesktop = () => pinNoteToDesktop(n);
   const fnRemind = () => openReminder(n);
   const fnColor = () => openColorPop(noteAnchor(n), n, anchorX, anchorY);
   const fnArchive = () => {
@@ -252,13 +254,7 @@ function showNoteContextMenu(e, n) {
     save();
     renderAll();
   };
-  const fnExportMd = async () => {
-    const fname = ((n.title || '').replace(/[\\/:*?"<>|]/g, '_').trim() || '便签') + '.md';
-    const md = noteToMarkdown(n, { image: (src) => src });
-    const r = await window.api.exportNoteMarkdown(md, fname);
-    if (r.ok) toast(t('toast_exported') + r.path);
-    else if (!r.canceled) toast(t('toast_export_fail') + r.error);
-  };
+  const fnExportMd = () => exportNoteAsMarkdown(n);
   // ★ 删除：始终一级，保持原有调用链（deleteNote 内含存在性校验 / pushUndo / desktopPin 解绑 / 入回收站）
   const fnDelete = () => deleteNote(n.id);
 
@@ -654,5 +650,5 @@ function appendMenuAppearanceFooter(pop) {
   });
 }
 
-  return { closePops, showNoteContextMenu, openColorPop, openGroupPop, closePopsOnce, openGroupEditPop, appendMenuAppearanceFooter };
+  return { closePops, showNoteContextMenu, openColorPop, openGroupPop, closePopsOnce, openGroupEditPop, appendMenuAppearanceFooter, exportNoteAsMarkdown };
 }));

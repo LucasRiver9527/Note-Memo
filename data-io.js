@@ -45,7 +45,8 @@ function parsesAsJson(raw) {
   }
 }
 
-// 最小结构校验。
+// 最小结构校验：容许旧版缺字段，由 migrateData/migrateNote 回填；
+// 但拒绝会让迁移或渲染崩溃、随后被写回为空的明显错误结构。
 // 注意：这不是防数据丢失的主要手段 —— 「加载失败后写回空 notes:[]」里 notes 是合法
 // 数组，形状校验拦不住，那要靠 main.js 的 _dataStatus（isDataLocked 拒绝写入）
 // 与渲染层 renderDataAlert/enterDataReadonly 只读闸门。
@@ -55,8 +56,29 @@ function isValidDataShape(data) {
   if ('notes' in data && !Array.isArray(data.notes)) return false;
   if ('groups' in data && !Array.isArray(data.groups)) return false;
   if ('trash' in data && !Array.isArray(data.trash)) return false;
-  if ('settings' in data && data.settings !== null && typeof data.settings !== 'object') return false;
+  if ('settings' in data && data.settings !== null &&
+      (typeof data.settings !== 'object' || Array.isArray(data.settings))) return false;
+  const record = (value) => value !== null && typeof value === 'object' && !Array.isArray(value);
+  const note = (value) => record(value) &&
+    (!('content' in value) || value.content == null || typeof value.content === 'string') &&
+    ['items', 'images', 'files', 'tables'].every((key) =>
+      !(key in value) || (Array.isArray(value[key]) && value[key].every(record)));
+  if (data.notes && !data.notes.every(note)) return false;
+  if (data.groups && !data.groups.every(record)) return false;
+  if (data.trash && !data.trash.every((entry) =>
+    record(entry) && (!('note' in entry) || note(entry.note)))) return false;
   return true;
+}
+
+// 与 JSON 语法检查不同：存档还必须有可安全迁移的最小结构。
+function parseStoredData(raw) {
+  if (typeof raw !== 'string' || raw.trim() === '') return null;
+  try {
+    const data = JSON.parse(stripBom(raw));
+    return isValidDataShape(data) ? data : null;
+  } catch (e) {
+    return null;
+  }
 }
 
 // 损坏留证文件名：notes-data.corrupt-20260921-094300-123.json
@@ -138,26 +160,21 @@ function safeRead(filePath, fsx, pathx) {
     return { data: null, status: 'corrupt', corruptPath: null };
   }
 
-  if (parsesAsJson(raw)) {
-    try {
-      return { data: JSON.parse(stripBom(raw)), status: 'ok', corruptPath: null };
-    } catch (e) {
-      /* 理论上 parsesAsJson 已保证可解析，兜底走损坏分支 */
-    }
-  }
+  const data = parseStoredData(raw);
+  if (data) return { data, status: 'ok', corruptPath: null };
 
   // 主文件损坏：先留证，再尝试 .bak
-  console.error('[data-io] 数据文件损坏，无法解析');
+  console.error('[data-io] 数据文件无法解析或结构错误');
   const corruptPath = preserveCorruptFile(filePath, fs, p);
   const bakPath = filePath + '.bak';
   try {
     const bakRaw = fs.readFileSync(bakPath, 'utf-8');
-    if (parsesAsJson(bakRaw)) {
-      const bakData = JSON.parse(stripBom(bakRaw));
+    const bakData = parseStoredData(bakRaw);
+    if (bakData) {
       console.warn('[data-io] 已从 .bak 自动恢复');
       return { data: bakData, status: 'recovered', corruptPath };
     }
-    console.error('[data-io] .bak 同样无法解析，保留原样以备人工恢复');
+    console.error('[data-io] .bak 同样无法解析或结构错误，保留原样以备人工恢复');
   } catch (e) {
     if (!e || e.code !== 'ENOENT') console.error('[data-io] 读取 .bak 失败：', e.message);
   }
@@ -169,6 +186,10 @@ function safeRead(filePath, fsx, pathx) {
 function atomicWrite(filePath, data, fsx, pathx) {
   const fs = fsOf(fsx);
   const p = pathOf(pathx);
+  if (!isValidDataShape(data)) {
+    console.error('[data-io] 数据结构错误，已拒绝写入');
+    return false;
+  }
   let json;
   try {
     json = JSON.stringify(data, null, 2);
@@ -185,7 +206,7 @@ function atomicWrite(filePath, data, fsx, pathx) {
     // 旧文件能解析才备份，避免把损坏内容覆盖到唯一的好备份上
     let shouldBackup = false;
     try {
-      shouldBackup = parsesAsJson(fs.readFileSync(filePath, 'utf-8'));
+      shouldBackup = !!parseStoredData(fs.readFileSync(filePath, 'utf-8'));
     } catch (e) {
       shouldBackup = false; // ENOENT（首次运行）或不可读，都无需备份
     }
