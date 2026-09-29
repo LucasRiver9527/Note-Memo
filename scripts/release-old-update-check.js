@@ -4,9 +4,13 @@
  * 离线旧版更新检测验证（独立脚本，不进测试套件）。
  *
  *   node scripts/release-old-update-check.js <旧版拷贝 exe 绝对路径> <新版构建目录绝对路径> <拷贝根目录绝对路径>
+ *   node scripts/release-old-update-check.js --github-check <旧版拷贝 exe 绝对路径> <拷贝根目录绝对路径>
  *
- * 目的：在正式发布前，用「当前已安装 1.2.5 的一份拷贝」离线验证它能否 detect 并下载
- * 已构建好的 1.2.6（latest 通道）。全程只动脚本自己创建的临时 userData，且：
+ * 目的：在正式版发布前或发布后均可运行，用「当前已安装 1.2.5 的一份拷贝」验证它能否 detect 到 1.2.6（latest 通道）。
+ * 默认离线模式：起本地 feed，验证 detect +（可确认关闭 autoInstallOnAppQuit 时）下载安装包字节。
+ * `--github-check`：不建本地 feed、不注入 MYNOTES_UPDATE_URL，走旧拷贝内置的 GitHub provider 联网
+ * 真实检测（只检测，不下载、不安装；版本 1.2.6 能读到就核对、读不到不阻断）。全程只动脚本自己创建的
+ * 临时 userData，且：
  *   - 旧版 exe 必须严格位于显式指定的拷贝根目录内，并额外拒绝落在本机已注册安装目录下的 exe，
  *     因此日常安装目录即使被误当作拷贝也会被挡下；
  * 绝不：
@@ -31,11 +35,15 @@ const TIMEOUT_MS = 180_000;
 const KILL_VERIFY_TIMEOUT_MS = 5_000;
 const HARD_KILL_CEILING_MS = 15_000;
 
-// 强制参数：旧版 exe 必须严格位于该拷贝根目录内（也支持环境变量 MYNOTES_OLD_COPY_ROOT）。
-const COPY_ROOT = process.argv[4] || process.env.MYNOTES_OLD_COPY_ROOT || '';
+// 运行模式：默认离线本地 feed 模式；`--github-check` 走旧拷贝内置 GitHub provider 真实联网检测。
+const LIVE_MODE = process.argv[2] === '--github-check';
+const POSITIONAL = process.argv.slice(LIVE_MODE ? 3 : 2);
 
-const OLD_EXE = process.argv[2];
-const NEW_DIR = process.argv[3];
+// 强制参数：旧版 exe 必须严格位于该拷贝根目录内（本地模式也支持环境变量 MYNOTES_OLD_COPY_ROOT）。
+const OLD_EXE = POSITIONAL[0];
+// 新版构建目录只在离线本地 feed 模式需要；live 模式不读本地构建产物。
+const NEW_DIR = LIVE_MODE ? null : POSITIONAL[1];
+const COPY_ROOT = (LIVE_MODE ? POSITIONAL[1] : POSITIONAL[2]) || process.env.MYNOTES_OLD_COPY_ROOT || '';
 
 // 本应用 appId，以及 electron-builder NSIS 生成卸载表键名所用的固定命名空间：
 // 据此推出注册表键，读取本机已注册安装目录（best-effort 第二道防线）。
@@ -46,12 +54,15 @@ const ELECTRON_BUILDER_NS_UUID = '50e065bc-3134-11e6-9bab-38c9862bdaf3';
 const apps = [];
 
 function validateArgs() {
-  const usage = '用法: node scripts/release-old-update-check.js <旧版拷贝 exe 绝对路径> <新版构建目录绝对路径> <拷贝根目录绝对路径>（拷贝根目录也可用环境变量 MYNOTES_OLD_COPY_ROOT 提供）';
-  if (!OLD_EXE || !NEW_DIR) return `${usage}（前两个参数都必填）`;
+  const usage = LIVE_MODE
+    ? '用法: node scripts/release-old-update-check.js --github-check <旧版拷贝 exe 绝对路径> <拷贝根目录绝对路径>'
+    : '用法: node scripts/release-old-update-check.js <旧版拷贝 exe 绝对路径> <新版构建目录绝对路径> <拷贝根目录绝对路径>（拷贝根目录也可用环境变量 MYNOTES_OLD_COPY_ROOT 提供）';
+  if (!OLD_EXE) return `${usage}（缺少旧版 exe）`;
+  if (!LIVE_MODE && !NEW_DIR) return `${usage}（缺少新版构建目录）`;
   if (!COPY_ROOT) return `${usage}（缺少拷贝根目录）`;
   if (process.platform !== 'win32') return 'release-old-update-check 仅支持在 Windows 上运行';
   if (!path.isAbsolute(OLD_EXE)) return `旧版 exe 必须是绝对路径：${OLD_EXE}`;
-  if (!path.isAbsolute(NEW_DIR)) return `新版构建目录必须是绝对路径：${NEW_DIR}`;
+  if (!LIVE_MODE && !path.isAbsolute(NEW_DIR)) return `新版构建目录必须是绝对路径：${NEW_DIR}`;
   if (!path.isAbsolute(COPY_ROOT)) return `拷贝根目录必须是绝对路径：${COPY_ROOT}`;
   let stat;
   try {
@@ -68,12 +79,14 @@ function validateArgs() {
     return `旧版 exe 不存在：${OLD_EXE}`;
   }
   if (!stat.isFile()) return `旧版 exe 不是文件：${OLD_EXE}`;
-  try {
-    stat = fs.statSync(NEW_DIR);
-  } catch (_) {
-    return `新版构建目录不存在：${NEW_DIR}`;
+  if (!LIVE_MODE) {
+    try {
+      stat = fs.statSync(NEW_DIR);
+    } catch (_) {
+      return `新版构建目录不存在：${NEW_DIR}`;
+    }
+    if (!stat.isDirectory()) return `新版构建目录不是目录：${NEW_DIR}`;
   }
-  if (!stat.isDirectory()) return `新版构建目录不是目录：${NEW_DIR}`;
   return null;
 }
 
@@ -385,11 +398,58 @@ async function stopAllApps(phase) {
   return results;
 }
 
+/**
+ * 隔离本次运行的 Electron 缓存根，返回本次临时目录下的独立目录并确保存在。
+ * electron-updater 在 Windows 上用「%LOCALAPPDATA%\<updaterCacheDirName>」作下载缓存；若沿用真实
+ * %LOCALAPPDATA%，重复运行会命中上次的已下载包，导致不再请求安装包字节而误报 FAIL。这里把
+ * LOCALAPPDATA 与 APPDATA 都指向 userDataDir 下的空目录：只写进子进程 env，绝不改 process.env，
+ * 也绝不读取、清空或修改用户真实缓存。
+ */
+function isolateAppDirs(userDataDir) {
+  const localAppData = path.join(userDataDir, 'LocalAppData');
+  const appData = path.join(userDataDir, 'AppData');
+  fs.mkdirSync(localAppData, { recursive: true });
+  fs.mkdirSync(appData, { recursive: true });
+  return { localAppData, appData };
+}
+
+/**
+ * 强杀后短暂仍被占用的文件句柄会让 Windows 上删除本次临时 userData 抛 EPERM/EBUSY；
+ * 用有界重试 + 退避吸收这段延迟。只删脚本自己 mkdtemp 出来的目录，绝不碰用户真实缓存。
+ * 返回 {removed}：仍失败时 removed=false 并保留路径，调用方须如实报告，不得谎称已删除。
+ * ponytail: 最多 5 次、累计退避约 3s；若真实机器上句柄释放更慢再上调。
+ */
+async function removeTempUserData(userDataDir) {
+  const MAX_ATTEMPTS = 5;
+  let lastError = null;
+  for (let attempt = 1; attempt <= MAX_ATTEMPTS; attempt++) {
+    try {
+      fs.rmSync(userDataDir, { recursive: true, force: true, maxRetries: 3, retryDelay: 200 });
+      return { removed: true };
+    } catch (err) {
+      lastError = (err && err.message) || String(err);
+      if (attempt < MAX_ATTEMPTS) await sleep(300 * attempt);
+    }
+  }
+  return { removed: false, error: lastError };
+}
+
 async function launchApp(exePath, userDataDir, feedUrl) {
+  // feedUrl 为空即 live 模式：必须清掉可能从父进程继承的 MYNOTES_UPDATE_URL，
+  // 否则旧拷贝会被迫走 generic feed 而不是内置 GitHub provider。
+  const { localAppData, appData } = isolateAppDirs(userDataDir);
+  const env = {
+    ...process.env,
+    MYNOTES_USER_DATA: userDataDir,
+    LOCALAPPDATA: localAppData,
+    APPDATA: appData,
+  };
+  if (feedUrl) env.MYNOTES_UPDATE_URL = feedUrl;
+  else delete env.MYNOTES_UPDATE_URL;
   const electronApp = await electron.launch({
     executablePath: exePath,
     args: ['--no-sandbox', '--disable-gpu'],
-    env: { ...process.env, MYNOTES_USER_DATA: userDataDir, MYNOTES_UPDATE_URL: feedUrl },
+    env,
   });
   apps.push(electronApp);
   const win = await electronApp.firstWindow();
@@ -469,7 +529,7 @@ function waitFor(cond, { timeout, interval = 250, message }) {
 }
 
 async function run(feed, newBuild, userDataDir, evidence) {
-  const { electronApp, win } = await launchApp(OLD_EXE, userDataDir, feed.url);
+  const { electronApp, win } = await launchApp(OLD_EXE, userDataDir, feed ? feed.url : null);
 
   const appVersion = await win.evaluate(() => window.api && window.api.appVersion);
   evidence.runtimeVersion = appVersion;
@@ -479,6 +539,10 @@ async function run(feed, newBuild, userDataDir, evidence) {
 
   const autoInstall = await disableAutoInstallOnQuit(electronApp);
   evidence.autoInstall = autoInstall;
+  // live 模式在检测前必须正验证 autoInstallOnAppQuit 已由 true 改为 false；读不回即失败。
+  if (LIVE_MODE && !autoInstall.ok) {
+    throw new Error(`live 模式无法正验证 autoInstallOnAppQuit 已关闭（${autoInstall.reason || `${autoInstall.before}->${autoInstall.after}`}）`);
+  }
 
   const check = await win.evaluate(() => window.api.checkUpdate());
   evidence.check = check;
@@ -486,6 +550,16 @@ async function run(feed, newBuild, userDataDir, evidence) {
   if (check.isUpdateAvailable !== true) throw new Error(`未检测到可用更新：${JSON.stringify(check)}`);
 
   evidence.detectedVersion = await readDetectedVersion(electronApp);
+
+  if (LIVE_MODE) {
+    // 能读到检测版本就核对 1.2.6；读不到不阻断（spec 仅「helpful」，非必需）。
+    if (evidence.detectedVersion && evidence.detectedVersion !== '1.2.6') {
+      console.warn(`[old-update-check] 警告：检测到版本 ${evidence.detectedVersion}，期望 1.2.6`);
+    }
+    evidence.download = { skipped: true, reason: 'live GitHub 模式不下载、不安装' };
+    return;
+  }
+
   if (evidence.detectedVersion && evidence.detectedVersion !== newBuild.version) {
     console.warn(`[old-update-check] 警告：检测到版本 ${evidence.detectedVersion}，latest.yml 为 ${newBuild.version}`);
   }
@@ -511,16 +585,18 @@ async function main() {
     process.exit(2);
   }
 
-  let newBuild;
-  try {
-    newBuild = loadNewBuild(NEW_DIR);
-  } catch (err) {
-    console.error(`[old-update-check] FAIL: ${(err && err.message) || err}`);
-    process.exit(2);
-  }
-  if (newBuild.version !== '1.2.6') {
-    console.error(`[old-update-check] FAIL: latest.yml 版本不符：期望 1.2.6，实际 ${newBuild.version}`);
-    process.exit(2);
+  let newBuild = null;
+  if (!LIVE_MODE) {
+    try {
+      newBuild = loadNewBuild(NEW_DIR);
+    } catch (err) {
+      console.error(`[old-update-check] FAIL: ${(err && err.message) || err}`);
+      process.exit(2);
+    }
+    if (newBuild.version !== '1.2.6') {
+      console.error(`[old-update-check] FAIL: latest.yml 版本不符：期望 1.2.6，实际 ${newBuild.version}`);
+      process.exit(2);
+    }
   }
 
   const asar = readOldAsarVersion(OLD_EXE);
@@ -530,16 +606,18 @@ async function main() {
     process.exit(2);
   }
 
-  const feed = await startFeed(NEW_DIR, newBuild.installerName);
+  // live 模式不建本地 feed；旧拷贝改用内置 GitHub provider 联网检测。
+  const feed = LIVE_MODE ? null : await startFeed(NEW_DIR, newBuild.installerName);
   const userDataDir = fs.mkdtempSync(path.join(os.tmpdir(), 'mynotes-old-update-'));
   const evidence = {
     oldExe: OLD_EXE,
     newDir: NEW_DIR,
-    latestVersion: newBuild.version,
-    installerName: newBuild.installerName,
-    installerSize: newBuild.size,
-    feedUrl: feed.url,
+    latestVersion: newBuild ? newBuild.version : null,
+    installerName: newBuild ? newBuild.installerName : null,
+    installerSize: newBuild ? newBuild.size : null,
+    feedUrl: feed ? feed.url : null,
     userDataDir,
+    updaterCacheRoot: path.join(userDataDir, 'LocalAppData'),
   };
   let passed = false;
 
@@ -561,29 +639,47 @@ async function main() {
     console.error(`[old-update-check] FAIL: ${evidence.error}`);
   } finally {
     clearTimeout(watchdog);
-    // 绝不走正常关闭/退出：仅强杀本次启动的拷贝进程树，再关本地 feed。
+    // 绝不走正常关闭/退出：仅强杀本次启动的拷贝进程树，再关本地 feed（live 模式无 feed）。
     const cleanup = await stopAllApps('finally');
     if (cleanup.some((r) => !r.ok)) passed = false;
-    await feed.close().catch(() => {});
+    if (feed) await feed.close().catch(() => {});
   }
 
   console.log('[old-update-check] 证据');
   console.log(`  旧拷贝 exe      : ${evidence.oldExe}`);
-  console.log(`  新版构建目录    : ${evidence.newDir}`);
-  console.log(`  latest.yml 版本 : ${evidence.latestVersion}（安装包 ${evidence.installerName}, ${evidence.installerSize} bytes）`);
+  console.log(`  临时 userData   : ${evidence.userDataDir}`);
+  console.log(`  隔离缓存根      : ${evidence.updaterCacheRoot}（子进程 LOCALAPPDATA 指向此目录，含 electron-updater 缓存）`);
+  if (LIVE_MODE) {
+    console.log('  模式            : --github-check（旧拷贝内置 GitHub provider，联网真实检测；无本地 feed）');
+  } else {
+    console.log(`  新版构建目录    : ${evidence.newDir}`);
+    console.log(`  latest.yml 版本 : ${evidence.latestVersion}（安装包 ${evidence.installerName}, ${evidence.installerSize} bytes）`);
+  }
   console.log(`  运行时版本      : ${evidence.runtimeVersion}`);
   console.log(`  autoInstallOnAppQuit 关闭: ${evidence.autoInstall ? `${evidence.autoInstall.ok} (before=${evidence.autoInstall.before}, after=${evidence.autoInstall.after})` : '未知'}`);
   console.log(`  checkUpdate      : ${JSON.stringify(evidence.check)}`);
   console.log(`  检测到的版本    : ${evidence.detectedVersion || '（无法读取，跳过）'}`);
-  console.log(`  downloadUpdate   : ${JSON.stringify(evidence.download)}`);
-  console.log(`  服务端被请求数  : ${feed.requests.length}`);
-  for (const r of feed.requests) console.log(`    ${r.status} ${r.method} ${r.url}${r.range ? ` [${r.range}]` : ''}`);
-  console.log(`  安装包字节服务量: ${feed.bytes.installer}`);
+  if (LIVE_MODE) {
+    console.log('  下载/安装        : 跳过（live 模式不下载、不安装）');
+  } else {
+    console.log(`  downloadUpdate   : ${JSON.stringify(evidence.download)}`);
+    console.log(`  服务端被请求数  : ${feed.requests.length}`);
+    for (const r of feed.requests) console.log(`    ${r.status} ${r.method} ${r.url}${r.range ? ` [${r.range}]` : ''}`);
+    console.log(`  安装包字节服务量: ${feed.bytes.installer}`);
+  }
   console.log('[old-update-check] 注意：安装动作未验证（未运行安装包、未调用 update:install/quitAndInstall）。');
 
   if (passed) {
-    fs.rmSync(userDataDir, { recursive: true, force: true });
-    console.log('[old-update-check] PASS（检测' + (evidence.download && evidence.download.ok === true ? '+下载' : '') + '通过；install 仍未验证）');
+    // 功能验证已通过且无测试进程残留；临时目录清理失败只警告并保留，不改判功能结果，也绝不谎报已删除。
+    const tempCleanup = await removeTempUserData(userDataDir);
+    if (!tempCleanup.removed) {
+      console.warn(`[old-update-check] 警告：功能检查通过，但临时 userData 清理失败（${tempCleanup.error}），已保留：${userDataDir}`);
+    }
+    if (LIVE_MODE) {
+      console.log('[old-update-check] PASS（live GitHub 联网检测通过；install 仍未验证）');
+    } else {
+      console.log('[old-update-check] PASS（检测' + (evidence.download && evidence.download.ok === true ? '+下载' : '') + '通过；install 仍未验证）');
+    }
     process.exit(0);
   }
   console.error(`[old-update-check] 临时 userData 已保留：${userDataDir}`);
