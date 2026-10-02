@@ -395,6 +395,10 @@ function showBoardContextMenu(e) {
     else toast(t('toast_paste_empty'));
   });
   addItem('▦', t('board_arrange'), () => arrangeNotes());
+  // 仅在存在可恢复的已保存布局（当前作用域、当前可见）时显示「恢复保存布局」。
+  if (typeof canRestoreSavedLayout === 'function' && canRestoreSavedLayout()) {
+    addItem('↩', t('restore_layout'), () => restoreSavedLayout());
+  }
 
   // 菜单外观（透明度/亚克力）已归位到「设置 → 外观」，不再挂在每个右键菜单底部
   document.body.appendChild(pop);

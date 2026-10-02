@@ -117,6 +117,67 @@ test('arrangeCompact 空数组返回空', () => {
   assert.deepStrictEqual(arrangeCompact([], 2600), []);
 });
 
+test('UX-30C arrangeCompact：固定障碍参与避让、不进输出、不改输入、确定性', () => {
+  const notes = [
+    { id: 'a', w: 240, h: 200 },
+    { id: 'b', w: 300, h: 260 }
+  ];
+  const fixed = [{ x: 20, y: 20, w: 240, h: 200 }, { x: 300, y: 20, w: 120, h: 500 }];
+  const notesBefore = JSON.stringify(notes);
+  const fixedBefore = JSON.stringify(fixed);
+  const out = arrangeCompact(notes, 800, undefined, fixed);
+  assert.strictEqual(out.length, 2, '固定障碍不应进入输出');
+  assert.deepStrictEqual(out.map((o) => o.id), ['a', 'b']);
+  assert.strictEqual(JSON.stringify(notes), notesBefore, '改动了输入 notes');
+  assert.strictEqual(JSON.stringify(fixed), fixedBefore, '改动了输入 fixed');
+  // 与固定障碍不重叠
+  const rects = [
+    { x: out[0].x, y: out[0].y, w: 240, h: 200 },
+    { x: out[1].x, y: out[1].y, w: 300, h: 260 },
+    ...fixed
+  ];
+  const overlap = (a, b) => (a.x < b.x + b.w + LAYOUT.gap) && (a.x + a.w + LAYOUT.gap > b.x) && (a.y < b.y + b.h + LAYOUT.gap) && (a.y + a.h + LAYOUT.gap > b.y);
+  for (let i = 0; i < 2; i++) for (let j = 2; j < rects.length; j++) assert.ok(!overlap(rects[i], rects[j]), i + ' 与固定障碍重叠');
+  // 确定性：重跑结果一致
+  assert.deepStrictEqual(arrangeCompact(notes, 800, undefined, fixed), out);
+  // 非法固定矩形被忽略（不抛错）
+  assert.deepStrictEqual(arrangeCompact(notes, 800, undefined, [{ x: NaN, y: 1, w: 10, h: 10 }, null, { x: 1, y: 2, w: 0, h: 5 }]).map((o) => o.id), ['a', 'b']);
+});
+
+test('UX-30C 水平边界：可用宽=canvasMaxX-2*margin，385 宽在 400 视口视为超大', () => {
+  // 复现评审：视口 400，margin 20 -> 可用 360；宽 385 超出 -> 超大（不再误判为普通）
+  const availW = Math.max(0, 400 - LAYOUT.margin * 2);
+  assert.strictEqual(availW, 360);
+  assert.ok(385 > availW, '385 应判定为超大');
+  assert.ok(360 <= availW, '360 应为普通');
+  // 普通卡右边界不越过 maxX-margin
+  const out = arrangeCompact([{ id: 'n', w: 300, h: 200 }], 400);
+  assert.ok(out[0].x + 300 <= 400 - LAYOUT.margin, '普通卡越过右边界');
+});
+
+test('UX-30C arrangeCompact：右边界=maxX-margin，400 视口下 170+190 不能同排', () => {
+  const notes = [{ id: 'a', w: 170, h: 120 }, { id: 'b', w: 190, h: 120 }];
+  const out = arrangeCompact(notes, 400);
+  const rightLimit = 400 - LAYOUT.margin; // 380
+  out.forEach((o) => {
+    const w = notes.find((n) => n.id === o.id).w;
+    assert.ok(o.x + w <= rightLimit, o.id + ' 越过右边界 ' + rightLimit);
+  });
+  // 20+170+18+190 = 398 > 380 -> 不能同排：y 不同
+  const a = out.find((o) => o.id === 'a'), b = out.find((o) => o.id === 'b');
+  assert.notStrictEqual(a.y, b.y, 'a/b 被排到同一行（越界）');
+});
+
+test('UX-30C 固定障碍下边缘纳入候选 y：短障碍下方填位，不落到无关远障碍下方', () => {
+  // 视口 400：短全宽障碍 y20 h100；无关高障碍在 x900 y20 h900（视口外）
+  const notes = [{ id: 'c', w: 300, h: 120 }];
+  const fixed = [{ x: 20, y: 20, w: 360, h: 100 }, { x: 900, y: 20, w: 100, h: 900 }];
+  const out = arrangeCompact(notes, 400, undefined, fixed);
+  const c = out.find((o) => o.id === 'c');
+  // 应填在短障碍下方 y = 20+100+18 = 138，而不是 20+900+18
+  assert.strictEqual(c.y, 20 + 100 + LAYOUT.gap, '未在短障碍下方填位');
+});
+
 test('initPositionAll：只给缺 positionAll 的旧数据补位，已有 positionAll 不移动（即使重叠）', () => {
   const notes = [
     { id: 'a', x: 500, y: 20, positionAll: { x: 500, y: 20 } },

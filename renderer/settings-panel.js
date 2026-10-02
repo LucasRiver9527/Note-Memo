@@ -179,10 +179,11 @@ function renderThemePanel() {
     const isCustom = !PRESETS.some((x) => x.id === p.id);
     const card = document.createElement('div');
     card.className = 'theme-card' + (state.settings.themeId === p.id ? ' active' : '') + (isCustom ? ' custom' : '');
+    const mini = Array.isArray(p.mini) ? p.mini : [];
     card.innerHTML = `
-      <div class="preview" style="background:${p.bg}">
-        <div class="mini-note" style="background:${p.mini[0]}"></div>
-        <div class="mini-note" style="background:${p.mini[1]}"></div>
+      <div class="preview" style="background:${sanitizeCss(p.bg) || 'transparent'}">
+        <div class="mini-note" style="background:${sanitizeCss(mini[0]) || 'transparent'}"></div>
+        <div class="mini-note" style="background:${sanitizeCss(mini[1]) || 'transparent'}"></div>
       </div>
       <span class="tname">${escapeHtml(themeName(p))}</span>
       ${isCustom ? `<button class="t-del" title="${t('delete')}">✕</button>` : ''}`;
@@ -249,6 +250,7 @@ function openThemeEditor(existing) {
   const theme = existing || { id: 'ct' + uid(), name: '', light: false, bg: '#1e1f26', accent: '#6c5ce7', mini: ['#6c5ce7', '#f7d65a'] };
 
   const overlay = document.createElement('div');
+  overlay.setAttribute('data-modal-overlay', '');
   overlay.style.cssText = 'position:fixed;inset:0;z-index:6500;background:rgba(0,0,0,0.35);display:flex;align-items:center;justify-content:center;border-radius:14px;';
   const modal = document.createElement('div');
   modal.className = 'theme-editor-modal';
@@ -266,10 +268,10 @@ function openThemeEditor(existing) {
       </div>
     </div>
     <div class="te-row">
-      <label><span>${t('canvas_bg_color')}</span><input type="color" id="teBg" value="${theme.bg}" /></label>
-      <label><span>${t('accent')}</span><input type="color" id="teAccent" value="${theme.accent}" /></label>
-      <label><span>${t('note_color_1')}</span><input type="color" id="teMini1" value="${theme.mini[0]}" /></label>
-      <label><span>${t('note_color_2')}</span><input type="color" id="teMini2" value="${theme.mini[1]}" /></label>
+      <label><span>${t('canvas_bg_color')}</span><input type="color" id="teBg" value="${sanitizeCss(theme.bg)}" /></label>
+      <label><span>${t('accent')}</span><input type="color" id="teAccent" value="${sanitizeCss(theme.accent)}" /></label>
+      <label><span>${t('note_color_1')}</span><input type="color" id="teMini1" value="${sanitizeCss(Array.isArray(theme.mini) ? theme.mini[0] : '')}" /></label>
+      <label><span>${t('note_color_2')}</span><input type="color" id="teMini2" value="${sanitizeCss(Array.isArray(theme.mini) ? theme.mini[1] : '')}" /></label>
     </div>
     <footer style="padding:12px 16px;display:flex;gap:10px;justify-content:flex-end">
       <button id="teCancel" class="sp-btn ghost" style="width:auto;padding:8px 18px">${t('cancel')}</button>
@@ -472,6 +474,8 @@ function applyLanguage() {
   document.documentElement.lang = lang === 'en' ? 'en' : 'zh-CN';
   $$('[data-i18n]').forEach((el) => { el.textContent = t(el.dataset.i18n); });
   $$('[data-i18n-title]').forEach((el) => { el.title = t(el.dataset.i18nTitle); });
+  // 纯图标控件的可访问名称：显式 aria-label 覆盖符号文本，语言切换时一并刷新
+  $$('[data-i18n-aria-label]').forEach((el) => { el.setAttribute('aria-label', t(el.dataset.i18nAriaLabel)); });
   $$('[data-i18n-placeholder]').forEach((el) => { el.placeholder = t(el.dataset.i18nPlaceholder); });
   const ls = $('#languageSelect');
   if (ls) ls.value = lang;
@@ -496,7 +500,7 @@ function renderGroupChips() {
   recent.forEach((g) => {
     const chip = document.createElement('button');
     chip.className = 'chip' + (filter.group === g.id ? ' active' : '');
-    chip.innerHTML = `<span class="dot" style="background:${g.color}"></span>${escapeHtml(g.name)}${isGroupCollapsed(g.id) ? '<span class="chip-collapsed">▸</span>' : ''}`;
+    chip.innerHTML = `<span class="dot" style="background:${sanitizeCss(g.color) || 'transparent'}"></span>${escapeHtml(g.name)}${isGroupCollapsed(g.id) ? '<span class="chip-collapsed">▸</span>' : ''}`;
     chip.title = t('left_click_filter');
     chip.onclick = () => setFilter('group', g.id);
     chip.addEventListener('contextmenu', (e) => {

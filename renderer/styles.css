@@ -249,7 +249,7 @@ body.topbar-acrylic .icon-btn:hover { color: var(--accent); }
 
 .view-toggle {
   flex: 0 0 auto; margin-left: auto;
-  display: flex; gap: 2px; padding: 2px;
+  display: flex; align-items: center; gap: 2px; padding: 2px;
   background: color-mix(in srgb, var(--bg-soft) 65%, transparent);
   border: 1px solid color-mix(in srgb, var(--border) 45%, transparent);
   border-radius: 10px;
@@ -435,6 +435,9 @@ body.note-dragging .note.dragging {
   padding: 2px 4px; border-radius: 4px;
 }
 .note-title:focus { background: rgba(127,127,127,0.18); }
+/* 空标题的浏览器占位符默认灰在多色便签上几乎不可见：改用「继承便签文字色 + 弱化透明度」，
+   共享主窗画布与备忘录卡片；保留标题/输入/字体/字号/原生编辑语义不变。 */
+.note-title::placeholder { color: inherit; opacity: 0.6; }
 /* 标题与 grip 同组：标题短→工具栏留在右侧同行；标题长→整组占满、工具栏换行（自适应） */
 .note-title-row { display: flex; align-items: center; gap: 4px; flex: 1 1 auto; min-width: 0; }
 .note-title-row .note-title { flex: 0 1 auto; min-width: 60px; max-width: 100%; field-sizing: content; }
@@ -508,20 +511,27 @@ body.note-dragging .note.dragging {
 .todo-add:hover { opacity: 1; }
 
 .note-foot {
-  display: flex; align-items: center; gap: 8px;
-  padding: 5px 12px 9px; font-size: 11px; color: inherit; opacity: 0.62;
+  display: flex; align-items: center; gap: 8px 8px;
+  flex-wrap: wrap; row-gap: 3px;
+  padding: 5px 12px 9px; font-size: 11px; color: inherit;
 }
+/* 元数据统一弱化用「继承色 + 单项 opacity」，而不是整容器 opacity——否则 overdue 红色/白字也被削弱。 */
+.note-foot .group-tag,
+.note-foot .reminder-chip,
+.note-foot .date { opacity: 0.72; }
 .note-foot .group-tag {
   display: inline-flex; align-items: center; gap: 5px;
   background: rgba(127,127,127,0.25); padding: 2px 8px; border-radius: 999px;
+  max-width: 100%; min-width: 0; overflow-wrap: anywhere;
 }
-.note-foot .group-tag .dot { width: 7px; height: 7px; border-radius: 50%; }
+.note-foot .group-tag .dot { width: 7px; height: 7px; border-radius: 50%; flex-shrink: 0; }
 .note-foot .reminder-chip {
   display: inline-flex; align-items: center; gap: 4px;
   background: rgba(127,127,127,0.25); padding: 2px 8px; border-radius: 999px;
 }
-.note-foot .reminder-chip.overdue { background: #e5484d; color: #fff; }
-.note-foot .date { margin-left: auto; }
+/* overdue 提示始终鲜明：单项不弱化、红底白字（覆盖上面的 0.72）。 */
+.note-foot .reminder-chip.overdue { opacity: 1; background: #e5484d; color: #fff; }
+.note-foot .date { margin-left: auto; white-space: nowrap; }
 
 .resize-handle {
   position: absolute; right: 0; bottom: 0; width: 18px; height: 18px;
@@ -617,12 +627,14 @@ body.note-dragging .note.dragging {
 .memo-row .todo-add:hover { color: var(--fg); }
 
 .memo-foot {
-  display: flex; align-items: center; gap: 8px;
-  font-size: 11px; color: var(--fg-dim);
+  display: flex; align-items: center; gap: 8px; flex-wrap: wrap; row-gap: 3px;
+  font-size: 11px; color: inherit; /* 跟随便签自身文字色，而非应用主题 --fg-dim（浅色/黄色便签上仍可读） */
 }
+.memo-foot .group-tag, .memo-foot .reminder-chip, .memo-foot .date { opacity: 0.72; }
 .memo-foot .group-tag, .memo-foot .reminder-chip { background: rgba(128,128,128,0.16); }
-.memo-foot .reminder-chip.overdue { background: #e5484d; color: #fff; }
-.memo-foot .date { margin-left: auto; }
+.memo-foot .group-tag { max-width: 100%; min-width: 0; overflow-wrap: anywhere; }
+.memo-foot .reminder-chip.overdue { opacity: 1; background: #e5484d; color: #fff; }
+.memo-foot .date { margin-left: auto; white-space: nowrap; }
 
 /* 颜色选择弹窗 */
 .color-pop {
@@ -684,9 +696,20 @@ body.maximized #settingsOverlay { border-radius: 0; }
   background: var(--bg); border-left: 1px solid var(--border);
   box-shadow: -10px 0 40px rgba(0,0,0,0.3);
   display: flex; flex-direction: column;
-  animation: slideIn 0.22s ease;
+  /* 快速纯平移：用 transform 过渡统一开关手感（约 120ms），无淡入淡出。 */
+  transform: translateX(0);
+  transition: transform 0.12s ease-out;
+  will-change: transform;
 }
-@keyframes slideIn { from { transform: translateX(100%); } to { transform: translateX(0); } }
+/* 打开时的入场起点：短暂平移（快速、无停顿、无右侧留白）。 */
+#settingsPanel.sp-enter { transform: translateX(100%); }
+/* 关闭时的出场：同款快速平移；结束后由 JS 隐藏遮罩。 */
+#settingsPanel.sp-closing { transform: translateX(100%); }
+/* 尊重系统「减少动态效果」：直接到位，不做平移。 */
+@media (prefers-reduced-motion: reduce) {
+  #settingsPanel { transition: none; }
+  #settingsPanel.sp-enter, #settingsPanel.sp-closing { transform: translateX(0); }
+}
 
 .sp-header {
   height: 50px; flex: 0 0 50px; display: flex; align-items: center; justify-content: space-between;
@@ -889,6 +912,13 @@ body.maximized #changelogOverlay { border-radius: 0; }
   text-align: center; box-shadow: var(--shadow);
 }
 /* 只读态：置灰画布交互，但仍允许打开设置面板「导入备份」自救 */
+#btnDataRecovery {
+  margin-left: 12px; padding: 3px 8px; border: 1px solid currentColor;
+  border-radius: 5px; color: inherit; background: rgba(255, 255, 255, 0.12);
+  font: inherit; cursor: pointer;
+}
+#btnDataRecovery:hover { background: rgba(255, 255, 255, 0.24); }
+#btnDataRecovery:focus-visible { outline: 2px solid currentColor; outline-offset: 2px; }
 body.data-readonly #canvas,
 body.data-readonly #board { pointer-events: none; }
 
@@ -995,6 +1025,8 @@ body.data-readonly #board { pointer-events: none; }
   flex: 1; background: var(--todo-search-bg, var(--bg-soft)); color: var(--fg); border: 1px solid var(--border);
   border-radius: 10px; padding: 10px 14px; font-family: inherit; font-size: 13.5px; user-select: text;
 }
+/* 深色主题下浏览器默认占位灰(#757575)在输入框上几乎不可见：用主题前景弱色，明暗主题均清晰。 */
+.todo-add-box input::placeholder { color: var(--fg-dim); opacity: 1; }
 .todo-section { border: 1px solid var(--border); border-radius: 14px; padding: 14px 16px; }
 .todo-section.items { background: var(--todo-items-bg, var(--bg-soft)); }
 .todo-section.remind { background: var(--todo-remind-bg, var(--bg-soft)); }
@@ -1125,7 +1157,7 @@ body.glass .memo-row:hover { box-shadow: var(--note-shadow-hover, 0 12px 40px rg
 .doc-pick-item .dp-arrow { color: inherit; opacity: 0.6; }
 
 .doc-toolbar {
-  display: flex; align-items: center; gap: 6px; margin-bottom: 10px; flex-wrap: wrap;
+  display: flex; align-items: center; gap: 6px; margin-bottom: 12px; flex-wrap: wrap;
   padding: 6px 8px;
   border: 1px solid var(--border);
   border-radius: 12px;
@@ -1133,27 +1165,37 @@ body.glass .memo-row:hover { box-shadow: var(--note-shadow-hover, 0 12px 40px rg
   box-shadow: 0 6px 20px rgba(0, 0, 0, 0.18);
   opacity: var(--note-opacity);
 }
-.doc-toolbar .doc-back {
-  background: rgba(127,127,127,0.26); border: 1px solid rgba(127,127,127,0.28); color: inherit;
-  border-radius: 8px; padding: 6px 12px; cursor: pointer; font-family: inherit; font-size: 13px;
-}
-.doc-toolbar .doc-back:hover { border-color: var(--accent); }
+/* 分组：组内紧凑，组间留白 + 浅分隔线；整组作为换行单位，窄窗在组边界换行 */
+.doc-toolbar .doc-group { display: flex; align-items: center; gap: 4px; }
+.doc-toolbar .doc-group + .doc-group { margin-left: 8px; padding-left: 8px; border-left: 1px solid var(--border); }
+.doc-toolbar .doc-back,
 .doc-toolbar .doc-fmt-btn {
+  height: 32px; box-sizing: border-box;
+  display: inline-flex; align-items: center; justify-content: center;
   background: rgba(127,127,127,0.26); border: 1px solid rgba(127,127,127,0.28); color: inherit;
-  width: 32px; height: 32px; border-radius: 8px; cursor: pointer; font-size: 14px; font-family: inherit;
-  display: inline-flex; align-items: center; justify-content: center; transition: all 0.12s;
+  border-radius: 8px; cursor: pointer; font-family: inherit;
 }
+.doc-toolbar .doc-back { padding: 0 12px; font-size: 13px; }
+.doc-toolbar .doc-back:hover { border-color: var(--accent); }
+.doc-toolbar .doc-fmt-btn { width: 32px; font-size: 14px; transition: all 0.12s; }
 .doc-toolbar .doc-fmt-btn:hover { border-color: var(--accent); color: var(--accent); }
 .doc-toolbar .doc-fmt-btn:focus-visible,
 .doc-toolbar .doc-back:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
-.doc-toolbar .doc-export-btn { width: 42px; font-size: 11px; font-weight: 700; letter-spacing: -0.2px; }
+/* 预览：短标签提升可发现性，标签/标题/aria 随状态更新 */
+.doc-toolbar .doc-preview-btn { width: auto; padding: 0 10px; gap: 4px; }
+.doc-toolbar .doc-btn-label { font-size: 12px; line-height: 1; }
+.doc-toolbar .doc-export-btn { width: auto; min-width: 42px; padding: 0 8px; font-size: 11px; font-weight: 700; letter-spacing: -0.2px; }
 .doc-toolbar .doc-hl-color {
-  width: 32px; height: 32px; border: 1px solid rgba(127,127,127,0.28); border-radius: 8px;
+  width: 32px; height: 32px; box-sizing: border-box;
+  border: 1px solid rgba(127,127,127,0.28); border-radius: 8px;
   background: rgba(127,127,127,0.26); cursor: pointer; padding: 2px; flex-shrink: 0;
 }
 .doc-toolbar .doc-hl-color:hover { border-color: var(--accent); }
 .doc-toolbar .doc-spacer { flex: 1; }
-.doc-toolbar .doc-hint { font-size: 12px; color: inherit; opacity: 0.82; }
+/* 提示独占一行 */
+.doc-toolbar .doc-hint { flex-basis: 100%; width: 100%; font-size: 12px; color: inherit; opacity: 0.82; margin-top: 2px; }
+/* 删除与常用控件视觉分离：独立分组 + 危险色 hover */
+.doc-toolbar .doc-del-btn:hover { border-color: var(--danger, #e24b4a); color: var(--danger, #e24b4a); }
 .doc-title-input {
   width: 100%; font-size: 22px; font-weight: 700; background: transparent; border: none;
   border-bottom: 1px solid var(--border); color: var(--fg); padding: 8px 4px; outline: none;
@@ -1374,15 +1416,24 @@ body.maximized #alarmOverlay { border-radius: 0; }
 .note-table td.diag { min-width: 64px; height: 40px; }
 .note-table td.diag .diag-line { position: absolute; inset: 0; width: 100%; height: 100%; pointer-events: none; z-index: 0; }
 .note-table td.diag .diag-line line { stroke: var(--tbl-border-color, rgba(0,0,0,0.7)); stroke-width: var(--tbl-border-width, 3px); vector-effect: non-scaling-stroke; }
-.note-table .tbl-t1, .note-table .tbl-t2 { position: absolute; pointer-events: none; line-height: 1.2; max-width: 45%; z-index: 1; }
-.note-table td.diag-tlbr .tbl-t1 { top: 4%; right: 6%; }
-.note-table td.diag-tlbr .tbl-t2 { bottom: 4%; left: 6%; }
-.note-table td.diag-trbl .tbl-t1 { top: 4%; left: 6%; }
-.note-table td.diag-trbl .tbl-t2 { bottom: 4%; right: 6%; }
+/* 对角标签：2×2 等分 intrinsic 网格；两行等高、两列等宽，标签置于对角象限，长文本换行不越界。 */
+.note-table td.diag .diag-box {
+  position: relative; z-index: 1; display: grid;
+  grid-template-columns: 1fr 1fr; grid-template-rows: 1fr 1fr;
+  width: 100%; height: 100%; pointer-events: none;
+}
+.note-table td.diag .diag-cell { display: flex; min-width: 0; padding: 3px 5px; }
+.note-table td.diag .diag-cell.diag-a { grid-area: 1 / 1 / 2 / 2; justify-content: flex-start; align-items: flex-start; text-align: left; }
+.note-table td.diag .diag-cell.diag-b { grid-area: 1 / 2 / 2 / 3; justify-content: flex-end; align-items: flex-start; text-align: right; }
+.note-table td.diag .diag-cell.diag-c { grid-area: 2 / 1 / 3 / 2; justify-content: flex-start; align-items: flex-end; text-align: left; }
+.note-table td.diag .diag-cell.diag-d { grid-area: 2 / 2 / 3 / 3; justify-content: flex-end; align-items: flex-end; text-align: right; }
+.note-table .tbl-t1, .note-table .tbl-t2 { pointer-events: none; line-height: 1.2; }
+.note-table td.diag .tbl-t1, .note-table td.diag .tbl-t2 { min-width: 0; max-width: 100%; overflow-wrap: anywhere; word-break: break-word; }
 
 .table-toolbar {
   position: fixed; z-index: 5000;
-  display: flex; gap: 2px;
+  display: flex; gap: 2px; flex-wrap: wrap;
+  max-width: calc(100vw - 8px); box-sizing: border-box;
   background: var(--bg); border: 1px solid var(--border);
   border-radius: 8px; padding: 3px; box-shadow: var(--shadow);
 }
@@ -1394,6 +1445,8 @@ body.maximized #alarmOverlay { border-radius: 0; }
   white-space: nowrap;
 }
 .table-toolbar button:hover { background: var(--accent-soft); color: var(--accent); }
+.table-toolbar button:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
+.table-toolbar button:disabled { opacity: 0.4; cursor: default; color: var(--fg-dim); background: transparent; }
 
 .doc-tb-sep { width: 1px; height: 18px; background: var(--border); margin: 0 2px; flex-shrink: 0; }
 
@@ -1433,3 +1486,98 @@ body.bright-bg .icon-btn:disabled:hover {
   border-color: var(--border);
   color: var(--fg);
 }
+
+/* ---------- UX-20A 桌面便签摘要（只读标题 + 安全唤起） ---------- */
+.desktop-notes {
+  position: relative; z-index: 1;
+  margin: 6px 12px 0;
+  border: 1px solid var(--border);
+  border-radius: 10px;
+  /* 应用导航 chrome：跟随窗口顶栏材质（--topbar-bg = 顶栏颜色/透明度/亚克力），而非便签玻璃 */
+  background: var(--topbar-bg, var(--bg));
+  font-size: 13px;
+}
+.desktop-notes[open] { padding-bottom: 6px; }
+.dn-summary {
+  display: flex; align-items: center; gap: 8px; cursor: pointer;
+  padding: 6px 10px; list-style: none; user-select: none;
+  color: var(--fg); font-size: 13px; font-weight: 600;
+}
+.dn-summary::-webkit-details-marker { display: none; }
+.dn-summary::before { content: '\25B8'; font-size: 11px; transition: transform 0.12s; }
+.desktop-notes[open] .dn-summary::before { transform: rotate(90deg); }
+.dn-count {
+  min-width: 20px; text-align: center; padding: 0 6px; border-radius: 999px;
+  background: var(--accent-soft); color: var(--accent); font-size: 12px; font-weight: 600;
+}
+.dn-body { padding: 0 10px 4px; }
+.dn-list { display: flex; flex-wrap: wrap; gap: 6px; max-height: 132px; overflow: auto; }
+.dn-row {
+  max-width: 100%; text-align: left; cursor: pointer;
+  background: rgba(127,127,127,0.14); border: 1px solid var(--border); color: var(--fg);
+  border-radius: 8px; padding: 4px 10px; font-family: inherit; font-size: 13px;
+  overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+}
+.dn-row:hover { border-color: var(--accent); color: var(--fg); }
+.dn-row:focus-visible, .dn-close:focus-visible, .dn-summary:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
+.dn-empty { color: var(--fg); font-size: 12px; opacity: 0.92; padding: 2px 2px 6px; }
+.dn-close {
+  margin-top: 4px; background: transparent; border: 1px solid var(--border); color: var(--fg);
+  border-radius: 8px; padding: 3px 10px; cursor: pointer; font-family: inherit; font-size: 12px;
+}
+.dn-close:hover { color: var(--fg); border-color: var(--accent); }
+/* 桌面便签导航跟随窗口顶栏的「亚克力」状态（与标题栏/筛选栏同款 blur18/saturate1.4），
+   与便签玻璃（body.glass）完全独立；不再有 desktop-only 固定 blur/opacity 覆盖。 */
+body.topbar-acrylic .desktop-notes {
+  -webkit-backdrop-filter: blur(18px) saturate(1.4);
+  backdrop-filter: blur(18px) saturate(1.4);
+}
+
+/* ---------- UX-22A 当前筛选条件行（可逐个移除 + 全部清除） ---------- */
+.filter-status {
+  position: relative; z-index: 1;
+  display: flex; align-items: center; flex-wrap: wrap; gap: 6px;
+  padding: 6px 14px; max-height: 96px; overflow-y: auto; overflow-x: auto;
+  border-bottom: 1px solid var(--border);
+  /* 应用导航 chrome：与标题栏/筛选栏/桌面便签一致，跟随 --topbar-bg（含自定义颜色/透明度/亚克力），
+     避免与半透明顶栏风格不协调的浅色实底。 */
+  background: var(--topbar-bg, var(--bg));
+  color: var(--fg);
+  font-size: 12px;
+}
+body.topbar-acrylic .filter-status {
+  -webkit-backdrop-filter: blur(18px) saturate(1.4);
+  backdrop-filter: blur(18px) saturate(1.4);
+}
+.filter-status.hidden { display: none; }
+.filter-scope { display: inline-flex; align-items: center; gap: 8px; flex: 0 0 auto; }
+.filter-status .fs-nomatch { color: var(--fg); font-size: 12px; min-width: 0; max-width: 100%; overflow-wrap: anywhere; }
+.fs-tag {
+  display: inline-flex; align-items: center; gap: 4px; max-width: 100%;
+  /* 与顶栏内其它中性控件（chip/icon-btn）一致的中性半透明填充 + 主题边框，沿用导航文字色对比。 */
+  background: rgba(127,127,127,0.16); border: 1px solid rgba(127,127,127,0.28); color: var(--fg);
+  border-radius: 999px; padding: 2px 4px 2px 10px;
+}
+.fs-tag-archive { border-color: var(--accent); color: var(--accent); }
+.fs-tag-label {
+  max-width: 220px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+}
+.fs-tag-x {
+  background: transparent; border: none; color: inherit; cursor: pointer;
+  width: 20px; height: 20px; border-radius: 50%; font-size: 11px; line-height: 1;
+  display: inline-flex; align-items: center; justify-content: center;
+}
+.fs-tag-x:hover { background: var(--accent-soft); color: var(--accent); }
+.fs-tag-x:focus-visible, .fs-clear:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
+.fs-note {
+  color: var(--fg); font-size: 12px;
+  min-width: 0; max-width: 100%;
+  overflow-wrap: anywhere; word-break: break-word;
+  white-space: normal;
+}
+.fs-count { color: var(--fg); opacity: 0.85; white-space: nowrap; }
+.fs-clear {
+  margin-left: auto; background: transparent; border: 1px solid var(--border); color: var(--fg);
+  border-radius: 999px; padding: 2px 10px; cursor: pointer; font-family: inherit; font-size: 12px;
+}
+.fs-clear:hover { border-color: var(--accent); color: var(--accent); }

@@ -20,7 +20,19 @@ function closePops() {
 
 async function exportNoteAsMarkdown(n) {
   const fname = ((n.title || '').replace(/[\\/:*?"<>|]/g, '_').trim() || '便签') + '.md';
-  const md = noteToMarkdown(n, { image: (src) => src });
+  let md;
+  try {
+    md = noteToMarkdown(n, { image: (src) => src });
+  } catch (err) {
+    // P0-04：表格过大等导出被拒时给出可见提示，而不是未处理的 promise 拒绝。
+    if (err && err.code === 'TABLE_MD_TOO_LARGE') {
+      toast(t('table_rows') + ' / ' + t('table_cols') + ' ≤ ' + err.limit);
+      return { ok: false, error: err.message, code: err.code };
+    }
+    const msg = (err && err.message) ? err.message : String(err);
+    toast(t('toast_export_fail') + msg);
+    return { ok: false, error: msg };
+  }
   const r = await window.api.exportNoteMarkdown(md, fname);
   if (r.ok) toast(t('toast_exported') + r.path);
   else if (!r.canceled) toast(t('toast_export_fail') + r.error);
@@ -480,7 +492,7 @@ function openGroupPop(el, n) {
       if (!g) return;
       const b = document.createElement('button');
       b.style.cssText = 'background:var(--accent-soft);border:none;color:var(--fg);padding:7px 10px;border-radius:7px;cursor:pointer;text-align:left;font-size:13px;font-family:inherit;';
-      b.innerHTML = `<span class="dot" style="display:inline-block;width:8px;height:8px;border-radius:50%;background:${g.color};margin-right:6px"></span>${escapeHtml(g.name)}${n.groupId === g.id ? ' ✓' : ''}`;
+      b.innerHTML = `<span class="dot" style="display:inline-block;width:8px;height:8px;border-radius:50%;background:${sanitizeCss(g.color) || 'transparent'};margin-right:6px"></span>${escapeHtml(g.name)}${n.groupId === g.id ? ' ✓' : ''}`;
       b.onmouseenter = () => (b.style.background = 'var(--accent)');
       b.onmouseleave = () => (b.style.background = 'var(--accent-soft)');
       b.onclick = (e) => { e.stopPropagation(); assignGroup(g.id); };
@@ -498,7 +510,7 @@ function openGroupPop(el, n) {
   items.forEach((it) => {
     const b = document.createElement('button');
     b.style.cssText = 'background:transparent;border:none;color:var(--fg);padding:7px 10px;border-radius:7px;cursor:pointer;text-align:left;font-size:13px;font-family:inherit;';
-    b.innerHTML = `${it.id ? `<span class="dot" style="display:inline-block;width:8px;height:8px;border-radius:50%;background:${(state.groups.find(g=>g.id===it.id)||{}).color};margin-right:6px"></span>` : ''}${escapeHtml(it.label)}${n.groupId === it.id ? ' ✓' : ''}`;
+    b.innerHTML = `${it.id ? `<span class="dot" style="display:inline-block;width:8px;height:8px;border-radius:50%;background:${sanitizeCss((state.groups.find(g=>g.id===it.id)||{}).color) || 'transparent'};margin-right:6px"></span>` : ''}${escapeHtml(it.label)}${n.groupId === it.id ? ' ✓' : ''}`;
     b.onmouseenter = () => (b.style.background = 'var(--accent-soft)');
     b.onmouseleave = () => (b.style.background = 'transparent');
     b.onclick = (e) => { e.stopPropagation(); assignGroup(it.id); };

@@ -153,6 +153,8 @@ function registerIpc() {
 
   window.api.onNoteChanged((note) => {
     state.notes = state.notes.map((n) => (n.id === note.id ? note : n));
+    // UX-20A：独立窗标题变化只刷新桌面便签摘要，不重渲染编辑器/焦点。
+    if (typeof renderDesktopNotes === 'function') renderDesktopNotes();
   });
 
   window.api.onNoteUnpinned((id) => {

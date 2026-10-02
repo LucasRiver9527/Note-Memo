@@ -34,9 +34,9 @@ function checkIpcContract(rootDir) {
   const pre = readFileSafe(preloadPath);
   const main = readFileSafe(mainPath);
 
-  const preInvokeSend = extractChannels(pre, /ipcRenderer\.(?:invoke|send)\('([^']+)'/g);
+  const preInvokeSend = extractChannels(pre, /ipcRenderer\.(?:invoke|sendSync|send)\('([^']+)'/g);
   const preOn = extractChannels(pre, /ipcRenderer\.on\('([^']+)'/g);
-  const mainHandleOn = extractChannels(main, /ipcMain\.(?:handle|on)\('([^']+)'/g);
+  const mainHandleOn = extractChannels(main, /(?:ipcMain\.(?:handle|on)|guardedHandle|guardedOn)\('([^']+)'/g);
   const mainSend = extractChannels(main, /(?:webContents|win\.webContents|mainWindow\.webContents)\.send\('([^']+)'/g);
 
   const missingHandlers = preInvokeSend.filter((c) => !mainHandleOn.includes(c));

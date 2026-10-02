@@ -15,7 +15,9 @@
 /* ============ 通用弹窗 ============ */
 function promptModal(title, placeholder, def) {
   return new Promise((resolve) => {
+    const opener = document.activeElement;
     const overlay = document.createElement('div');
+    overlay.setAttribute('data-modal-overlay', '');
     overlay.style.cssText = 'position:fixed;inset:0;z-index:6000;background:rgba(0,0,0,0.35);display:flex;align-items:center;justify-content:center;border-radius:14px;';
     const modal = document.createElement('div');
     modal.style.cssText = 'width:280px;background:var(--bg);border:1px solid var(--border);border-radius:14px;box-shadow:var(--shadow);overflow:hidden;';
@@ -29,7 +31,7 @@ function promptModal(title, placeholder, def) {
     overlay.appendChild(modal);
     document.body.appendChild(overlay);
     const input = $('#pmInput', modal);
-    const done = (val) => { overlay.remove(); resolve(val); };
+    const done = (val) => { overlay.remove(); if (opener && opener.isConnected && typeof opener.focus === 'function') opener.focus(); resolve(val); };
     $('#pmOk', modal).onclick = () => done(input.value);
     $('#pmCancel', modal).onclick = () => done(null);
     input.addEventListener('keydown', (e) => { if (e.key === 'Enter') done(input.value); });
@@ -40,7 +42,9 @@ function promptModal(title, placeholder, def) {
 
 function confirmModal(title, message) {
   return new Promise((resolve) => {
+    const opener = document.activeElement;
     const overlay = document.createElement('div');
+    overlay.setAttribute('data-modal-overlay', '');
     overlay.style.cssText = 'position:fixed;inset:0;z-index:6000;background:rgba(0,0,0,0.35);display:flex;align-items:center;justify-content:center;border-radius:14px;';
     const modal = document.createElement('div');
     modal.style.cssText = 'width:300px;background:var(--bg);border:1px solid var(--border);border-radius:14px;box-shadow:var(--shadow);overflow:hidden;';
@@ -53,8 +57,11 @@ function confirmModal(title, message) {
       </footer>`;
     overlay.appendChild(modal);
     document.body.appendChild(overlay);
-    $('#cmOk', modal).onclick = () => { overlay.remove(); resolve(true); };
-    $('#cmCancel', modal).onclick = () => { overlay.remove(); resolve(false); };
+    const done = (val) => { overlay.remove(); if (opener && opener.isConnected && typeof opener.focus === 'function') opener.focus(); resolve(val); };
+    $('#cmOk', modal).onclick = () => done(true);
+    $('#cmCancel', modal).onclick = () => done(false);
+    // 危险确认默认聚焦「取消」（安全项），避免打开即停在会破坏数据的确认按钮上
+    $('#cmCancel', modal).focus();
   });
 }
 

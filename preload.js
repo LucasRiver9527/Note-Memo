@@ -75,6 +75,7 @@ contextBridge.exposeInMainWorld('api', {
 
   pinToDesktop: (id) => ipcRenderer.invoke('note:pin', id),
   unpinFromDesktop: (id) => ipcRenderer.invoke('note:unpin', id),
+  showDesktopNote: (id) => ipcRenderer.invoke('note:show', id),
   closeAllDetached: () => ipcRenderer.invoke('note:close-all'),
   noteGet: (id) => ipcRenderer.invoke('note:get', id),
   captureNoteDraft: (note) => ipcRenderer.sendSync('note:draft', note),

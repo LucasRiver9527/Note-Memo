@@ -272,6 +272,7 @@ function refreshTableBlock(block) {
   tmp.innerHTML = tableBlockHtml(tbl);
   block.innerHTML = tmp.firstChild.innerHTML;
   save();
+  refreshToolbarEligibility(block); // 结构变更后刷新按钮可用性（与主窗一致）
 }
 
 function deselectTable() {
@@ -288,37 +289,73 @@ function showTableToolbar(block) {
   hideTableToolbar();
   const tb = document.createElement('div');
   tb.className = 'table-toolbar';
-  const btn = (html, title, fn) => {
+  // 可见短标签 + 完整本地化 aria-label/title（钉窗用 tr()）。
+  const btn = (label, ariaFull, fn) => {
     const b = document.createElement('button');
-    b.innerHTML = html;
-    b.title = title;
-    b.onclick = (e) => { e.stopPropagation(); fn(); };
+    b.type = 'button';
+    b.textContent = label;
+    b.setAttribute('aria-label', ariaFull);
+    b.title = ariaFull;
+    b.onclick = (e) => { e.stopPropagation(); if (!b.disabled) fn(); };
     tb.appendChild(b);
+    return b;
   };
-  btn('＋行', tr('add_row'), () => { const tbl = getTableById(block.dataset.tableId); if (tbl) { tableAddRow(tbl); refreshTableBlock(block); } });
-  btn('＋列', tr('add_col'), () => { const tbl = getTableById(block.dataset.tableId); if (tbl) { tableAddCol(tbl); refreshTableBlock(block); } });
-  btn('−行', tr('del_row'), () => { const tbl = getTableById(block.dataset.tableId); if (tbl && activeTableSelCell) { tableRemoveRow(tbl, activeTableSelCell.r); activeTableSelCell = null; refreshTableBlock(block); } });
-  btn('−列', tr('del_col'), () => { const tbl = getTableById(block.dataset.tableId); if (tbl && activeTableSelCell) { tableRemoveCol(tbl, activeTableSelCell.c); activeTableSelCell = null; refreshTableBlock(block); } });
-  btn('合并', tr('merge_cells'), () => { const tbl = getTableById(block.dataset.tableId); if (tbl && activeTableSelBox) { tableMerge(tbl, activeTableSelBox.r1, activeTableSelBox.c1, activeTableSelBox.r2, activeTableSelBox.c2); activeTableSelBox = null; refreshTableBlock(block); } });
-  btn('拆分', tr('split_cell'), () => { const tbl = getTableById(block.dataset.tableId); if (tbl && activeTableSelCell) { tableSplit(tbl, activeTableSelCell.r, activeTableSelCell.c); refreshTableBlock(block); } });
-  btn('斜线', tr('diag_line'), () => { const tbl = getTableById(block.dataset.tableId); if (tbl && activeTableSelCell) { const r = activeTableSelCell.r, c = activeTableSelCell.c; const has = (tbl.diagonals || []).some((d) => d.r === r && d.c === c); if (has) { tbl.diagonals = (tbl.diagonals || []).filter((d) => !(d.r === r && d.c === c)); refreshTableBlock(block); } else { openDiagonalEditor(tbl, r, c); } } });
-  btn('⚙', tr('table_settings'), () => { const tbl = getTableById(block.dataset.tableId); if (tbl) openTableSettingsDialog(tbl); });
-  btn('✕', tr('del_table'), () => { removeTableFromNote(block.dataset.tableId); deselectTable(); renderBody(); });
+  const btnRow = btn(tr('tb_add_row'), tr('add_row'), () => { const tbl = getTableById(block.dataset.tableId); if (tbl) { tableAddRow(tbl); refreshTableBlock(block); } });
+  const btnCol = btn(tr('tb_add_col'), tr('add_col'), () => { const tbl = getTableById(block.dataset.tableId); if (tbl) { tableAddCol(tbl); refreshTableBlock(block); } });
+  const btnDelRow = btn(tr('tb_del_row'), tr('del_row'), () => { const tbl = getTableById(block.dataset.tableId); if (tbl && activeTableSelCell) { tableRemoveRow(tbl, activeTableSelCell.r); activeTableSelCell = null; refreshTableBlock(block); } });
+  const btnDelCol = btn(tr('tb_del_col'), tr('del_col'), () => { const tbl = getTableById(block.dataset.tableId); if (tbl && activeTableSelCell) { tableRemoveCol(tbl, activeTableSelCell.c); activeTableSelCell = null; refreshTableBlock(block); } });
+  const btnMerge = btn(tr('tb_merge'), tr('merge_cells'), () => { const tbl = getTableById(block.dataset.tableId); if (tbl && activeTableSelBox) { tableMerge(tbl, activeTableSelBox.r1, activeTableSelBox.c1, activeTableSelBox.r2, activeTableSelBox.c2); activeTableSelBox = null; refreshTableBlock(block); } });
+  const btnSplit = btn(tr('tb_split'), tr('split_cell'), () => { const tbl = getTableById(block.dataset.tableId); if (tbl && activeTableSelCell) { tableSplit(tbl, activeTableSelCell.r, activeTableSelCell.c); refreshTableBlock(block); } });
+  const btnDiag = btn(tr('tb_diag'), tr('diag_line'), () => { const tbl = getTableById(block.dataset.tableId); if (tbl && activeTableSelCell) openDiagonalEditor(tbl, activeTableSelCell.r, activeTableSelCell.c); });
+  const btnSet = btn(tr('tb_settings'), tr('table_settings'), () => { const tbl = getTableById(block.dataset.tableId); if (tbl) openTableSettingsDialog(tbl); });
+  btn(tr('tb_del_table'), tr('del_table'), () => { removeTableFromNote(block.dataset.tableId); deselectTable(); renderBody(); });
   document.body.appendChild(tb);
   activeTableToolbar = tb;
+  tb.__btn = { delRow: btnDelRow, delCol: btnDelCol, merge: btnMerge, split: btnSplit, diag: btnDiag, row: btnRow, col: btnCol, set: btnSet };
+  refreshToolbarEligibility(block);
   const rect = block.getBoundingClientRect();
   tb.style.left = Math.max(4, Math.min(rect.left, window.innerWidth - tb.offsetWidth - 4)) + 'px';
   tb.style.top = Math.max(4, rect.top - tb.offsetHeight - 6) + 'px';
 }
 
+// 依据当前选中/合并状态刷新工具栏可用性（钉窗版）。
+function refreshToolbarEligibility(block) {
+  const tb = activeTableToolbar;
+  if (!tb || !tb.__btn) return;
+  const blk = block || activeTableEl;
+  const tbl = (blk && note) ? getTableById(blk.dataset.tableId) : null;
+  const b = tb.__btn;
+  const cell = activeTableSelCell;
+  const box = activeTableSelBox;
+  const validCell = !!(tbl && cell && tbl.cells[cell.r] && typeof tbl.cells[cell.r][cell.c] !== 'undefined');
+  const merges = (tbl && Array.isArray(tbl.merges)) ? tbl.merges : [];
+  const mergeAt = (r, c) => merges.find((m) => m && m.r === r && m.c === c);
+  const coveredByMerge = (r, c) => merges.some((m) => m && r >= m.r && r < m.r + (m.rowspan || 1) && c >= m.c && c < m.c + (m.colspan || 1));
+  const multiRect = !!(box && (box.r2 - box.r1 > 0 || box.c2 - box.c1 > 0));
+  b.delRow.disabled = !(validCell && tbl.rows > 1);
+  b.delCol.disabled = !(validCell && tbl.cols > 1);
+  b.merge.disabled = !multiRect;
+  b.split.disabled = !(validCell && !!mergeAt(cell.r, cell.c));
+  b.diag.disabled = !(validCell && !coveredByMerge(cell.r, cell.c));
+}
+
 function openDiagonalEditor(tbl, r, c) {
   const block = activeTableEl;
-  const existing = (tbl.diagonals || []).find((d) => d.r === r && d.c === c);
+  const opener = document.activeElement;
+  const existing = (Array.isArray(tbl.diagonals) ? tbl.diagonals : []).find((d) => d && d.r === r && d.c === c);
   const overlay = document.createElement('div');
-  overlay.style.cssText = 'position:fixed;inset:0;z-index:6500;background:rgba(0,0,0,0.35);display:flex;align-items:center;justify-content:center;';
+  overlay.setAttribute('data-modal-overlay', '');
+  overlay.style.cssText = 'position:fixed;inset:0;z-index:11000;background:rgba(0,0,0,0.35);display:flex;align-items:center;justify-content:center;'; // 高于钉窗工具栏(9999)，避免穿越模态点到编辑按钮
   const modal = document.createElement('div');
-  modal.style.cssText = 'width:300px;background:#1e1f26;border:1px solid rgba(255,255,255,0.1);border-radius:14px;overflow:hidden;';
+  modal.className = 'diag-editor-modal';
+  modal.setAttribute('role', 'dialog');
+  modal.setAttribute('aria-modal', 'true');
+  modal.setAttribute('aria-label', tr('diag_line'));
+  modal.style.cssText = 'width:300px;max-width:calc(100vw - 24px);max-height:calc(100vh - 24px);overflow:auto;box-sizing:border-box;background:#1e1f26;border:1px solid rgba(255,255,255,0.1);border-radius:14px;';
   let dir = (existing && existing.dir === 'trbl') ? 'trbl' : 'tlbr';
+  let composing = false;
+  const curTColor = sanitizeCss(existing && existing.tColor) || '#808080';
+  const curTSize = (existing && existing.tSize && isCssNumber(existing.tSize)) ? clampNum(existing.tSize, 0, 10, 24) : '';
   modal.innerHTML = `
     <header style="padding:14px 16px;font-weight:700;border-bottom:1px solid rgba(255,255,255,0.1)">${tr('diag_line')}</header>
     <div style="padding:16px;display:flex;flex-direction:column;gap:12px">
@@ -328,9 +365,9 @@ function openDiagonalEditor(tbl, r, c) {
       </div>
       <label style="display:flex;align-items:center;gap:8px;font-size:13px;color:#9a9ba6"><span style="width:56px">${tr('diag_t1')}</span><input id="diagT1" style="flex:1;background:#26272f;color:#ececf1;border:1px solid rgba(255,255,255,0.1);border-radius:8px;padding:6px 8px;font-family:inherit;font-size:13px" value="${escapeHtml(existing ? existing.t1 : '')}" /></label>
       <label style="display:flex;align-items:center;gap:8px;font-size:13px;color:#9a9ba6"><span style="width:56px">${tr('diag_t2')}</span><input id="diagT2" style="flex:1;background:#26272f;color:#ececf1;border:1px solid rgba(255,255,255,0.1);border-radius:8px;padding:6px 8px;font-family:inherit;font-size:13px" value="${escapeHtml(existing ? existing.t2 : '')}" /></label>
-      <label style="display:flex;align-items:center;gap:8px;font-size:13px;color:#9a9ba6"><span style="width:56px">${tr('diag_t_color')}</span><input id="diagTColor" type="color" value="${(existing && existing.tColor) || '#808080'}" style="width:46px;height:28px;border:1px solid rgba(255,255,255,0.1);border-radius:6px;background:transparent;cursor:pointer;padding:2px" /></label>
-      <div style="display:flex;gap:5px;flex-wrap:wrap;padding-left:64px;margin-top:-8px">${TEXT_COLORS.map(c => `<button type="button" class="diag-tc-swatch" data-c="${c}" style="width:18px;height:18px;border-radius:5px;cursor:pointer;border:2px solid ${((existing && existing.tColor) || '#808080') === c ? '#6c5ce7' : 'rgba(255,255,255,0.1)'};background:${c};padding:0"></button>`).join('')}</div>
-      <label style="display:flex;align-items:center;gap:8px;font-size:13px;color:#9a9ba6"><span style="width:56px">${tr('diag_t_size')}</span><input id="diagTSize" type="number" min="10" max="24" value="${existing && existing.tSize ? existing.tSize : ''}" placeholder="${tr('follow_global')}" style="width:80px;background:#26272f;color:#ececf1;border:1px solid rgba(255,255,255,0.1);border-radius:8px;padding:6px 8px;font-family:inherit;font-size:13px" /></label>
+      <label style="display:flex;align-items:center;gap:8px;font-size:13px;color:#9a9ba6"><span style="width:56px">${tr('diag_t_color')}</span><input id="diagTColor" type="color" value="${curTColor}" style="width:46px;height:28px;border:1px solid rgba(255,255,255,0.1);border-radius:6px;background:transparent;cursor:pointer;padding:2px" /></label>
+      <div style="display:flex;gap:5px;flex-wrap:wrap;padding-left:64px;margin-top:-8px">${TEXT_COLORS.map(c => `<button type="button" class="diag-tc-swatch" data-c="${c}" style="width:18px;height:18px;border-radius:5px;cursor:pointer;border:2px solid ${curTColor === c ? '#6c5ce7' : 'rgba(255,255,255,0.1)'};background:${c};padding:0"></button>`).join('')}</div>
+      <label style="display:flex;align-items:center;gap:8px;font-size:13px;color:#9a9ba6"><span style="width:56px">${tr('diag_t_size')}</span><input id="diagTSize" type="number" min="10" max="24" value="${curTSize}" placeholder="${tr('follow_global')}" style="width:80px;background:#26272f;color:#ececf1;border:1px solid rgba(255,255,255,0.1);border-radius:8px;padding:6px 8px;font-family:inherit;font-size:13px" /></label>
     </div>
     <footer style="padding:12px 16px;display:flex;gap:10px;justify-content:space-between">
       <button id="diagRemove" style="background:transparent;border:1px solid rgba(229,72,77,0.4);color:#e5484d;padding:8px 12px;border-radius:8px;cursor:pointer">${tr('diag_remove')}</button>
@@ -341,6 +378,33 @@ function openDiagonalEditor(tbl, r, c) {
     </footer>`;
   overlay.appendChild(modal);
   document.body.appendChild(overlay);
+  const focusables = () => $$('button, input, select, textarea, [tabindex]:not([tabindex="-1"])', modal)
+    .filter((el) => !el.disabled && el.tabIndex !== -1 && el.offsetParent !== null);
+  const onKey = (e) => {
+    if (composing || e.isComposing || e.keyCode === 229) return;
+    if (e.key === 'Escape') { e.preventDefault(); e.stopPropagation(); close(false); return; }
+    if (e.key !== 'Tab') { e.stopPropagation(); return; }
+    const f = focusables();
+    if (!f.length) return;
+    const idx = f.indexOf(document.activeElement);
+    const next = e.shiftKey ? (idx <= 0 ? f.length - 1 : idx - 1) : (idx === -1 || idx === f.length - 1 ? 0 : idx + 1);
+    e.preventDefault();
+    f[next].focus();
+  };
+  const cleanup = () => {
+    document.removeEventListener('keydown', onKey, true);
+    const back = (opener && opener.isConnected && typeof opener.focus === 'function') ? opener : block;
+    if (back && typeof back.focus === 'function') { try { back.focus(); } catch (e) { /* ignore */ } }
+  };
+  const close = (applyIt) => {
+    overlay.remove();
+    document.removeEventListener('keydown', onKey, true);
+    if (applyIt) apply();
+    cleanup();
+  };
+  document.addEventListener('keydown', onKey, true);
+  modal.addEventListener('compositionstart', () => { composing = true; });
+  modal.addEventListener('compositionend', () => { composing = false; });
   $('#diagDirTL', modal).onclick = () => { dir = 'tlbr'; $('#diagDirTL', modal).style.background = '#6c5ce7'; $('#diagDirTL', modal).style.color = '#fff'; $('#diagDirTR', modal).style.background = 'transparent'; $('#diagDirTR', modal).style.color = '#9a9ba6'; };
   $('#diagDirTR', modal).onclick = () => { dir = 'trbl'; $('#diagDirTR', modal).style.background = '#6c5ce7'; $('#diagDirTR', modal).style.color = '#fff'; $('#diagDirTL', modal).style.background = 'transparent'; $('#diagDirTL', modal).style.color = '#9a9ba6'; };
   $$('.diag-tc-swatch', modal).forEach((sw) => { sw.onclick = () => { $('#diagTColor', modal).value = sw.dataset.c; }; });
@@ -352,16 +416,19 @@ function openDiagonalEditor(tbl, r, c) {
     const tSize = tSizeVal ? Math.min(24, Math.max(10, Number(tSizeVal) || 0)) : null;
     tbl.diagonals = (tbl.diagonals || []).filter((d) => !(d.r === r && d.c === c));
     tbl.diagonals.push({ r, c, dir, t1, t2, tColor, tSize });
-    overlay.remove();
-    if (block) refreshTableBlock(block);
+    if (block) { refreshTableBlock(block); refreshToolbarEligibility(block); }
   };
-  $('#diagOk', modal).onclick = apply;
-  $('#diagCancel', modal).onclick = () => overlay.remove();
+  $('#diagOk', modal).onclick = () => close(true);
+  $('#diagCancel', modal).onclick = () => close(false);
   $('#diagRemove', modal).onclick = () => {
+    if (!existing) return;
     tbl.diagonals = (tbl.diagonals || []).filter((d) => !(d.r === r && d.c === c));
-    overlay.remove();
-    if (block) refreshTableBlock(block);
+    if (block) { refreshTableBlock(block); refreshToolbarEligibility(block); }
+    close(false);
   };
+  $('#diagRemove', modal).disabled = !existing;
+  const firstInput = $('#diagT1', modal);
+  if (firstInput) firstInput.focus();
 }
 
 function openTableSettingsDialog(tbl) {
@@ -370,17 +437,19 @@ function openTableSettingsDialog(tbl) {
   overlay.style.cssText = 'position:fixed;inset:0;z-index:6500;background:rgba(0,0,0,0.35);display:flex;align-items:center;justify-content:center;';
   const modal = document.createElement('div');
   modal.style.cssText = 'width:280px;background:#1e1f26;border:1px solid rgba(255,255,255,0.1);border-radius:14px;overflow:hidden;';
-  const curColor = tbl.borderColor || '#808080';
-  const curWidth = tbl.borderWidth != null ? tbl.borderWidth : 2;
+  const curColor = sanitizeCss(tbl.borderColor) || '#808080';
+  const curWidth = (tbl.borderWidth == null || tbl.borderWidth === '') ? 2 : clampNum(tbl.borderWidth, 2, 1, 6);
+  const curTextColor = sanitizeCss(tbl.textColor) || '#808080';
+  const curFontSize = (tbl.fontSize && isCssNumber(tbl.fontSize)) ? clampNum(tbl.fontSize, 0, 10, 24) : '';
   modal.innerHTML = `
     <header style="padding:14px 16px;font-weight:700;border-bottom:1px solid rgba(255,255,255,0.1)">${tr('table_settings')}</header>
     <div style="padding:16px;display:flex;flex-direction:column;gap:14px">
       <label style="display:flex;align-items:center;justify-content:space-between;font-size:13px;color:#9a9ba6"><span>${tr('tbl_border_color')}</span><input id="tblBColor" type="color" value="${curColor}" style="width:46px;height:28px;border:1px solid rgba(255,255,255,0.1);border-radius:6px;background:transparent;cursor:pointer;padding:2px" /></label>
       <label style="display:flex;align-items:center;justify-content:space-between;font-size:13px;color:#9a9ba6"><span>${tr('tbl_border_width')}</span><input id="tblBWidth" type="range" min="1" max="6" value="${curWidth}" style="width:150px;accent-color:#6c5ce7" /></label>
       <div id="tblBWidthVal" style="text-align:right;font-size:12px;color:#9a9ba6">${curWidth}px</div>
-      <label style="display:flex;align-items:center;justify-content:space-between;font-size:13px;color:#9a9ba6"><span>${tr('tbl_text_color')}</span><input id="tblTColor" type="color" value="${tbl.textColor || '#808080'}" style="width:46px;height:28px;border:1px solid rgba(255,255,255,0.1);border-radius:6px;background:transparent;cursor:pointer;padding:2px" /></label>
-      <div style="display:flex;gap:5px;flex-wrap:wrap;margin-top:-8px">${TEXT_COLORS.map(c => `<button type="button" class="tbl-tc-swatch" data-c="${c}" style="width:18px;height:18px;border-radius:5px;cursor:pointer;border:2px solid ${(tbl.textColor || '#808080') === c ? '#6c5ce7' : 'rgba(255,255,255,0.1)'};background:${c};padding:0"></button>`).join('')}</div>
-      <label style="display:flex;align-items:center;justify-content:space-between;font-size:13px;color:#9a9ba6"><span>${tr('tbl_text_size')}</span><input id="tblTSize" type="number" min="10" max="24" value="${tbl.fontSize ? tbl.fontSize : ''}" placeholder="${tr('follow_global')}" style="width:80px;background:#26272f;color:#ececf1;border:1px solid rgba(255,255,255,0.1);border-radius:8px;padding:6px 8px;font-family:inherit;font-size:13px" /></label>
+      <label style="display:flex;align-items:center;justify-content:space-between;font-size:13px;color:#9a9ba6"><span>${tr('tbl_text_color')}</span><input id="tblTColor" type="color" value="${curTextColor}" style="width:46px;height:28px;border:1px solid rgba(255,255,255,0.1);border-radius:6px;background:transparent;cursor:pointer;padding:2px" /></label>
+      <div style="display:flex;gap:5px;flex-wrap:wrap;margin-top:-8px">${TEXT_COLORS.map(c => `<button type="button" class="tbl-tc-swatch" data-c="${c}" style="width:18px;height:18px;border-radius:5px;cursor:pointer;border:2px solid ${curTextColor === c ? '#6c5ce7' : 'rgba(255,255,255,0.1)'};background:${c};padding:0"></button>`).join('')}</div>
+      <label style="display:flex;align-items:center;justify-content:space-between;font-size:13px;color:#9a9ba6"><span>${tr('tbl_text_size')}</span><input id="tblTSize" type="number" min="10" max="24" value="${curFontSize}" placeholder="${tr('follow_global')}" style="width:80px;background:#26272f;color:#ececf1;border:1px solid rgba(255,255,255,0.1);border-radius:8px;padding:6px 8px;font-family:inherit;font-size:13px" /></label>
     </div>
     <footer style="padding:12px 16px;display:flex;gap:10px;justify-content:flex-end">
       <button id="tblSetCancel" style="background:transparent;border:1px solid rgba(255,255,255,0.1);color:#9a9ba6;padding:8px 18px;border-radius:8px;cursor:pointer">${tr('cancel')}</button>
@@ -495,6 +564,7 @@ function wireTables() {
           setActiveTable(block, null);
           activeTableSelBox = box;
           highlightBox(block, box);
+          refreshToolbarEligibility(block); // 框选后刷新合并可用性
         }
       };
       document.addEventListener('mousemove', onMove);

@@ -90,39 +90,52 @@
   // 紧凑「填空型」书架排布：按传入顺序，把每个便签放到最低且最左、可放下且不与已放便签重叠的位置，
   // 从而填满宽/高便签旁边的空隙，得到紧凑无重叠、尊重自定义排序的布局。
   // 关键：落点必须在阅读顺序上「不早于」上一个便签（行优先、行内按 x），保证视觉阅读顺序与传入顺序一致。
-  function arrangeCompact(notes, maxX, opts) {
+  // maxX 契约为「视口宽度」：普通便签右边界不得越过 maxX-margin（左右对称留白）。
+  // 可选固定障碍（fixed）：普通便签（如被查询/折叠隐藏者）的保留矩形，参与避让但不进入输出、不影响 lastKey。
+  //   fixed 元素需为 { x, y, w, h }，x/y 有限且 >=0、w/h 有限且 >0；非法项忽略。
+  function arrangeCompact(notes, maxX, opts, fixed) {
     const L = optsOf(opts);
     const band = 100;
     const keyOf = (x, y) => (Math.round(y / band) * 1e6 + Math.round(x));
+    const validRect = (r) => r && Number.isFinite(r.x) && Number.isFinite(r.y) && r.x >= 0 && r.y >= 0 && Number.isFinite(r.w) && Number.isFinite(r.h) && r.w > 0 && r.h > 0;
+    const obstacles = (Array.isArray(fixed) ? fixed : []).filter(validRect).map((r) => ({ x: r.x, y: r.y, w: r.w, h: r.h }));
+    // 右边界：视口宽 - margin（视口未知/<=0 时不限制）。
+    const rightLimit = (typeof maxX === 'number' && maxX > 0) ? (maxX - L.margin) : Infinity;
     const placed = [];
     const out = [];
     let lastKey = -Infinity;
-    (notes || []).forEach((n, i) => {
+    (notes || []).forEach((n) => {
       const w = n.w || L.defaultW;
       const h = n.h || L.defaultH;
-      // 候选 y：画布顶部、以及每个已放便签的下边缘下方
+      // 候选 y：画布顶部、已放便签的下边缘、以及固定障碍的下边缘（否则会落到无关远障碍下方）
       const ySet = new Set([L.margin]);
       placed.forEach((p) => ySet.add(p.y + p.h + L.gap));
+      obstacles.forEach((p) => ySet.add(p.y + p.h + L.gap));
       const yList = Array.from(ySet).sort((a, b) => a - b);
       let best = null;
       for (const y of yList) {
-        // 候选 x：画布左侧、以及与该 y 垂直带重叠的已放便签的右边缘
+        // 候选 x：画布左侧、以及与该 y 垂直带重叠的已放便签/固定障碍的右边缘
         const xSet = new Set([L.margin]);
         placed.forEach((p) => {
           const vover = !(p.y > y + h + L.gap - 1 || y > p.y + p.h + L.gap - 1);
           if (vover) xSet.add(p.x + p.w + L.gap);
         });
+        obstacles.forEach((p) => {
+          const vover = !(p.y > y + h + L.gap - 1 || y > p.y + p.h + L.gap - 1);
+          if (vover) xSet.add(p.x + p.w + L.gap);
+        });
         const xList = Array.from(xSet).sort((a, b) => a - b);
         for (const x of xList) {
-          if (maxX > 0 && x + w > maxX) continue;
+          if (x + w > rightLimit) continue;
           if (keyOf(x, y) < lastKey) continue;
-          if (!overlapsAny(x, y, w, h, placed, opts)) { best = { x, y }; break; }
+          if (!overlapsAny(x, y, w, h, placed, opts) && !overlapsAny(x, y, w, h, obstacles, opts)) { best = { x, y }; break; }
         }
         if (best) break;
       }
       if (!best) {
         let maxBottom = L.margin;
         placed.forEach((p) => { maxBottom = Math.max(maxBottom, p.y + p.h); });
+        obstacles.forEach((p) => { maxBottom = Math.max(maxBottom, p.y + p.h); });
         best = { x: L.margin, y: maxBottom + L.gap };
       }
       placed.push({ x: best.x, y: best.y, w, h });

@@ -66,13 +66,17 @@ test('readOrderFromLayout：行分组稳定（floor + 容差），半带宽边�
 });
 
 
-test('reorderScoped：只重排视图内便签，保留视图外相对顺序（回归：不得清空分组顺序）', () => {
+test('reorderScoped：只重排视图内便签，视图外保留原有相对顺序与槽位', () => {
   // 原顺序含分组便签 g1/g2 与未分组便签 u1/u2
   const order = ['g1', 'u1', 'g2', 'u2'];
-  // 「未分组」保存时只重排 u1/u2（新顺序 u2,u1），分组便签相对顺序不变
-  assert.deepStrictEqual(reorderScoped(order, ['u2', 'u1']), ['u2', 'u1', 'g1', 'g2']);
+  // 「未分组」保存时只重排 u1/u2（新顺序 u2,u1）：视图外 g1/g2 保持各自槽位不变
+  assert.deepStrictEqual(reorderScoped(order, ['u2', 'u1']), ['g1', 'u2', 'g2', 'u1']);
   // 「全部」保存时 ids 覆盖全部，等价于整体重排
   assert.deepStrictEqual(reorderScoped(order, ['u2', 'g2', 'u1', 'g1']), ['u2', 'g2', 'u1', 'g1']);
+  // 新增可见 ID（原 order 不含）追加到末尾，隐藏项（u1）槽位不变
+  assert.deepStrictEqual(reorderScoped(order, ['u2', 'newU']), ['g1', 'u1', 'g2', 'u2', 'newU']);
+  // 重复 ID 先去重再填槽：hidden 不被移动
+  assert.deepStrictEqual(reorderScoped(['a', 'hidden', 'b'], ['a', 'a', 'b']), ['a', 'hidden', 'b']);
 });
 
 test('ensureOrderRefs：剔除已删除、补入缺失、每个分组独立维护顺序', () => {

@@ -62,24 +62,10 @@ function renderAll() {
   const memoList = $('#memoList');
   const todoList = $('#todoList');
   const docList = $('#docList');
-  const query = filter.query.trim().toLowerCase();
 
-  const visible = state.notes.filter((n) => {
-    if (n.desktopPin) return false;
-    if (!!n.archived !== !!filter.archive) return false;
-    if (isGroupCollapsed(n.groupId)) return false;
-    if (!filter.archive) {
-      // 常规视图：按分组筛选（归档便签已在上方排除）
-      if (filter.group === 'ungrouped' && n.groupId) return false;
-      if (filter.group !== 'all' && filter.group !== 'ungrouped' && n.groupId !== filter.group) return false;
-    }
-    if (query) {
-      const g = state.groups.find((x) => x.id === n.groupId);
-      const hay = ((n.title || '') + ' ' + noteText(n) + ' ' + (g ? g.name : '')).toLowerCase();
-      if (!hay.includes(query)) return false;
-    }
-    return true;
-  });
+  // 单一可见选择器：canvas-zoom.visibleNotes（正确处理 desktopPin/归档精确状态/折叠分组/查询/分组）。
+  const visible = visibleNotes();
+  const query = filter.query.trim().toLowerCase(); // 仅用于 todo 视图匹配与 no-match 判定
 
   let resultCount = visible.length;
   if (state.settings.viewMode === 'todo') {
@@ -168,6 +154,11 @@ function renderAll() {
 
   if (state.settings.viewMode === 'board') syncBoardSize();
   if (typeof syncZoomToolbar === 'function') syncZoomToolbar();
+  if (typeof renderDesktopNotes === 'function') renderDesktopNotes();
+  if (typeof renderFilterStatus === 'function') renderFilterStatus(resultCount, state.settings.viewMode);
+  // UX-30B：显式「恢复保存布局」按钮的可用性随视图/筛选/查询/保存/导入更新。
+  const restoreBtn = $('#btnRestoreLayout');
+  if (restoreBtn) restoreBtn.disabled = !(typeof canRestoreSavedLayout === 'function' && canRestoreSavedLayout());
 }
 
 function clearViewFilters() {
@@ -217,20 +208,11 @@ function syncBoardSize() {
   const L = (typeof BoardLayout !== 'undefined' && BoardLayout.LAYOUT) ? BoardLayout.LAYOUT : { margin: 20, gap: 18 };
   const cw = canvas.clientWidth || 0;
   const ch = canvas.clientHeight || 0;
-  // 当前分组/筛选下的可见便签（与 renderAll 一致）
-  const inView = (n) => {
-    if (n.desktopPin) return false;
-    if (!!n.archived !== !!filter.archive) return false;
-    if (typeof isGroupCollapsed === 'function' && isGroupCollapsed(n.groupId)) return false;
-    if (!filter.archive) {
-      if (filter.group === 'ungrouped') return !n.groupId;
-      if (filter.group !== 'all' && filter.group !== 'ungrouped') return n.groupId === filter.group;
-    }
-    return true;
-  };
+  // 当前可见便签：复用单一选择器 visibleNotes（与 renderAll/arrange 完全一致，含查询过滤），
+  // 避免被搜索隐藏的便签仍把画布尺寸撑大。
   let maxRight = L.margin;
   let maxBottom = L.margin;
-  state.notes.filter(inView).forEach((n) => {
+  visibleNotes().forEach((n) => {
     const p = effPos(n);
     const w = n.w || L.defaultW || L.margin;
     const h = n.h || L.defaultH || L.margin;
@@ -245,13 +227,22 @@ function syncBoardSize() {
   else { board.style.width = boardW + 'px'; board.style.height = boardH + 'px'; }
 }
 
+// 视图切换按钮：active 视觉态与 aria-pressed 始终同源。
+// 增量渲染可能复用旧 DOM，任何真正切换视图的地方都要走这里，避免留下过期状态。
+function syncViewToggles(mode) {
+  mode = (mode === 'memo' || mode === 'todo' || mode === 'doc') ? mode : 'board';
+  ['board', 'memo', 'todo', 'doc'].forEach((m) => {
+    const btn = $('#view' + m.charAt(0).toUpperCase() + m.slice(1));
+    if (!btn) return;
+    btn.classList.toggle('active', mode === m);
+    btn.setAttribute('aria-pressed', mode === m ? 'true' : 'false');
+  });
+}
+
 function setViewMode(mode) {
   state.settings.viewMode = mode;
   if (mode !== 'doc') docNoteId = null;
-  $('#viewBoard').classList.toggle('active', mode === 'board');
-  $('#viewMemo').classList.toggle('active', mode === 'memo');
-  $('#viewTodo').classList.toggle('active', mode === 'todo');
-  $('#viewDoc').classList.toggle('active', mode === 'doc');
+  syncViewToggles(mode);
   syncSortToolbar(mode);
   save();
   renderAll();

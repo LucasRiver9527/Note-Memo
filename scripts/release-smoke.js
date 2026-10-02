@@ -120,10 +120,12 @@ async function smoke(userDataDir) {
   if (VERSION === '1.2.6' && !clItems.some((t) => t.includes('测试版说明') || /Test build/i.test(t))) {
     throw new Error('更新说明缺少 1.2.6 测试版说明文案');
   }
-  await win.locator('#btnChangelogClose').click({ force: true });
+  await win.locator('#btnChangelogClose').click();
+  // 明确等待更新说明关闭后再新建，避免与关闭动画/遮罩竞态（封装版回归：force 点击会跳过早于关闭的等待）
+  await expect(win.locator('#changelogOverlay')).toBeHidden({ timeout: 10_000 });
 
   // 新建便签并写入唯一标题
-  await win.locator('#btnAdd').click({ force: true });
+  await win.locator('#btnAdd').click();
   const titleInput = win.locator('#board .note .note-title').first();
   await expect(titleInput).toBeVisible({ timeout: 20_000 });
   await titleInput.fill(title);
@@ -185,7 +187,17 @@ async function main() {
   }
 
   if (passed) {
-    fs.rmSync(userDataDir, { recursive: true, force: true });
+    // 成功路径清理：Windows 上强杀后的句柄可能短时占用临时目录，用有界原生重试吸收（只删脚本自己创建的 userData）。
+    try {
+      fs.rmSync(userDataDir, { recursive: true, force: true, maxRetries: 5, retryDelay: 100 });
+    } catch (err) {
+      // 清理失败绝不误报 PASS：如实报 FAIL 并保留路径（不动其它目录）。
+      console.error(`[release-smoke] FAIL: 功能检查通过，但临时 userData 清理失败：${(err && err.message) || err}`);
+      console.error(`  exe: ${EXE}`);
+      console.error(`  version: ${VERSION}`);
+      console.error(`  temp userData: ${userDataDir} （已保留以便诊断）`);
+      process.exit(1);
+    }
     console.log('[release-smoke] PASS');
     console.log(`  exe: ${EXE}`);
     console.log(`  version: ${VERSION}`);

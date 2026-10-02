@@ -1,6 +1,8 @@
 const { test } = require('node:test');
 const assert = require('node:assert');
 const path = require('path');
+const fs = require('fs');
+const os = require('os');
 const { checkIpcContract } = require('../ipc-contract.js');
 
 const ROOT = path.join(__dirname, '..');
@@ -36,4 +38,33 @@ test('IPC 契约：能识别出人为构造的缺漏（回归安全）', () => {
   // w:three 有 handler? 无 -> missing
   const missing = pInvoke.filter((c) => !mHandle.includes(c));
   assert.deepStrictEqual(missing, ['w:three']);
+});
+
+// 用真实 checkIpcContract（读取文件）验证：能识别 sendSync 缺口，也能解析 guardedHandle/guardedOn。
+// 夹具只写在本测试自建的 Temp 目录，结束时只删除该目录。
+test('IPC 契约：真实 checkIpcContract 识别 sendSync 缺口并解析 guarded* 注册', () => {
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'p004-ipc-contract-'));
+  try {
+    fs.writeFileSync(path.join(dir, 'preload.js'), [
+      "ipcRenderer.invoke('guarded:chan');",
+      "ipcRenderer.sendSync('sync:chan');",
+      "ipcRenderer.sendSync('missing:sync');",
+      "ipcRenderer.on('evt:chan', () => {});"
+    ].join('\n'));
+    fs.writeFileSync(path.join(dir, 'main.js'), [
+      "guardedHandle('guarded:chan', () => {});",
+      "guardedOn('sync:chan', () => {});",
+      "mainWindow.webContents.send('evt:chan');"
+    ].join('\n'));
+
+    const r = checkIpcContract(dir);
+    assert.deepStrictEqual(r.preloadInvokeSend, ['guarded:chan', 'missing:sync', 'sync:chan']);
+    assert.ok(r.mainHandlers.includes('guarded:chan'), 'guardedHandle 注册应被解析');
+    assert.ok(r.mainHandlers.includes('sync:chan'), 'guardedOn 注册应被解析');
+    assert.deepStrictEqual(r.missingHandlers, ['missing:sync']); // sendSync 缺口被检出
+    assert.deepStrictEqual(r.missingSenders, []);
+    assert.strictEqual(r.ok, false);
+  } finally {
+    fs.rmSync(dir, { recursive: true, force: true });
+  }
 });

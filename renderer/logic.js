@@ -121,30 +121,66 @@
   }
 
   // ---------- Markdown 导出（纯函数，主进程与测试均可 require） ----------
+  // 与渲染预算一致的表格导出上限：超出不静默截断，而是描述性拒绝，避免导出缺失数据的产物。
+  const TABLE_MD_MAX_DIM = 200;
+
+  // 有限索引：仅接受 number/非空数字字符串；负数/非有限/对象等返回 null（不做对象强转）。
+  function normTableIndex(v) {
+    const n = toFiniteNumber(v);
+    if (n === null) return null;
+    const i = Math.trunc(n);
+    return i < 0 ? null : i;
+  }
+  // 维度：非法/负数/非有限一律视为 0（空表），绝不参与 new Array 分配。
+  function normTableDim(v) {
+    const i = normTableIndex(v);
+    return i === null ? 0 : i;
+  }
+  // 单元格文本：仅字符串/有限数字/布尔安全转字符串；null/undefined/对象/数组一律空串（不触发对象强转）。
+  function safeCellText(v) {
+    if (typeof v === 'string') return v;
+    if (typeof v === 'number') return Number.isFinite(v) ? String(v) : '';
+    if (typeof v === 'boolean') return v ? 'true' : 'false';
+    return '';
+  }
+
   function tableToMarkdown(tbl) {
-    const rows = tbl.rows || 0, cols = tbl.cols || 0;
-    const cells = tbl.cells || [];
-    const merges = tbl.merges || [];
-    const diagonals = tbl.diagonals || [];
+    tbl = tbl && typeof tbl === 'object' ? tbl : {};
+    const rows = normTableDim(tbl.rows);
+    const cols = normTableDim(tbl.cols);
+    if (rows === 0 || cols === 0) return '';
+    // 过大的有限维度：描述性拒绝（由导出 UI 捕获并可见提示），而不是静默截断丢数据。
+    if (rows > TABLE_MD_MAX_DIM || cols > TABLE_MD_MAX_DIM) {
+      throw Object.assign(new Error('table too large to export: ' + rows + 'x' + cols + ' (limit ' + TABLE_MD_MAX_DIM + ')'), { code: 'TABLE_MD_TOO_LARGE', limit: TABLE_MD_MAX_DIM });
+    }
+    const cells = Array.isArray(tbl.cells) ? tbl.cells : [];
+    const merges = Array.isArray(tbl.merges) ? tbl.merges : [];
+    const diagonals = Array.isArray(tbl.diagonals) ? tbl.diagonals : [];
     const grid = [];
     const occupied = [];
     for (let r = 0; r < rows; r++) { grid.push(new Array(cols).fill('')); occupied.push(new Array(cols).fill(false)); }
     for (let r = 0; r < rows; r++) {
+      const row = Array.isArray(cells[r]) ? cells[r] : [];
       for (let c = 0; c < cols; c++) {
         if (occupied[r][c]) continue;
-        const mg = merges.find((m) => m.r === r && m.c === c);
-        const diag = diagonals.find((d) => d.r === r && d.c === c);
-        let txt = (cells[r] && cells[r][c]) || '';
-        if (diag) txt = [diag.t1, diag.t2].filter(Boolean).join(' ');
+        const mg = merges.find((m) => m && normTableIndex(m.r) === r && normTableIndex(m.c) === c);
+        const diag = diagonals.find((d) => d && normTableIndex(d.r) === r && normTableIndex(d.c) === c);
+        let txt = safeCellText(row[c]);
+        if (diag) {
+          const t1 = safeCellText(diag.t1), t2 = safeCellText(diag.t2);
+          txt = [t1, t2].filter(Boolean).join(' ');
+        }
         grid[r][c] = txt.replace(/\|/g, '\\|').replace(/\n/g, '<br>');
         if (mg) {
-          for (let rr = r; rr < r + mg.rowspan; rr++)
-            for (let cc = c; cc < c + mg.colspan; cc++)
-              if (rr < rows && cc < cols) occupied[rr][cc] = true;
+          // span 仅接受有限数值/数字字符串，夹取到实际网格范围内；循环次数有界，绝不按原始巨大 span 迭代。
+          const spanR = clampInt(mg.rowspan, 1, 1, rows - r);
+          const spanC = clampInt(mg.colspan, 1, 1, cols - c);
+          for (let rr = r; rr < r + spanR; rr++)
+            for (let cc = c; cc < c + spanC; cc++)
+              occupied[rr][cc] = true;
         }
       }
     }
-    if (!rows || !cols) return '';
     const lines = [];
     const scr = (arr) => '| ' + arr.map((x) => x.replace(/\n/g, '<br>')).join(' | ') + ' |';
     lines.push(scr(grid[0]));
@@ -248,6 +284,43 @@
     return String(v == null ? '' : v).replace(/[^#\w\s.,%()+\-]/g, '');
   }
 
+  // P0-04 渲染侧安全预算：导入/历史数据可能带恶意或损坏的数值。
+  // 全部先数值化并夹取，再拼进 HTML，避免属性逃逸与超大循环卡死；不修改原始数据。
+  const RICH_RENDER_MAX_DIM = 200;   // 表格最多渲染的行/列（编辑器上限 20，留足余量）
+  const IMG_RENDER_MIN_W = 1;
+  const IMG_RENDER_MAX_W = 100000;   // 图片宽度上限（编辑器无上限，仅挡非有限/极端值）
+  const TABLE_BORDER_MIN = 0;        // 0 = 无边框，需保留
+  const TABLE_BORDER_MAX = 64;
+
+  // 仅接受 number 或非空数字字符串，转成有限数；对象/数组/布尔/null/空串/空白一律返回 null。
+  // 关键：绝不对任意对象调用 Number()（{toString:null,valueOf:0} 会抛 TypeError），先按类型判定再转换。
+  function toFiniteNumber(v) {
+    if (typeof v === 'number') return Number.isFinite(v) ? v : null;
+    if (typeof v === 'string') {
+      const s = v.trim();
+      if (s === '') return null;
+      const n = Number(s);
+      return Number.isFinite(n) ? n : null;
+    }
+    return null;
+  }
+  // 数值 → [min,max] 内的整数；不可安全转换时回退 def。不修改入参。
+  function clampInt(v, def, min, max) {
+    const n = toFiniteNumber(v);
+    if (n === null) return def;
+    return Math.max(min, Math.min(max, Math.trunc(n)));
+  }
+  // 数值 → [min,max] 内的有限数（允许小数）；不可安全转换时回退 def。
+  function clampNum(v, def, min, max) {
+    const n = toFiniteNumber(v);
+    if (n === null) return def;
+    return Math.max(min, Math.min(max, n));
+  }
+  // 是否可安全当 CSS 数值（用于 font-size 等；非数值则整段省略而不是渲染 0px）。
+  function isCssNumber(v) {
+    return toFiniteNumber(v) !== null;
+  }
+
   // opts 可缺省；提供 { tr, mdOn } 时覆盖全局 _tr/_mdOn，实现按调用显式控制、无状态依赖。
   function formatInlineText(text, opts) {
     const tr = (opts && opts.tr) || _tr;
@@ -299,20 +372,26 @@
 
   function inlineImgHtml(img, opts) {
     const tr = (opts && opts.tr) || _tr;
-    return `<span class="inline-img" data-img-id="${img.id}" contenteditable="false" tabindex="0"><img src="${escapeHtml(img.src)}" style="width:${img.w || 200}px" /><button class="img-del" title="${tr('delete_image')}">✕</button><div class="img-resize" title="${tr('resize_image')}"></div></span>`;
+    // 宽度：非有限/空/0 回退 200；其余数值化并夹取，杜绝宽度字段逃逸成属性。
+    const w = !img.w ? 200 : clampNum(img.w, 200, IMG_RENDER_MIN_W, IMG_RENDER_MAX_W);
+    return `<span class="inline-img" data-img-id="${escapeHtml(img.id)}" contenteditable="false" tabindex="0"><img src="${escapeHtml(img.src)}" style="width:${w}px" /><button class="img-del" title="${tr('delete_image')}">✕</button><div class="img-resize" title="${tr('resize_image')}"></div></span>`;
   }
 
   function fileLinkHtml(f) {
-    const name = (f.path || '').replace(/[\\/]+$/, '').split(/[\\/]/).pop();
+    const p = f.path == null ? '' : String(f.path);
+    const name = p.replace(/[\\/]+$/, '').split(/[\\/]/).pop();
     const icon = f.isDir ? '📁' : '📄';
-    return `<span class="file-link" contenteditable="false" data-file-id="${f.id}" data-path="${escapeHtml(f.path)}" data-is-dir="${f.isDir ? '1' : '0'}" title="${escapeHtml(f.path)}">${icon} ${escapeHtml(name || f.path)}</span>`;
+    return `<span class="file-link" contenteditable="false" data-file-id="${escapeHtml(f.id)}" data-path="${escapeHtml(p)}" data-is-dir="${f.isDir ? '1' : '0'}" title="${escapeHtml(p)}">${icon} ${escapeHtml(name || p)}</span>`;
   }
 
   function tableBlockHtml(tbl, opts) {
-    const rows = tbl.rows, cols = tbl.cols;
-    const cells = tbl.cells || [];
-    const merges = tbl.merges || [];
-    const diagonals = tbl.diagonals || [];
+    tbl = tbl || {};
+    // 行/列/跨度一律先夹取：恶意巨大的 rows/cols 只渲染前 N 行/列，避免同步大循环卡死。
+    const rows = clampInt(tbl.rows, 0, 0, RICH_RENDER_MAX_DIM);
+    const cols = clampInt(tbl.cols, 0, 0, RICH_RENDER_MAX_DIM);
+    const cells = Array.isArray(tbl.cells) ? tbl.cells : [];
+    const merges = Array.isArray(tbl.merges) ? tbl.merges : [];
+    const diagonals = Array.isArray(tbl.diagonals) ? tbl.diagonals : [];
     const occupied = [];
     for (let r = 0; r < rows; r++) occupied.push(new Array(cols).fill(false));
     let html = '';
@@ -320,15 +399,19 @@
       html += '<tr>';
       for (let c = 0; c < cols; c++) {
         if (occupied[r][c]) continue;
-        const mg = merges.find((m) => m.r === r && m.c === c);
-        const diag = diagonals.find((d) => d.r === r && d.c === c);
-        const text = (cells[r] && cells[r][c]) || '';
+        const mg = merges.find((m) => m && m.r === r && m.c === c);
+        const diag = diagonals.find((d) => d && d.r === r && d.c === c);
+        const cellRow = Array.isArray(cells[r]) ? cells[r] : [];
+        const text = cellRow[c] ? String(cellRow[c]) : '';
         let attrs = '';
         let inner = formatInlineText(text, opts).replace(/\n/g, '<br>');
         if (mg) {
-          attrs = ` rowspan="${mg.rowspan}" colspan="${mg.colspan}"`;
-          for (let rr = r; rr < r + mg.rowspan; rr++)
-            for (let cc = c; cc < c + mg.colspan; cc++)
+          // span 夹取到表格边界内且至少 1，绝不越界写入 occupied。
+          const spanR = clampInt(mg.rowspan, 1, 1, rows - r);
+          const spanC = clampInt(mg.colspan, 1, 1, cols - c);
+          attrs = ` rowspan="${spanR}" colspan="${spanC}"`;
+          for (let rr = r; rr < r + spanR; rr++)
+            for (let cc = c; cc < c + spanC; cc++)
               if (rr < rows && cc < cols) occupied[rr][cc] = true;
         }
         let diagCls = '';
@@ -336,27 +419,39 @@
           const isTrbl = diag.dir === 'trbl';
           diagCls = ' diag diag-' + (isTrbl ? 'trbl' : 'tlbr');
           const line = isTrbl ? '<line x1="0" y1="100" x2="100" y2="0"/>' : '<line x1="0" y1="0" x2="100" y2="100"/>';
-          const ds = (diag.tColor ? 'color:' + sanitizeCss(diag.tColor) + ';' : '') + (diag.tSize ? 'font-size:' + sanitizeCss(diag.tSize) + 'px;' : '');
-          inner = `<svg class="diag-line" viewBox="0 0 100 100" preserveAspectRatio="none" aria-hidden="true">${line}</svg><span class="tbl-t1"${ds ? ' style="' + ds + '"' : ''}>${formatInlineText(diag.t1 || '', opts).replace(/\n/g, '<br>')}</span><span class="tbl-t2"${ds ? ' style="' + ds + '"' : ''}>${formatInlineText(diag.t2 || '', opts).replace(/\n/g, '<br>')}</span>`;
+          let ds = '';
+          if (diag.tColor) ds += 'color:' + sanitizeCss(diag.tColor) + ';';
+          if (isCssNumber(diag.tSize)) ds += 'font-size:' + clampNum(diag.tSize, 0, 0, 999) + 'px;';
+          const dt1 = diag.t1 == null ? '' : String(diag.t1);
+          const dt2 = diag.t2 == null ? '' : String(diag.t2);
+          // 使用 2×2 等分 intrinsic 网格：两行等高（由更高标签撑开），对角放置两个标签，
+          // 让长文本（中文/无空格英文/换行）在安全象限内换行且不越出单元格；SVG 仍覆盖整格。
+          const lb1 = `<span class="tbl-t1"${ds ? ' style="' + ds + '"' : ''}>${formatInlineText(dt1, opts).replace(/\n/g, '<br>')}</span>`;
+          const lb2 = `<span class="tbl-t2"${ds ? ' style="' + ds + '"' : ''}>${formatInlineText(dt2, opts).replace(/\n/g, '<br>')}</span>`;
+          const t1Cell = isTrbl ? 'diag-a' : 'diag-b';   // tlbr: t1 右上 / trbl: t1 左上
+          const t2Cell = isTrbl ? 'diag-d' : 'diag-c';   // tlbr: t2 左下 / trbl: t2 右下
+          inner = `<svg class="diag-line" viewBox="0 0 100 100" preserveAspectRatio="none" aria-hidden="true">${line}</svg><span class="diag-box"><span class="diag-cell ${t1Cell}">${lb1}</span><span class="diag-cell ${t2Cell}">${lb2}</span></span>`;
         }
         html += `<td${attrs}${diagCls ? ' class="' + diagCls.trim() + '"' : ''} data-r="${r}" data-c="${c}">${inner}</td>`;
       }
       html += '</tr>';
     }
-    const bw = tbl.borderWidth != null ? tbl.borderWidth : 3;
+    const bw = (tbl.borderWidth == null || tbl.borderWidth === '') ? 3 : clampNum(tbl.borderWidth, 3, TABLE_BORDER_MIN, TABLE_BORDER_MAX);
     const bc = sanitizeCss(tbl.borderColor) || 'rgba(0,0,0,0.7)';
-    const ts = (tbl.textColor ? 'color:' + sanitizeCss(tbl.textColor) + ';' : '') + (tbl.fontSize ? 'font-size:' + sanitizeCss(tbl.fontSize) + 'px;' : '');
-    return `<div class="note-table-block" contenteditable="false" data-table-id="${tbl.id}" tabindex="0"><table class="note-table" style="--tbl-border-width:${bw}px;--tbl-border-color:${bc};${ts}">${html}</table></div>`;
+    let ts = '';
+    if (tbl.textColor) ts += 'color:' + sanitizeCss(tbl.textColor) + ';';
+    if (isCssNumber(tbl.fontSize)) ts += 'font-size:' + clampNum(tbl.fontSize, 0, 0, 999) + 'px;';
+    return `<div class="note-table-block" contenteditable="false" data-table-id="${escapeHtml(tbl.id)}" tabindex="0"><table class="note-table" style="--tbl-border-width:${bw}px;--tbl-border-color:${bc};${ts}">${html}</table></div>`;
   }
 
   function renderRichContent(text, n, opts) {
     n = n || {};
     const imgMap = {};
-    (n.images || []).forEach((im) => { imgMap[im.id] = im; });
+    (Array.isArray(n.images) ? n.images : []).forEach((im) => { if (im && typeof im === 'object' && im.id != null) imgMap[im.id] = im; });
     const fileMap = {};
-    (n.files || []).forEach((f) => { fileMap[f.id] = f; });
+    (Array.isArray(n.files) ? n.files : []).forEach((f) => { if (f && typeof f === 'object' && f.id != null) fileMap[f.id] = f; });
     const tableMap = {};
-    (n.tables || []).forEach((tb) => { tableMap[tb.id] = tb; });
+    (Array.isArray(n.tables) ? n.tables : []).forEach((tb) => { if (tb && typeof tb === 'object' && tb.id != null) tableMap[tb.id] = tb; });
     const stripAlignMarkers = (s) => String(s || '')
       .replace(/\[\[alignimg:(left|center|right)\]\]/g, '')
       .replace(/\[\[\/alignimg\]\]/g, '')
@@ -402,5 +497,5 @@
   }
 
 
-  return { hexToRgba, luminance, contrastRatio, isDarkColor, autoTextColor, noteShadowCss, escapeHtml, refIdsOf, cleanupRefs, sortNotes, tableToMarkdown, noteToMarkdown, referencedMedia, parseNullSeparated, hdropString, setRenderLocale, formatInlineText, inlineImgHtml, fileLinkHtml, tableBlockHtml, renderRichContent, sanitizeCss };
+  return { hexToRgba, luminance, contrastRatio, isDarkColor, autoTextColor, noteShadowCss, escapeHtml, refIdsOf, cleanupRefs, sortNotes, tableToMarkdown, noteToMarkdown, referencedMedia, parseNullSeparated, hdropString, setRenderLocale, formatInlineText, inlineImgHtml, fileLinkHtml, tableBlockHtml, renderRichContent, sanitizeCss, clampInt, clampNum, isCssNumber };
 });

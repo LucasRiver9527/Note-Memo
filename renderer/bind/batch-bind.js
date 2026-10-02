@@ -45,8 +45,7 @@ function bindBatch() {
     }
   };
   $('#btnQuickArrange').onclick = () => {
-    arrangeNotes();
-    toast(t('toast_arranged'));
+    if (arrangeNotes()) toast(t('toast_arranged'));
   };
   $('#btnSaveOrder').onclick = () => saveCurrentOrder();
 

@@ -62,17 +62,21 @@ const NOTE_TOOL_PRIMARY = ['desktop', 'group', 'color', 'pin', 'del'];
 const NOTE_TOOL_SECONDARY = ['desktop', 'todo', 'image', 'table', 'remind', 'preview'];
 
 function noteToolHtml(id, n, isTodo) {
+  // 纯图标按钮：本地化名称同时写入 title 与 aria-label（aria-label 显式覆盖符号文本）。
+  // 名称只来自 i18n 静态文案，不含用户内容；进属性前用 escapeHtml 转义。
+  const A = (key) => `title="${escapeHtml(t(key))}" aria-label="${escapeHtml(t(key))}"`;
+  const pressed = (on) => `aria-pressed="${on ? 'true' : 'false'}"`;
   switch (id) {
-    case 'desktop': return `<button class="t-desktop" title="${t('desktop')}">📌</button>`;
-    case 'todo': return `<button class="t-todo ${isTodo ? 'active' : ''}" title="${t('todo_mode')}">☑</button>`;
-    case 'group': return `<button class="t-group ${n.groupId ? 'active' : ''}" title="${n.groupId ? t('remove_from_group') : t('add_to_group')}">🏷</button>`;
-    case 'image': return `<button class="t-image" title="${t('insert_image')}">🖼️</button>`;
-    case 'table': return `<button class="t-table" title="${t('insert_table')}">▦</button>`;
-    case 'remind': return `<button class="t-remind" title="${t('todo_remind')}">⏰</button>`;
-    case 'color': return `<button class="t-color" title="${t('color')}">🎨</button>`;
-    case 'preview': return isTodo ? '' : `<button class="t-preview ${n.preview ? 'active' : ''}" title="${t(n.preview ? 'note_preview_off' : 'note_preview')}">👁</button>`;
-    case 'pin': return `<button class="t-pin ${n.pinned ? 'active' : ''}" title="${t('pin')}">🔝</button>`;
-    case 'del': return `<button class="t-del" title="${t('delete')}">🗑</button>`;
+    case 'desktop': return `<button class="t-desktop" ${A('desktop')}>📌</button>`;
+    case 'todo': return `<button class="t-todo ${isTodo ? 'active' : ''}" ${A('todo_mode')} ${pressed(isTodo)}>☑</button>`;
+    case 'group': return `<button class="t-group ${n.groupId ? 'active' : ''}" ${A(n.groupId ? 'remove_from_group' : 'add_to_group')}>🏷</button>`;
+    case 'image': return `<button class="t-image" ${A('insert_image')}>🖼️</button>`;
+    case 'table': return `<button class="t-table" ${A('insert_table')}>▦</button>`;
+    case 'remind': return `<button class="t-remind" ${A('todo_remind')}>⏰</button>`;
+    case 'color': return `<button class="t-color" ${A('color')}>🎨</button>`;
+    case 'preview': return isTodo ? '' : `<button class="t-preview ${n.preview ? 'active' : ''}" ${A(n.preview ? 'note_preview_off' : 'note_preview')} ${pressed(n.preview)}>👁</button>`;
+    case 'pin': return `<button class="t-pin ${n.pinned ? 'active' : ''}" ${A('pin')} ${pressed(n.pinned)}>🔝</button>`;
+    case 'del': return `<button class="t-del" ${A('delete')}>🗑</button>`;
     default: return '';
   }
 }
@@ -82,7 +86,7 @@ function noteToolsHtml(n, isTodo) {
   const compact = state.settings.noteToolbarCompact !== false;
   const render = (ids) => ids.filter((id) => !hidden.has(id)).map((id) => noteToolHtml(id, n, isTodo)).join('');
   if (!compact) return render(NOTE_TOOL_PRIMARY.concat(NOTE_TOOL_SECONDARY));
-  return render(NOTE_TOOL_PRIMARY) + `<button class="t-more" title="${t('more')}">⋯</button>`;
+  return render(NOTE_TOOL_PRIMARY) + `<button class="t-more" title="${escapeHtml(t('more'))}" aria-label="${escapeHtml(t('more'))}">⋯</button>`;
 }
 
 function buildNoteEl(n) {
@@ -117,7 +121,7 @@ function buildNoteEl(n) {
       <li class="todo-item ${it.done ? 'done' : ''}" data-idx="${idx}">
         <input type="checkbox" ${it.done ? 'checked' : ''} />
         <input class="todo-text" value="${escapeHtml(it.text)}" placeholder="${t('todo_ph')}" />
-        <button class="todo-del" title="${t('delete')}">✕</button>
+        <button class="todo-del" title="${escapeHtml(t('delete'))}" aria-label="${escapeHtml(t('delete'))}">✕</button>
       </li>`).join('')}</ul>
       <button class="todo-add">${t('add_todo')}</button>`;
   } else if (n.preview) {
@@ -137,7 +141,7 @@ function buildNoteEl(n) {
     </div>
     <div class="note-body">${bodyHtml}</div>
     <div class="note-foot">
-      <span class="group-tag" title="${t('set_group')}"><span class="dot" style="background:${group ? group.color : '#999'}"></span>${group ? escapeHtml(group.name) : t('ungrouped')}</span>
+      <span class="group-tag" title="${t('set_group')}"><span class="dot" style="background:${sanitizeCss(group && group.color) || '#999'}"></span>${group ? escapeHtml(group.name) : t('ungrouped')}</span>
       ${reminder ? `<span class="reminder-chip ${overdue ? 'overdue' : ''}" title="${formatDate(n.reminder.time)}">⏰ ${formatDate(n.reminder.time)}</span>` : ''}
       <span class="date">${formatDate(n.updatedAt || n.createdAt)}</span>
     </div>
@@ -172,7 +176,7 @@ function buildMemoEl(n) {
       <li class="todo-item ${it.done ? 'done' : ''}" data-idx="${idx}">
         <input type="checkbox" ${it.done ? 'checked' : ''} />
         <input class="todo-text" value="${escapeHtml(it.text)}" placeholder="${t('todo_ph')}" />
-        <button class="todo-del" title="${t('delete')}">✕</button>
+        <button class="todo-del" title="${escapeHtml(t('delete'))}" aria-label="${escapeHtml(t('delete'))}">✕</button>
       </li>`).join('')}</ul>
       <button class="todo-add">${t('add_todo')}</button>`;
   } else if (n.preview) {
@@ -190,7 +194,7 @@ function buildMemoEl(n) {
       </div>
       <div class="memo-body">${bodyHtml}</div>
       <div class="memo-foot">
-        <span class="group-tag" title="${t('set_group')}"><span class="dot" style="background:${group ? group.color : '#999'}"></span>${group ? escapeHtml(group.name) : t('ungrouped')}</span>
+        <span class="group-tag" title="${t('set_group')}"><span class="dot" style="background:${sanitizeCss(group && group.color) || '#999'}"></span>${group ? escapeHtml(group.name) : t('ungrouped')}</span>
         ${reminder ? `<span class="reminder-chip ${overdue ? 'overdue' : ''}" title="${formatDate(n.reminder.time)}">⏰ ${formatDate(n.reminder.time)}</span>` : ''}
         <span class="date">${formatDate(n.updatedAt || n.createdAt)}</span>
       </div>

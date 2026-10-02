@@ -1,10 +1,11 @@
 const { app, BrowserWindow, ipcMain, dialog, Notification, Tray, Menu, nativeImage, globalShortcut, screen, protocol, net, shell, clipboard } = require('electron');
 const path = require('path');
 const fs = require('fs');
-const { pathToFileURL } = require('url');
+const { pathToFileURL, fileURLToPath } = require('url');
 const logic = require('./renderer/logic.js');
 const Shortcuts = require('./renderer/shortcuts.js');
 const DataIO = require('./data-io.js');
+const MediaProtocol = require('./media-protocol.js');
 const { autoUpdater } = require('electron-updater');
 
 const isDev = !app.isPackaged;
@@ -35,6 +36,110 @@ let isQuitting = false;
 let reminderTimer = null;
 const recentlyFired = new Set();
 const detachedWindows = new Map();
+// 被导入替换作废的旧 WebContents；弱引用不阻止回收，同 ID 新窗口不会解除禁写状态。
+const supersededDetached = new WeakSet();
+
+// ---- P0-04 IPC 来源（provenance）校验 ----
+// 每个渲染层 → 主进程的 ipcMain.handle/on 都必须先通过来源校验再进入正文：
+//   - sender 必须是「当前主窗 webContents」或「当前注册的独立窗 webContents」，销毁/未注册/被导入作废的一律拒绝；
+//   - 必须是该 sender 的顶层 frame（拒绝子框架）；
+//   - frame URL 必须精确等于应用页面文件路径（index.html / note.html），用 fileURLToPath + path 相等比较，
+//     而非前缀/子串匹配，因此 loadURL 到任意本地/远端/devtools 页面都会被拒绝；
+//   - 独立窗 URL 的 ?id= 必须等于其注册的便签 id；
+//   - 任一 getter 缺失/抛异常/已释放 → 失败关闭（拒绝）。
+// 这是信任边界，不是功能白名单；合法的主窗/独立窗调用路径不受影响。
+const APP_MAIN_PAGE = path.join(__dirname, 'renderer', 'index.html');
+const APP_NOTE_PAGE = path.join(__dirname, 'renderer', 'note.html');
+
+function isExpectedAppUrl(rawUrl, expectedPath) {
+  if (typeof rawUrl !== 'string' || rawUrl === '') return false;
+  let u;
+  try { u = new URL(rawUrl); } catch (e) { return false; }
+  if (u.protocol !== 'file:') return false;
+  let file;
+  try { file = fileURLToPath(u); } catch (e) { return false; }
+  return path.normalize(file).toLowerCase() === path.normalize(expectedPath).toLowerCase();
+}
+
+function classifyRendererSource(event) {
+  let sender = null;
+  try { sender = event && event.sender; } catch (e) { return null; }
+  if (!sender) return null;
+  try { if (typeof sender.isDestroyed !== 'function' || sender.isDestroyed()) return null; } catch (e) { return null; }
+
+  let role = null, expectedPage = null, noteId = null;
+  try {
+    if (mainWindow && !mainWindow.isDestroyed() && sender === mainWindow.webContents) { role = 'main'; expectedPage = APP_MAIN_PAGE; }
+  } catch (e) { /* fall through to detached */ }
+  if (!role) {
+    try {
+      for (const [id, win] of detachedWindows) {
+        if (win && !win.isDestroyed() && sender === win.webContents) { role = 'note'; expectedPage = APP_NOTE_PAGE; noteId = id; break; }
+      }
+    } catch (e) { return null; }
+  }
+  if (!role) return null;
+  try { if (supersededDetached.has(sender)) return null; } catch (e) { return null; }
+
+  let frame = null;
+  try { frame = event.senderFrame; } catch (e) { return null; }
+  if (!frame) return null;
+  let topFrame = null;
+  try { topFrame = sender.mainFrame; } catch (e) { return null; }
+  if (!topFrame || frame !== topFrame) return null;
+
+  let frameUrl = null;
+  try { frameUrl = frame.url; } catch (e) { return null; }
+  if (!isExpectedAppUrl(frameUrl, expectedPage)) return null;
+  if (role === 'note') {
+    let qid = null;
+    try { qid = new URL(frameUrl).searchParams.get('id'); } catch (e) { return null; }
+    if (qid !== noteId) return null;
+  }
+  return { role, noteId, sender };
+}
+
+function unauthorizedError() {
+  return new Error('unauthorized ipc source');
+}
+
+const RAW_HANDLE = ipcMain.handle.bind(ipcMain);
+const RAW_ON = ipcMain.on.bind(ipcMain);
+
+// invoke 通道：默认拒绝时抛通用错误（不泄露路径/数据）；显式 denyValue 的旧行为（如 note:update 的 false）保持不变。
+// opts.noteScoped：来自独立窗时，首个参数对象的 id 必须等于该窗口注册的便签 id。
+function guardedHandle(channel, handler, opts) {
+  RAW_HANDLE(channel, async (event, ...args) => {
+    const src = classifyRendererSource(event);
+    if (!src) {
+      if (opts && Object.prototype.hasOwnProperty.call(opts, 'denyValue')) return opts.denyValue;
+      throw unauthorizedError();
+    }
+    if (opts && opts.noteScoped) {
+      const target = args[0];
+      const id = target && typeof target === 'object' ? target.id : null;
+      if (src.role === 'note' && id !== src.noteId) {
+        if (Object.prototype.hasOwnProperty.call(opts, 'denyValue')) return opts.denyValue;
+        throw unauthorizedError();
+      }
+    }
+    return handler(event, ...args);
+  });
+}
+
+// send / sendSync 通道：拒绝时一律 event.returnValue = false 并返回，绝不让同步调用方阻塞；异步 send 会忽略该值。
+function guardedOn(channel, handler, opts) {
+  RAW_ON(channel, (event, ...args) => {
+    const src = classifyRendererSource(event);
+    if (!src) { event.returnValue = false; return; }
+    if (opts && opts.noteScoped) {
+      const target = args[0];
+      const id = target && typeof target === 'object' ? target.id : null;
+      if (src.role === 'note' && id !== src.noteId) { event.returnValue = false; return; }
+    }
+    return handler(event, ...args);
+  });
+}
 
 const dataPath = () => path.join(app.getPath('userData'), 'notes-data.json');
 const recoveryPath = () => path.join(app.getPath('userData'), 'notes-recovery.json');
@@ -256,6 +361,18 @@ function persistWindowState() {
 }
 
 
+// P0-04：禁止渲染进程发起顶层导航/重定向与新窗口。应用页面从不需要用链接替换自身；
+// 合法外部链接走 open-external，本地附件走 file:open。程序化 loadFile/loadURL 不触发这些事件，故不受影响。
+function hardenWindowNavigation(win) {
+  if (!win || win.isDestroyed()) return;
+  try { win.webContents.setWindowOpenHandler(() => ({ action: 'deny' })); } catch (e) { /* ignore */ }
+  const block = (event) => { event.preventDefault(); };
+  win.webContents.on('will-navigate', block);
+  win.webContents.on('will-redirect', block);
+  // 子框架导航（Electron ≥26 支持）；旧版无此事件时注册也不会报错。
+  win.webContents.on('will-frame-navigate', block);
+}
+
 function createWindow() {
   const { width, height } = screen.getPrimaryDisplay().workAreaSize;
   const saved = readWindowState();
@@ -294,6 +411,7 @@ function createWindow() {
       additionalArguments: ['--app-version=' + app.getVersion()]
     }
   });
+  hardenWindowNavigation(mainWindow);
 
   mainWindow.on('maximize', () => { mainWindow.webContents.send('window:maximized', true); persistWindowState(); });
   mainWindow.on('unmaximize', () => { mainWindow.webContents.send('window:maximized', false); persistWindowState(); });
@@ -376,6 +494,7 @@ function createDetachedWindow(noteId) {
       additionalArguments: ['--app-version=' + app.getVersion()]
     }
   });
+  hardenWindowNavigation(win);
   win.noteLoadPromise = win.loadFile(path.join(__dirname, 'renderer', 'note.html'), { query: { id: noteId } });
   win.setAlwaysOnTop(true, 'screen-saver');
   // 桌面便签玻璃拟态：Windows 11 亚克力材质，提供背后桌面的磨砂模糊
@@ -394,7 +513,7 @@ function createDetachedWindow(noteId) {
   detachedWindows.set(noteId, win);
   win.on('closed', () => {
     if (detachedWindows.get(noteId) === win) detachedWindows.delete(noteId);
-    if (mainWindow && !win.notePinFailed) mainWindow.webContents.send('note:unpinned', noteId);
+    if (mainWindow && !win.notePinFailed && !win.suppressUnpin) mainWindow.webContents.send('note:unpinned', noteId);
   });
   return win;
 }
@@ -417,6 +536,37 @@ async function flushDetachedNotes() {
     if (!(await flushDetachedNote(win))) return false;
   }
   return true;
+}
+
+// 显式整份替换（导入备份）成功落盘后，正在打开的独立便签仍持有被替换前的旧内容：
+// 关闭这些陈旧窗口并按存档重开仍被钉住的便签，避免旧窗口随后 note:update 覆盖导入结果。
+// 导入是整份替换，故协调所有仍在的独立窗（含被导入移除的 ID）；只在整份数据成功写入后调用，
+// 写入失败时不动窗口、不清草稿。
+async function reconcileDetachedAfterReplace(data) {
+  const previous = Array.from(detachedWindows);
+  // 先作废所有旧来源，再等待关窗；同 ID 新窗口不会解除旧来源的禁写状态。
+  for (const [, win] of previous) {
+    if (win.isDestroyed()) continue;
+    supersededDetached.add(win.webContents);
+    win.suppressUnpin = true;
+  }
+  for (const [id, win] of previous) {
+    if (win.isDestroyed()) { detachedWindows.delete(id); continue; }
+    const closed = new Promise((resolve) => win.once('closed', resolve));
+    win.close();
+    await closed;
+  }
+  // 整份替换已经落盘；旧主窗及未开窗便签的草稿也失效，不能在重启时回滚导入。
+  writeRecovery({ version: 1, main: null, notes: {} });
+  for (const n of data.notes || []) {
+    if (!n || !n.desktopPin || detachedWindows.has(n.id)) continue;
+    try {
+      const w = createDetachedWindow(n.id);
+      await w.noteLoadPromise;
+    } catch (err) {
+      console.error('[note] 导入后重开独立便签失败：', err);
+    }
+  }
 }
 
 function createTray() {
@@ -540,26 +690,45 @@ function readDataNotes() {
   return data ? data.notes || [] : [];
 }
 
+// P0-04 phase2c：数值 IPC 入参的有限性/类型校验（绝不对任意值做 Number() 强转）。
+// 只接受有限 number 或非空数字字符串；null/undefined/bool/array/object/空串/NaN/Infinity 一律返回 null。
+function finiteNumber(v) {
+  if (typeof v === 'number') return Number.isFinite(v) ? v : null;
+  if (typeof v === 'string') {
+    const s = v.trim();
+    if (s === '') return null;
+    const n = Number(s);
+    return Number.isFinite(n) ? n : null;
+  }
+  return null;
+}
+// 校验并夹取到 [min,max]；非法返回 null（调用方据此在产生任何副作用前拒绝）。
+function clampFinite(v, min, max) {
+  const n = finiteNumber(v);
+  if (n === null) return null;
+  return Math.max(min, Math.min(max, n));
+}
+
 // ---- IPC ----
 function setupIpc() {
   // 返回 { data, status, corruptPath }：
   //   data  —— 数据对象；首次运行或损坏不可读时为 null
   //   status—— 'ok' | 'first-run' | 'recovered' | 'corrupt'
   // 渲染层据此区分「首次运行」与「损坏」，损坏时进入只读并引导导入备份。
-  ipcMain.handle('data:load', () => {
+  guardedHandle('data:load', () => {
     const data = readData();
     const health = dataHealth();
     return { data: data || null, status: health.status, corruptPath: health.corruptPath,
       recovery: recoveryCandidate(data) };
   });
 
-  ipcMain.on('data:draft', (event, data) => {
+  guardedOn('data:draft', (event, data) => {
     event.returnValue = isDataLocked() ? false : captureRecovery('main', data);
   });
-  ipcMain.on('note:draft', (event, note) => {
-    event.returnValue = isDataLocked() ? false : captureRecovery('note', note);
-  });
-  ipcMain.handle('data:recovery:resolve', (event, decision) => {
+  guardedOn('note:draft', (event, note) => {
+    event.returnValue = isDataLocked() || supersededDetached.has(event.sender) ? false : captureRecovery('note', note);
+  }, { noteScoped: true });
+  guardedHandle('data:recovery:resolve', (event, decision) => {
     if (decision !== 'restore' && decision !== 'discard') throw new Error('invalid recovery decision');
     const original = readData();
     const candidate = recoveryCandidate(original);
@@ -571,22 +740,49 @@ function setupIpc() {
   });
 
   // 只读通道：单独查询数据健康状态（供渲染层随时重查，无需重新读盘）。
-  ipcMain.handle('data:health', () => {
+  guardedHandle('data:health', () => {
     return dataHealth();
   });
 
   // opts.force 仅供「导入备份」等自救路径越过损坏锁使用。
   // 校验失败 / 写入被锁时「抛错」而非返回 false：渲染层 save()/saveNow() 只挂了
   // .catch(reportSaveError)，不检查 resolved 值，返回 false 会导致静默失败、用户以为已保存。
-  ipcMain.handle('data:save', (e, data, opts) => {
+  // 独立桌面便签可编辑的字段（note.js noteUpdate 的写入面）。主窗口整份快照里这些字段
+  // 可能仍是钉桌前的旧值（主窗防抖保存与独立窗编辑交错时），落盘前以磁盘上独立窗口的
+  // 最新版本为准；其余字段（如 reminder.fired、分组、位置、desktopPin）仍采用主窗快照，
+  // 避免把主窗侧的非编辑变更一起回退。
+  const DETACHED_EDIT_FIELDS = ['title', 'content', 'items', 'images', 'files', 'tables', 'color', 'textColor', 'opacity', 'fontSize', 'fontFamily', 'updatedAt'];
+  guardedHandle('data:save', async (e, data, opts) => {
     if (!DataIO.isValidDataShape(data)) {
       throw new Error('invalid data shape: 拒绝写入非法数据结构，以保护现有存档');
+    }
+    // opts.replace：整份显式替换（导入备份），此时不做独立窗口字段合并——否则导入内容会被
+    // 磁盘上同 ID 旧便签的编辑字段悄悄顶掉。普通自动保存仍走下面的合并保护。
+    const replace = !!(opts && opts.replace);
+    // 独立便签窗口是它自己编辑内容的唯一写入者（note:update）。显式取消钉住
+    // （desktopPin:false，例如主窗发起 unpin）时不合并，仍采用主窗版本。
+    if (!replace && detachedWindows.size && Array.isArray(data.notes)) {
+      const disk = readData();
+      if (disk && Array.isArray(disk.notes)) {
+        const diskById = new Map(disk.notes.filter(Boolean).map((n) => [n.id, n]));
+        data.notes = data.notes.map((n) => {
+          if (!n || !detachedWindows.has(n.id) || n.desktopPin === false) return n;
+          const diskNote = diskById.get(n.id);
+          if (!diskNote) return n;
+          const merged = { ...n };
+          for (const f of DETACHED_EDIT_FIELDS) {
+            if (f in diskNote) merged[f] = diskNote[f];
+          }
+          return merged;
+        });
+      }
     }
     const ok = writeData(data, opts);
     if (!ok) {
       throw new Error(isDataLocked() ? '数据文件损坏且无可用备份，已锁定写入' : '数据写入失败');
     }
     clearRecovery('main', null, opts && opts.draftToken, data);
+    if (replace) await reconcileDetachedAfterReplace(data);
     if (Array.isArray(data.notes)) {
       // 重新武装的提醒（fired=false 且启用的便签）允许再次调度——解除最近触发标记（「稍后再响」依赖此机制）。
       data.notes.forEach((n) => {
@@ -602,7 +798,7 @@ function setupIpc() {
     return true;
   });
 
-  ipcMain.handle('data:export', async (e, data) => {
+  guardedHandle('data:export', async (e, data) => {
     const result = await dialog.showSaveDialog(mainWindow, {
       title: '导出便签',
       defaultPath: `便签备份-${new Date().toISOString().slice(0, 10)}.json`,
@@ -630,7 +826,7 @@ function setupIpc() {
     }
   });
 
-  ipcMain.handle('note:export-markdown', async (e, md, suggestName) => {
+  guardedHandle('note:export-markdown', async (e, md, suggestName) => {
     const result = await dialog.showSaveDialog(mainWindow, {
       title: '导出为 Markdown',
       defaultPath: suggestName || `便签-${new Date().toISOString().slice(0, 10)}.md`,
@@ -648,7 +844,7 @@ function setupIpc() {
     }
   });
 
-  ipcMain.handle('data:import', async () => {
+  guardedHandle('data:import', async () => {
     const result = await dialog.showOpenDialog(mainWindow, {
       title: '导入便签',
       properties: ['openFile'],
@@ -664,7 +860,7 @@ function setupIpc() {
     }
   });
 
-  ipcMain.handle('dialog:pick-image', async () => {
+  guardedHandle('dialog:pick-image', async () => {
     const result = await dialog.showOpenDialog(mainWindow, {
       title: '选择背景图片',
       properties: ['openFile'],
@@ -685,7 +881,7 @@ function setupIpc() {
     }
   });
 
-  ipcMain.handle('note:save-image', async (e, dataUrl) => {
+  guardedHandle('note:save-image', async (e, dataUrl) => {
     try {
       const m = /^data:image\/(png|jpe?g|gif|webp|bmp);base64,(.+)$/.exec(String(dataUrl || ''));
       if (!m) return { ok: false, error: 'unsupported image' };
@@ -700,7 +896,7 @@ function setupIpc() {
     }
   });
 
-  ipcMain.handle('dialog:pick-note-image', async () => {
+  guardedHandle('dialog:pick-note-image', async () => {
     const result = await dialog.showOpenDialog(mainWindow, {
       title: '选择图片',
       properties: ['openFile'],
@@ -720,7 +916,7 @@ function setupIpc() {
     }
   });
 
-  ipcMain.handle('dialog:pick-font', async () => {
+  guardedHandle('dialog:pick-font', async () => {
     const result = await dialog.showOpenDialog(mainWindow, {
       title: '选择字体文件',
       properties: ['openFile'],
@@ -743,7 +939,7 @@ function setupIpc() {
     }
   });
 
-  ipcMain.handle('dialog:choose-directory', async () => {
+  guardedHandle('dialog:choose-directory', async () => {
     const result = await dialog.showOpenDialog(mainWindow, {
       title: '选择备份目录',
       properties: ['openDirectory', 'createDirectory']
@@ -752,7 +948,7 @@ function setupIpc() {
     return { ok: true, path: result.filePaths[0] };
   });
 
-  ipcMain.handle('dialog:pick-sound', async () => {
+  guardedHandle('dialog:pick-sound', async () => {
     const result = await dialog.showOpenDialog(mainWindow, {
       title: '选择声音文件',
       properties: ['openFile'],
@@ -772,7 +968,7 @@ function setupIpc() {
     }
   });
 
-  ipcMain.handle('backup:export', async (e, data, dir) => {
+  guardedHandle('backup:export', async (e, data, dir) => {
     try {
       let target = dir;
       if (!target) target = path.join(app.getPath('userData'), 'backups');
@@ -788,7 +984,7 @@ function setupIpc() {
     }
   });
 
-  ipcMain.handle('backup:open-dir', async (e, dir) => {
+  guardedHandle('backup:open-dir', async (e, dir) => {
     try {
       let target = dir;
       if (!target) target = path.join(app.getPath('userData'), 'backups');
@@ -800,7 +996,7 @@ function setupIpc() {
     }
   });
 
-  ipcMain.handle('note:add-image-file', async (e, filePath) => {
+  guardedHandle('note:add-image-file', async (e, filePath) => {
     try {
       const src = String(filePath || '');
       const ext = (path.extname(src) || '.png').toLowerCase();
@@ -814,29 +1010,27 @@ function setupIpc() {
     }
   });
 
-  ipcMain.handle('clipboard:read-text', () => clipboard.readText());
-  ipcMain.handle('clipboard:read-image', () => clipboardImageToDataUrl());
-  ipcMain.handle('clipboard:write-text', (e, text) => {
+  guardedHandle('clipboard:read-text', () => clipboard.readText());
+  guardedHandle('clipboard:read-image', () => clipboardImageToDataUrl());
+  guardedHandle('clipboard:write-text', (e, text) => {
     clipboard.writeText(String(text || ''));
     return true;
   });
-  ipcMain.handle('clipboard:write-image', (e, src) => {
+  guardedHandle('clipboard:write-image', (e, src) => {
     try {
-      const u = String(src || '');
-      if (u.indexOf('note-img://local/') === 0) {
-        const name = path.basename(decodeURIComponent(u.slice('note-img://local/'.length)));
-        const file = path.join(app.getPath('userData'), 'images', name);
-        if (fs.existsSync(file)) {
-          clipboard.writeImage(nativeImage.createFromPath(file));
-          return true;
-        }
-      }
-      return false;
+      if (typeof src !== 'string') return false; // 不做任意 String() 强转
+      // 复用媒体协议解析：精确 scheme/host、单次解码、拒绝嵌套/编码分隔符/ADS/越界/目录/缺失/symlink 逃逸。
+      const resolved = MediaProtocol.resolveMediaFile(src, 'note-img', app.getPath('userData'));
+      if (!resolved) return false;
+      const img = nativeImage.createFromPath(resolved.file);
+      if (!img || img.isEmpty()) return false; // 非图片/空图：不写入，也不谎报成功
+      clipboard.writeImage(img);
+      return true;
     } catch (err) {
       return false;
     }
   });
-  ipcMain.handle('clipboard:read-files', () => {
+  guardedHandle('clipboard:read-files', () => {
     const out = [];
     const readBuf = (format, encoding) => {
       try {
@@ -861,7 +1055,7 @@ function setupIpc() {
     return out;
   });
 
-  ipcMain.handle('path:stat', (e, p) => {
+  guardedHandle('path:stat', (e, p) => {
     try {
       const st = fs.statSync(String(p || ''));
       return { exists: true, isDirectory: st.isDirectory(), isFile: st.isFile() };
@@ -870,7 +1064,7 @@ function setupIpc() {
     }
   });
 
-  ipcMain.handle('file:open', async (e, p, isDir) => {
+  guardedHandle('file:open', async (e, p, isDir) => {
     try {
       const target = String(p || '');
       if (!target) return { ok: false, error: 'empty path' };
@@ -882,7 +1076,7 @@ function setupIpc() {
   });
 
   // 桌面便签（独立窗口）
-  ipcMain.handle('note:pin', async (e, id) => {
+  guardedHandle('note:pin', async (e, id) => {
     const data = readData();
     if (!data || !Array.isArray(data.notes)) return false;
     const note = data.notes.find((n) => n.id === id);
@@ -906,7 +1100,7 @@ function setupIpc() {
       return false;
     }
   });
-  ipcMain.handle('note:get', (e, id) => {
+  guardedHandle('note:get', (e, id) => {
     const data = readData();
     if (data) {
       const note = (data.notes || []).find((n) => n.id === id) || null;
@@ -914,7 +1108,9 @@ function setupIpc() {
     }
     return { note: null, settings: null };
   });
-  ipcMain.handle('note:update', (e, note, opts) => {
+  guardedHandle('note:update', (e, note, opts) => {
+    // 被导入替换作废的旧窗口迟到写入：拒绝，避免覆盖已落盘的导入内容。
+    if (supersededDetached.has(e.sender)) return false;
     // 数据不可用时返回 false，让渲染层知道未落盘，避免「显示已保存但磁盘是空的」
     const data = readData();
     if (!data) return false;
@@ -927,21 +1123,63 @@ function setupIpc() {
     scheduleReminders(data.notes);
     if (mainWindow) mainWindow.webContents.send('note:changed', note);
     return ok;
+  }, { denyValue: false, noteScoped: true });
+  // UX-20A：仅「显示/恢复/聚焦」已钉桌便签，绝不写盘（区别于会写 pin 状态的 note:pin）。
+  // 仅主窗可调用；独立窗/伪造来源拒绝。复用与重建统一等待加载后再校验，缺失窗口安全重建。
+  guardedHandle('note:show', async (e, id) => {
+    const src = classifyRendererSource(e);
+    if (!src || src.role !== 'main') return false;
+    if (typeof id !== 'string' || id === '') return false;
+    const data = readData();
+    if (!data || !Array.isArray(data.notes)) return false;
+    const note = data.notes.find((n) => n && n.id === id);
+    if (!note || note.desktopPin !== true) return false;
+
+    // 清理已销毁但残留的注册项，避免复用已死窗口
+    const stale = detachedWindows.get(id);
+    if (stale && stale.isDestroyed()) detachedWindows.delete(id);
+
+    let win = detachedWindows.get(id) || null;
+    const created = !win;
+    if (!win) {
+      try { win = createDetachedWindow(id); } catch (err) { return false; }
+      if (!win) return false;
+    }
+    // 复用窗可能仍在加载（含并发第二次请求）：统一等待完成后再判定，绝不提前 show/成功。
+    try {
+      await win.noteLoadPromise;
+    } catch (err) {
+      console.error('[note] 唤起桌面便签失败：', err);
+      if (created && !win.isDestroyed()) { win.notePinFailed = true; win.destroy(); } // 仅销毁本次新建的失败窗
+      return false;
+    }
+    // 统一校验：同一注册窗口、未销毁、未被导入作废、当前存档仍有效钉桌。
+    if (win.isDestroyed() || detachedWindows.get(id) !== win || supersededDetached.has(win.webContents)) return false;
+    const fresh = readData();
+    const freshNote = fresh && Array.isArray(fresh.notes) ? fresh.notes.find((n) => n && n.id === id) : null;
+    if (!freshNote || freshNote.desktopPin !== true) {
+      if (created && !win.isDestroyed()) { win.notePinFailed = true; win.destroy(); }
+      return false; // 复用中的用户窗口即使读取/校验失败也不销毁
+    }
+    if (win.isMinimized()) win.restore();
+    win.show();
+    win.focus();
+    return true;
   });
-  ipcMain.handle('note:unpin', async (e, id) => {
+  guardedHandle('note:unpin', async (e, id) => {
     const win = detachedWindows.get(id);
     if (!(await flushDetachedNote(win))) return false;
     if (win) win.close();
     else if (mainWindow) mainWindow.webContents.send('note:unpinned', id);
     return true;
   });
-  ipcMain.handle('note:close-all', async () => {
+  guardedHandle('note:close-all', async () => {
     if (!(await flushDetachedNotes())) return false;
     detachedWindows.forEach((w) => w.close());
     detachedWindows.clear();
     return true;
   });
-  ipcMain.handle('note:delete', async (e, id) => {
+  guardedHandle('note:delete', async (e, id) => {
     const win = detachedWindows.get(id);
     if (!(await flushDetachedNote(win))) return false;
     const data = readData();
@@ -959,8 +1197,10 @@ function setupIpc() {
     if (mainWindow && !mainWindow.isDestroyed()) mainWindow.webContents.send('note:deleted', id);
     return true;
   });
-  ipcMain.handle('settings:set-font-size', (e, size) => {
-    const v = Math.min(22, Math.max(11, Number(size) || 14));
+  guardedHandle('settings:set-font-size', (e, size) => {
+    const v = clampFinite(size, 11, 22);
+    // 非法入参：拒绝且不落盘、不广播，而不是用 14 覆盖用户设置。
+    if (v === null) throw new Error('invalid font size');
     // 数据不可用时只同步到窗口，不落盘：字号是次要偏好，不值得为它冒覆盖存档的风险
     const data = readData();
     if (data) {
@@ -972,7 +1212,7 @@ function setupIpc() {
     detachedWindows.forEach((w) => { if (w && !w.isDestroyed()) w.webContents.send('settings:font-size', v); });
     return v;
   });
-  ipcMain.handle('note:show-menu', (e, opts) => {
+  guardedHandle('note:show-menu', (e, opts) => {
     const win = BrowserWindow.fromWebContents(e.sender);
     const colorIcon = (hex) => {
       try {
@@ -1017,15 +1257,20 @@ function setupIpc() {
       menu.popup({ window: win, x: Math.round(opts.x || 0), y: Math.round(opts.y || 0), callback: () => resolve({ action: 'cancel' }) });
     });
   });
-  ipcMain.handle('open-external', (e, url) => {
-    if (typeof url === 'string' && /^https?:\/\//i.test(url)) {
-      shell.openExternal(url);
-      return true;
-    }
-    return false;
+  guardedHandle('open-external', async (e, url) => {
+    const raw = typeof url === 'string' ? url : '';
+    // 拒绝控制字符（不静默剥离，避免把恶意串伪装成合法 URL 再交付系统）。
+    if (!raw || /[\u0000-\u001f\u007f]/.test(raw)) return false;
+    let parsed;
+    try { parsed = new URL(raw); } catch (err) { return false; }
+    // 只放行真实的 http/https 且必须带主机名；其它 scheme（file:/javascript:/ms-*: 等）一律拒绝。
+    if (parsed.protocol !== 'http:' && parsed.protocol !== 'https:') return false;
+    if (!parsed.hostname) return false;
+    try { await shell.openExternal(parsed.href); return true; }
+    catch (err) { return false; }
   });
 
-  ipcMain.handle('media:cleanup-orphans', async () => {
+  guardedHandle('media:cleanup-orphans', async () => {
     try {
       // 数据不可用时必须拒绝清理：空骨架会让引用集为空，导致 images/backgrounds/fonts/sounds
       // 下所有媒体文件被 unlinkSync 永久删除（不进回收站）。即便日后从 .bak 恢复出便签数据，
@@ -1056,7 +1301,7 @@ function setupIpc() {
   });
 
   // ---- 开机自启动 ----
-  ipcMain.handle('startup:get', () => {
+  guardedHandle('startup:get', () => {
     try {
       const s = app.getLoginItemSettings();
       return { ok: true, enabled: !!s.openAtLogin };
@@ -1064,7 +1309,7 @@ function setupIpc() {
       return { ok: false, error: (e && e.message) || String(e) };
     }
   });
-  ipcMain.handle('startup:set', (e, enabled) => {
+  guardedHandle('startup:set', (e, enabled) => {
     try {
       app.setLoginItemSettings({ openAtLogin: !!enabled, path: process.execPath });
       return { ok: true, enabled: !!app.getLoginItemSettings().openAtLogin };
@@ -1074,14 +1319,14 @@ function setupIpc() {
   });
 
   // ---- 全局快捷键 ----
-  ipcMain.handle('shortcuts:get', () => {
+  guardedHandle('shortcuts:get', () => {
     try {
       return { ok: true, ...getShortcutsPayload() };
     } catch (e) {
       return { ok: false, error: (e && e.message) || String(e) };
     }
   });
-  ipcMain.handle('shortcuts:set', (e, overrides) => {
+  guardedHandle('shortcuts:set', (e, overrides) => {
     try {
       // 覆盖项对象（{ id: accel }）；设空值即恢复默认（从 settings 里移除该 id）
       const clean = {};
@@ -1106,7 +1351,7 @@ function setupIpc() {
   });
 
   // ---- 自动更新 ----
-  ipcMain.handle('update:check', async () => {
+  guardedHandle('update:check', async () => {
     if (!app.isPackaged) return { ok: false, error: 'dev' };
     try {
       const result = await autoUpdater.checkForUpdates();
@@ -1114,11 +1359,11 @@ function setupIpc() {
       return { ok: true, isUpdateAvailable };
     } catch (e) { return { ok: false, error: (e && e.message) || String(e) }; }
   });
-  ipcMain.handle('update:download', async () => {
+  guardedHandle('update:download', async () => {
     try { await autoUpdater.downloadUpdate(); return { ok: true }; }
     catch (e) { return { ok: false, error: (e && e.message) || String(e) }; }
   });
-  ipcMain.handle('update:install', async () => {
+  guardedHandle('update:install', async () => {
     try {
       // 独立便签各自持有尚未写盘的编辑态；任何一个保存失败都不能销毁窗口。
       if (!(await flushDetachedNotes())) return { ok: false, error: '独立便签保存失败，请检查后重试' };
@@ -1135,25 +1380,27 @@ function setupIpc() {
   });
 
   // Window controls
-  ipcMain.on('window:minimize', () => mainWindow && mainWindow.minimize());
-  ipcMain.on('window:maximize', () => {
+  guardedOn('window:minimize', () => mainWindow && mainWindow.minimize());
+  guardedOn('window:maximize', () => {
     if (!mainWindow) return;
     if (mainWindow.isMaximized()) mainWindow.unmaximize();
     else mainWindow.maximize();
   });
-  ipcMain.on('window:hide', () => mainWindow && mainWindow.hide());
-  ipcMain.on('window:close', () => requestCloseMainWindow());
-  ipcMain.on('window:close-decision', (e, decision) => {
+  guardedOn('window:hide', () => mainWindow && mainWindow.hide());
+  guardedOn('window:close', () => requestCloseMainWindow());
+  guardedOn('window:close-decision', (e, decision) => {
     handleCloseDecision(decision).catch((err) => console.error('[window] 退出失败：', err));
   });
-  ipcMain.on('window:always-on-top', (e, flag) => {
+  guardedOn('window:always-on-top', (e, flag) => {
     if (mainWindow) mainWindow.setAlwaysOnTop(!!flag);
   });
-  ipcMain.on('window:set-opacity', (e, opacity) => {
-    if (mainWindow) mainWindow.setOpacity(opacity);
+  guardedOn('window:set-opacity', (e, opacity) => {
+    const v = clampFinite(opacity, 0, 1);
+    if (v === null) { e.returnValue = false; return; }
+    if (mainWindow) mainWindow.setOpacity(v);
   });
   // 自定义背景图/明暗变化时同步原生窗口控制按钮(─ □ ✕)的符号颜色，避免亮背景上看不清
-  ipcMain.on('window:set-controls', (e, opts) => {
+  guardedOn('window:set-controls', (e, opts) => {
     const win = BrowserWindow.fromWebContents(e.sender) || mainWindow;
     if (!win || !win.setTitleBarOverlay) return;
     const symbolColor = (opts && opts.symbolColor) || '#c8c8c8';
@@ -1161,27 +1408,35 @@ function setupIpc() {
       win.setTitleBarOverlay({ color: '#00000000', symbolColor, height: 50 });
     } catch (err) { /* 非标题栏覆盖窗口忽略 */ }
   });
-  ipcMain.on('window:set-self-opacity', (e, opacity) => {
-    const win = BrowserWindow.fromWebContents(e.sender);
-    if (win && !win.isDestroyed()) win.setOpacity(opacity);
+  guardedOn('window:set-self-opacity', (e, opacity) => {
+    const v = clampFinite(opacity, 0, 1);
+    if (v === null) { e.returnValue = false; return; }
+    let win = null;
+    try { win = BrowserWindow.fromWebContents(e.sender); } catch (err) { win = null; }
+    if (!win && mainWindow && mainWindow.webContents === e.sender) win = mainWindow;
+    if (win && !win.isDestroyed()) win.setOpacity(v);
   });
-  ipcMain.on('window:set-note-opacity', (e, opacity) => {
+  guardedOn('window:set-note-opacity', (e, opacity) => {
+    const v = clampFinite(opacity, 0, 100);
+    if (v === null) { e.returnValue = false; return; }
     detachedWindows.forEach((w) => {
-      if (w && !w.isDestroyed()) w.webContents.send('window:note-opacity', opacity);
+      if (w && !w.isDestroyed()) w.webContents.send('window:note-opacity', v);
     });
   });
   // 钉窗右键菜单「便签透明度」滑杆：持久化全局 noteOpacity 并同步主窗口（复用到所有便签卡片）
-  ipcMain.on('note:save-note-opacity', (e, opacity) => {
+  guardedOn('note:save-note-opacity', (e, opacity) => {
+    const v = clampFinite(opacity, 0, 100);
+    if (v === null) { e.returnValue = false; return; } // 非法：不读档、不落盘、不广播
     // 数据不可用时只同步到窗口、不落盘，避免用 {} 覆盖整个数据文件
     const data = readData();
     if (data) {
       data.settings = data.settings || {};
-      data.settings.noteOpacity = opacity;
+      data.settings.noteOpacity = v;
       writeData(data);
     }
-    if (mainWindow && !mainWindow.isDestroyed()) mainWindow.webContents.send('window:note-opacity-setting', opacity);
+    if (mainWindow && !mainWindow.isDestroyed()) mainWindow.webContents.send('window:note-opacity-setting', v);
   });
-  ipcMain.on('window:set-effects', (e, fx) => {
+  guardedOn('window:set-effects', (e, fx) => {
     const srcWin = BrowserWindow.fromWebContents(e.sender);
     if (srcWin === mainWindow) {
       detachedWindows.forEach((w) => {
@@ -1196,7 +1451,7 @@ function setupIpc() {
       });
     }
   });
-  ipcMain.handle('window:toggle', () => {
+  guardedHandle('window:toggle', () => {
     toggleWindow();
     return mainWindow && mainWindow.isVisible();
   });
@@ -1289,53 +1544,14 @@ if (!gotLock) {
     const dataDir = path.dirname(dataPath());
     if (!fs.existsSync(dataDir)) fs.mkdirSync(dataDir, { recursive: true });
 
-    protocol.handle('note-bg', (request) => {
-      try {
-        const url = new URL(request.url);
-        const name = path.basename(url.pathname);
-        const file = path.join(app.getPath('userData'), 'backgrounds', name);
-        if (!fs.existsSync(file)) return new Response('Not Found', { status: 404 });
-        return net.fetch(pathToFileURL(file).toString()).catch(() => new Response('Not Found', { status: 404 }));
-      } catch (e) {
-        return new Response('Not Found', { status: 404 });
-      }
-    });
-
-    protocol.handle('note-img', (request) => {
-      try {
-        const url = new URL(request.url);
-        const name = path.basename(url.pathname);
-        const file = path.join(app.getPath('userData'), 'images', name);
-        if (!fs.existsSync(file)) return new Response('Not Found', { status: 404 });
-        return net.fetch(pathToFileURL(file).toString()).catch(() => new Response('Not Found', { status: 404 }));
-      } catch (e) {
-        return new Response('Not Found', { status: 404 });
-      }
-    });
-
-    protocol.handle('note-font', (request) => {
-      try {
-        const url = new URL(request.url);
-        const name = path.basename(url.pathname);
-        const file = path.join(app.getPath('userData'), 'fonts', name);
-        if (!fs.existsSync(file)) return new Response('Not Found', { status: 404 });
-        return net.fetch(pathToFileURL(file).toString()).catch(() => new Response('Not Found', { status: 404 }));
-      } catch (e) {
-        return new Response('Not Found', { status: 404 });
-      }
-    });
-
-    protocol.handle('note-sound', (request) => {
-      try {
-        const url = new URL(request.url);
-        const name = path.basename(url.pathname);
-        const file = path.join(app.getPath('userData'), 'sounds', name);
-        if (!fs.existsSync(file)) return new Response('Not Found', { status: 404 });
-        return net.fetch(pathToFileURL(file).toString()).catch(() => new Response('Not Found', { status: 404 }));
-      } catch (e) {
-        return new Response('Not Found', { status: 404 });
-      }
-    });
+    // P0-04 phase2b：四个 note-* 媒体协议统一走 media-protocol 解析（host/编码/目录/文件/realpath 校验）。
+    for (const scheme of MediaProtocol.SCHEMES) {
+      protocol.handle(scheme, MediaProtocol.createMediaProtocolHandler(scheme, {
+        userDataDir: app.getPath('userData'),
+        net,
+        toFileURL: pathToFileURL
+      }));
+    }
 
     setupIpc();
     createWindow();

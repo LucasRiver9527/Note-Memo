@@ -94,13 +94,17 @@
 
   // 依赖 state.settings 的排序快照；由 app.js 传入 state
   function snapshotState(state) {
+    const s = state.settings || {};
     return {
       notes: safeCloneNotes(state.notes),
       trash: cloneTrash(state.trash),
       groups: cloneShallowList(state.groups),
       orders: {
-        noteOrder: ((state.settings && state.settings.noteOrder) || []).slice(),
-        groupOrders: cloneFlatObj((state.settings && state.settings.groupOrders) || {})
+        noteOrder: ((s.noteOrder) || []).slice(),
+        groupOrders: cloneFlatObj(s.groupOrders || {}),
+        // UX-30D：排序模式与布局快照也纳入撤销（深拷，避免共享嵌套 map/位置引用）。
+        sortMode: s.sortMode,
+        orderLayouts: safeAny(s.orderLayouts || {})
       }
     };
   }
@@ -164,6 +168,26 @@
     syncUndoButtons();
   }
 
+  // UX-30D：仅在「相对 beginUndo 时的快照确有变化」时提交（低频显式操作：整理/保存/恢复）。
+  // 与 commitUndo 的区别：无变化时不入栈、也不清空 redo；有变化则等同 commitUndo。
+  // 比较基于已序列化的快照（此操作低频，可接受）；不引入每次渲染/击键的额外快照。
+  const serializeSnapshot = (snap) => {
+    try { return JSON.stringify(snap); } catch (e) { return null; }
+  };
+
+  function commitUndoIfChanged(state) {
+    const pending = _pending;
+    if (!pending) return;
+    const current = snapshotState(state);
+    const same = serializeSnapshot(pending) === serializeSnapshot(current);
+    _pending = null;
+    if (same) { syncUndoButtons(); return; } // 无实际变化：不入栈、保留 redo
+    undoStack.push(pending);
+    if (undoStack.length > MAX_UNDO) undoStack.shift();
+    redoStack.length = 0;
+    syncUndoButtons();
+  }
+
   function cancelUndo() { _pending = null; }
 
   function undo(state) {
@@ -187,7 +211,7 @@
 
   return {
     MAX_UNDO, setApplier, cloneNotes, cloneTrash, snapshotState,
-    syncUndoButtons, pushUndo, beginUndo, commitUndo, cancelUndo,
+    syncUndoButtons, pushUndo, beginUndo, commitUndo, commitUndoIfChanged, cancelUndo,
     undo, redo, clearStacks, stacks,
     // 供测试/诊断：结构化深拷内部件与断言开关
     _internal: { cloneItem, cloneObject, clone2D, safeCloneNotes, DEV_ASSERT }

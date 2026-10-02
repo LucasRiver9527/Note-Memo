@@ -53,6 +53,50 @@ test('snapshotState 深拷贝 settings 排序字段', () => {
   assert.deepStrictEqual(snap.orders.groupOrders, { g1: ['a'] });
 });
 
+/* ============ UX-30D：排序模式/布局快照纳入撤销 + 条件提交 ============ */
+test('UX-30D snapshotState 深拷贝 sortMode 与 orderLayouts（不共享嵌套 map/位置引用）', () => {
+  const state = mkState();
+  state.settings.sortMode = 'custom';
+  state.settings.orderLayouts = { _all: { a: { x: 10, y: 20 } }, g1: { b: { x: 5, y: 6 } } };
+  const snap = H.snapshotState(state);
+  // 改原对象不应污染快照（嵌套两层）
+  state.settings.sortMode = 'updated';
+  state.settings.orderLayouts._all.a.x = 999;
+  state.settings.orderLayouts.g1.b = { x: 1, y: 1 };
+  assert.strictEqual(snap.orders.sortMode, 'custom', 'sortMode 未快照或未深拷');
+  assert.deepStrictEqual(snap.orders.orderLayouts._all.a, { x: 10, y: 20 }, '位置被共享引用污染');
+  assert.deepStrictEqual(snap.orders.orderLayouts.g1.b, { x: 5, y: 6 });
+});
+
+test('UX-30D commitUndoIfChanged：无变化不入栈且保留 redo；有变化则入栈并清 redo', () => {
+  let applied = 0;
+  H.setApplier(() => { applied++; });
+  const state = mkState([{ id: 'a', title: 'v1' }]);
+  state.settings.sortMode = 'updated';
+  state.settings.orderLayouts = {};
+  // 先制造一条 redo：push 后 undo
+  H.pushUndo(state);
+  H.undo(state);
+  const redoBefore = H.stacks().redoStack.length;
+  assert.strictEqual(redoBefore, 1, '前置 redo 未就绪');
+  const undoBefore = H.stacks().undoStack.length;
+  // 无变化提交：不入栈、保留 redo
+  H.beginUndo(state);
+  H.commitUndoIfChanged(state);
+  assert.strictEqual(H.stacks().undoStack.length, undoBefore, '无变化仍入栈');
+  assert.strictEqual(H.stacks().redoStack.length, redoBefore, '无变化清空了 redo');
+  // 有变化提交：入栈并清 redo
+  H.beginUndo(state);
+  state.settings.sortMode = 'custom';
+  state.settings.orderLayouts = { _all: { a: { x: 1, y: 2 } } };
+  H.commitUndoIfChanged(state);
+  assert.strictEqual(H.stacks().undoStack.length, undoBefore + 1, '有变化未入栈');
+  assert.strictEqual(H.stacks().redoStack.length, 0, '有变化未清 redo');
+  // pending 已清：再次 commitUndoIfChanged 不应再入栈
+  H.commitUndoIfChanged(state);
+  assert.strictEqual(H.stacks().undoStack.length, undoBefore + 1, 'pending 未清导致重复入栈');
+});
+
 test('pushUndo 后 undo：applier 收到压栈时的快照', () => {
   let received = null;
   H.setApplier((s) => { received = s; });

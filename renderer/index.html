@@ -19,42 +19,58 @@
         <div class="search-box">
           <span class="search-icon">⌕</span>
           <input id="searchInput" type="text" data-i18n-placeholder="search" placeholder="搜索便签…" />
-          <button id="searchClear" class="icon-btn hidden" data-i18n-title="clear" title="清除">✕</button>
+          <button id="searchClear" class="icon-btn hidden" data-i18n-title="clear" title="清除" data-i18n-aria-label="clear" aria-label="清除">✕</button>
         </div>
       </div>
       <div class="tb-right">
         <button class="tb-btn" id="btnAdd" data-i18n="new_note" data-i18n-title="new_note_tip" title="新建便签 (Ctrl+Shift+N)">＋ 新建</button>
         <button class="tb-btn secondary" id="btnQuickArrange" data-i18n="quick_arrange" data-i18n-title="quick_arrange" title="一键整理">⚡ 一键整理</button>
-        <button class="tb-btn secondary" id="btnSaveOrder" data-i18n="save_current_order" data-i18n-title="save_current_order" title="保存当前排序">💾 保存排序</button>
+        <button class="tb-btn secondary" id="btnSaveOrder" data-i18n="save_current_order" data-i18n-title="save_current_order" title="保存排序与布局">💾 保存排序与布局</button>
         <button class="tb-btn secondary" id="btnBatchToggle" data-i18n="batch_select" data-i18n-title="batch_select" title="批量选中">☑ 批量选中</button>
         <div class="tb-more-wrap hidden" id="toolbarMoreWrap">
-          <button class="icon-btn" id="btnToolbarMore" type="button" aria-haspopup="true" aria-expanded="false" aria-controls="toolbarMoreMenu" data-i18n-title="more" title="更多操作">⋯</button>
+          <button class="icon-btn" id="btnToolbarMore" type="button" aria-haspopup="true" aria-expanded="false" aria-controls="toolbarMoreMenu" data-i18n-title="more" title="更多操作" data-i18n-aria-label="more" aria-label="更多">⋯</button>
           <div class="tb-more-menu hidden" id="toolbarMoreMenu" role="menu"></div>
         </div>
-        <button class="icon-btn" id="btnUndo" data-i18n-title="undo" title="撤销 (Ctrl+Z)" disabled>↩</button>
-        <button class="icon-btn" id="btnRedo" data-i18n-title="redo" title="重做 (Ctrl+Shift+Z)" disabled>↪</button>
-        <button class="icon-btn" id="btnSettings" data-i18n-title="global_settings" title="全局设置">⚙</button>
+        <button class="icon-btn" id="btnUndo" data-i18n-title="undo" title="撤销 (Ctrl+Z)" data-i18n-aria-label="undo" aria-label="撤销" disabled>↩</button>
+        <button class="icon-btn" id="btnRedo" data-i18n-title="redo" title="重做 (Ctrl+Shift+Z)" data-i18n-aria-label="redo" aria-label="重做" disabled>↪</button>
+        <button class="icon-btn" id="btnSettings" data-i18n-title="global_settings" title="全局设置" data-i18n-aria-label="global_settings" aria-label="全局设置">⚙</button>
         <span class="tb-divider"></span>
-        <button class="icon-btn win-btn" id="btnPin" data-i18n-title="always_on_top" title="窗口置顶">📌</button>
+        <button class="icon-btn win-btn" id="btnPin" data-i18n-title="always_on_top" title="窗口置顶" data-i18n-aria-label="always_on_top" aria-label="窗口置顶">📌</button>
       </div>
     </header>
 
     <nav id="filterbar">
-      <button class="chip active" data-group="all" data-i18n="all">全部</button>
-      <button class="chip" data-group="ungrouped" data-i18n="ungrouped">未分组</button>
-      <button class="chip" id="btnArchiveFilter" data-i18n="archive_view">归档</button>
+      <div class="filter-scope" role="group" aria-label="筛选范围" data-i18n-aria-label="filter_scope">
+        <button class="chip active" data-group="all" data-i18n="all">全部</button>
+        <button class="chip" data-group="ungrouped" data-i18n="ungrouped">未分组</button>
+        <button class="chip" id="btnArchiveFilter" data-i18n="archive_view">归档</button>
+      </div>
       <span class="chip-sep"></span>
-      <button class="chip-arrow" id="btnChipsLeft" data-i18n-title="chips_scroll_left" title="向左滚动分组" aria-label="向左滚动分组"></button>
+      <button class="chip-arrow" id="btnChipsLeft" data-i18n-title="chips_scroll_left" title="向左滚动分组" data-i18n-aria-label="chips_scroll_left" aria-label="向左滚动分组"></button>
       <div id="groupChips"></div>
-      <button class="chip-arrow" id="btnChipsRight" data-i18n-title="chips_scroll_right" title="向右滚动分组" aria-label="向右滚动分组"></button>
+      <button class="chip-arrow" id="btnChipsRight" data-i18n-title="chips_scroll_right" title="向右滚动分组" data-i18n-aria-label="chips_scroll_right" aria-label="向右滚动分组"></button>
       <button class="chip add-chip" id="btnAddGroup" data-i18n="add_group" data-i18n-title="new_group" title="新建分组">＋ 分组</button>
-      <div class="view-toggle">
-        <button class="view-btn active" id="viewBoard" data-i18n-title="board_view" title="便签视图">▦</button>
-        <button class="view-btn" id="viewMemo" data-i18n-title="memo_view" title="备忘录视图">☰</button>
-        <button class="view-btn" id="viewTodo" data-i18n-title="todo_view" title="待办区">✓</button>
-        <button class="view-btn" id="viewDoc" data-i18n-title="doc_view" title="文档模式">▤</button>
+      <div class="view-toggle" role="group" aria-label="视图" data-i18n-aria-label="views_group">
+        <button class="view-btn active" id="viewBoard" data-i18n-title="board_view" title="便签视图" data-i18n-aria-label="board_view" aria-label="便签视图" aria-pressed="true">▦</button>
+        <button class="view-btn" id="viewMemo" data-i18n-title="memo_view" title="备忘录视图" data-i18n-aria-label="memo_view" aria-label="备忘录视图" aria-pressed="false">☰</button>
+        <button class="view-btn" id="viewTodo" data-i18n-title="todo_view" title="待办区" data-i18n-aria-label="todo_view" aria-label="待办区" aria-pressed="false">✓</button>
+        <button class="view-btn" id="viewDoc" data-i18n-title="doc_view" title="文档模式" data-i18n-aria-label="doc_view" aria-label="文档模式" aria-pressed="false">▤</button>
       </div>
     </nav>
+
+    <div id="filterStatus" class="filter-status hidden"></div>
+
+    <details id="desktopNotes" class="desktop-notes">
+      <summary id="desktopNotesSummary" class="dn-summary">
+        <span class="dn-title" data-i18n="desktop_notes">桌面便签</span>
+        <span id="desktopNotesCount" class="dn-count">0</span>
+      </summary>
+      <div class="dn-body">
+        <div id="desktopNotesList" class="dn-list" role="group" data-i18n-aria-label="desktop_notes" aria-label="桌面便签"></div>
+        <div id="desktopNotesEmpty" class="dn-empty" data-i18n="desktop_notes_empty">没有钉在桌面的便签</div>
+        <button type="button" id="btnDesktopNotesClose" class="dn-close" data-i18n="desktop_notes_close">收起</button>
+      </div>
+    </details>
 
     <div id="batchBar" class="hidden">
       <span id="batchCount" class="batch-count"></span>
@@ -78,13 +94,13 @@
         <p class="sub" data-i18n="no_notes_sub">也可以双击空白处创建</p>
       </div>
       <div id="canvasToolbar" class="hidden">
-        <button class="ct-btn ct-toggle" id="ctExpand" data-i18n-title="canvas_zoom_toggle" title="画布缩放 / 平移">⤢</button>
+        <button class="ct-btn ct-toggle" id="ctExpand" data-i18n-title="canvas_zoom_toggle" title="画布缩放 / 平移" data-i18n-aria-label="canvas_zoom_toggle" aria-label="画布缩放 / 平移">⤢</button>
         <span id="ctGroup" class="ct-group">
-          <button class="ct-btn" id="btnZoomOut" data-i18n-title="canvas_zoom_out" title="缩小">−</button>
+          <button class="ct-btn" id="btnZoomOut" data-i18n-title="canvas_zoom_out" title="缩小" data-i18n-aria-label="canvas_zoom_out" aria-label="缩小">−</button>
           <span class="ct-label" id="zoomLabel">100%</span>
-          <button class="ct-btn" id="btnZoomIn" data-i18n-title="canvas_zoom_in" title="放大">＋</button>
-          <button class="ct-btn" id="btnZoomReset" data-i18n-title="canvas_zoom_reset" title="重置缩放">⟳</button>
-          <button class="ct-btn" id="btnZoomPan" data-i18n-title="canvas_pan_hint" title="平移画布：按住空格键＋鼠标左键拖动，或按住鼠标中键拖动；单按空格不会移动画布（编辑时空格仍用于输入）">✋</button>
+          <button class="ct-btn" id="btnZoomIn" data-i18n-title="canvas_zoom_in" title="放大" data-i18n-aria-label="canvas_zoom_in" aria-label="放大">＋</button>
+          <button class="ct-btn" id="btnZoomReset" data-i18n-title="canvas_zoom_reset" title="重置缩放" data-i18n-aria-label="canvas_zoom_reset" aria-label="重置缩放">⟳</button>
+          <button class="ct-btn" id="btnZoomPan" data-i18n-title="canvas_pan_hint" title="平移画布：按住空格键＋鼠标左键拖动，或按住鼠标中键拖动；单按空格不会移动画布（编辑时空格仍用于输入）" data-i18n-aria-label="canvas_pan_hint" aria-label="平移画布：按住空格键＋鼠标左键拖动，或按住鼠标中键拖动；单按空格不会移动画布（编辑时空格仍用于输入）">✋</button>
         </span>
       </div>
     </main>
@@ -92,9 +108,9 @@
 
   <!-- 全局设置面板 -->
   <div id="settingsOverlay" class="hidden">
-    <aside id="settingsPanel">
+    <aside id="settingsPanel" role="dialog" aria-modal="true" aria-labelledby="settingsTitle" tabindex="-1">
       <header class="sp-header">
-        <span data-i18n="settings_title">⚙ 全局设置</span>
+        <span id="settingsTitle" data-i18n="settings_title">⚙ 全局设置</span>
         <button class="icon-btn" id="btnCloseSettings">✕</button>
       </header>
       <div class="sp-layout">
@@ -174,7 +190,7 @@
                 <span data-i18n="topbar_acrylic">顶部区域亚克力模糊</span>
                 <input type="checkbox" id="topBarAcrylicToggle" />
               </label>
-              <p class="sp-hint" data-i18n="topbar_follow_hint">标题栏、筛选栏、批量选中操作栏共用此配色（颜色 / 透明度 / 亚克力模糊）</p>
+              <p class="sp-hint" data-i18n="topbar_follow_hint">标题栏、筛选栏、批量选中操作栏、桌面便签共用此配色（颜色 / 透明度 / 亚克力模糊）</p>
               <h4 data-i18n="bg_win_opacity">背景 / 窗口</h4>
               <label class="field">
                 <span data-i18n="bg_opacity">背景图片透明度</span>
@@ -372,7 +388,7 @@
                 <option value="color" data-i18n="sort_color">按颜色</option>
               </select>
             </label>
-            <p class="sp-hint" id="sortHint" data-i18n="sort_hint">排序在「备忘录」和「待办」视图中生效；选择「自定义顺序」后可拖动下方便签调整顺序。</p>
+            <p class="sp-hint" id="sortHint" data-i18n="sort_hint">排序作用于列表/文档视图；画布仅在显式「一键整理」时按当前顺序排布，不自动重排。</p>
             <div id="sortScopeRow" class="hidden">
               <label class="field">
                 <span data-i18n="sort_scope">排序范围</span>
@@ -447,8 +463,10 @@
             <h4 data-i18n="organize">整理与清空</h4>
             <div class="stack">
               <button class="sp-btn ghost" id="btnArrange" data-i18n="arrange">▦ 整理排列便签</button>
+              <button class="sp-btn ghost" id="btnRestoreLayout" data-i18n="restore_layout">↩ 恢复保存布局</button>
               <button class="sp-btn ghost danger" id="btnClearAll" data-i18n="clear_all">🗑 清空全部便签</button>
             </div>
+            <p class="sp-hint" id="arrangeHint" data-i18n="arrange_hint">一键整理按当前排序紧凑排布；恢复保存布局仅还原已保存位置，未保存/隐藏便签保持原位；若恢复后重叠或超出窗口，可用「一键整理」调整。</p>
             <p class="sp-hint" data-i18n="clear_all_hint">清空全部便签会将其移入回收站，可在回收站中恢复。</p>
 
             <h4 data-i18n="system">系统</h4>
@@ -578,6 +596,8 @@
   <script src="panels/trash-panel.js"></script>
   <script src="panels/batch-select.js"></script>
   <script src="panels/sort-panel.js"></script>
+  <script src="panels/desktop-notes.js"></script>
+  <script src="panels/filter-status.js"></script>
   <script src="system/arrange.js"></script>
   <script src="system/shortcuts-panel.js"></script>
   <script src="system/alarm.js"></script>

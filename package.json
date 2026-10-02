@@ -1,6 +1,6 @@
 {
   "name": "mynotes",
-  "version": "1.2.6",
+  "version": "1.2.7",
   "description": "美观可定制的 Windows 桌面便签",
   "main": "main.js",
   "author": "MyNotes",
@@ -32,6 +32,7 @@
       "main.js",
       "preload.js",
       "data-io.js",
+      "media-protocol.js",
       "renderer/**/*",
       "assets/**/*"
     ],

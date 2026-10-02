@@ -63,14 +63,22 @@
       .map((n) => n.id);
   }
 
-  // 只重排当前视图内的便签（ids，按新顺序），保留视图外便签原有相对顺序（不清空其它分组顺序）。
+  // 只重排当前视图内的便签（ids，按新顺序），视图外便签保留原有相对顺序与**原有位置**。
+  // 先把 ids 去重（保持首次出现顺序），再按顺序填回它们在原 order 中占据的槽位，隐藏项槽位不动。
   function reorderScoped(order, ids) {
-    const inView = new Set(ids || []);
-    const rest = (order || []).filter((id) => !inView.has(id));
-    const out = [];
-    (ids || []).forEach((id) => { if (!out.includes(id)) out.push(id); });
-    rest.forEach((id) => { if (!out.includes(id)) out.push(id); });
-    return out;
+    const src = (order || []);
+    const uniq = [];
+    (ids || []).forEach((id) => { if (!uniq.includes(id)) uniq.push(id); });
+    const inView = new Set(uniq);
+    const slots = [];
+    src.forEach((id, i) => { if (inView.has(id)) slots.push(i); });
+    const out = src.slice();
+    uniq.forEach((id, k) => { if (k < slots.length) out[slots[k]] = id; });
+    // 新增（原 order 中不存在的可见 ID）追加到末尾，且不重复
+    uniq.forEach((id) => { if (!out.includes(id)) out.push(id); });
+    // 去重，保留首次出现
+    const seen = new Set();
+    return out.filter((id) => (seen.has(id) ? false : (seen.add(id), true)));
   }
 
   // 规整排序数组：剔除已删除便签、补入缺失便签；每个分组各自维护顺序。就地更新 groupOrders（保持原对象引用），

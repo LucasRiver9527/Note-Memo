@@ -4,6 +4,7 @@ const {
   hexToRgba, isDarkColor, autoTextColor, escapeHtml, luminance, contrastRatio,
   refIdsOf, cleanupRefs, sortNotes, tableToMarkdown, noteToMarkdown, referencedMedia, parseNullSeparated, hdropString,
   setRenderLocale, formatInlineText, tableBlockHtml, renderRichContent, sanitizeCss,
+  clampInt, clampNum, isCssNumber,
   noteShadowCss
 } = require('../renderer/logic.js');
 // i18n 已拆到 core/i18n.js（单一来源），分层设计见该文件头部说明
@@ -178,6 +179,57 @@ test('tableToMarkdown 处理合并单元格与斜线表头不抛错', () => {
   assert.ok(typeof md === 'string' && md.length > 0);
 });
 
+test('tableToMarkdown 合法输出保持不变（转义/合并/斜线表头）', () => {
+  const tbl = { rows: 2, cols: 2, cells: [['A|B', 'C\nD'], ['', '']], merges: [{ r: 0, c: 1, rowspan: 2, colspan: 1 }], diagonals: [{ r: 1, c: 0, t1: '左', t2: '右' }] };
+  assert.strictEqual(tableToMarkdown(tbl), [
+    '| A\\|B | C<br>D |',
+    '| --- | --- |',
+    '| 左 右 |  |'
+  ].join('\n'));
+});
+
+test('tableToMarkdown 接受数字字符串维度与旧版数字字符串合并索引/跨度', () => {
+  const md = tableToMarkdown({ rows: '2', cols: '2', cells: [['A', 'B'], ['C', 'D']], merges: [{ r: '0', c: '0', rowspan: '2', colspan: '1' }] });
+  assert.strictEqual(md, ['| A | B |', '| --- | --- |', '|  | D |'].join('\n'));
+});
+
+test('tableToMarkdown 非法/负数/非有限/对象维度返回空串且不分配', () => {
+  for (const rows of [-5, NaN, Infinity, -Infinity, {}, [], true, '  ', 'abc']) {
+    assert.strictEqual(tableToMarkdown({ rows, cols: 2, cells: [['x', 'y']] }), '', 'rows=' + String(rows));
+  }
+  assert.strictEqual(tableToMarkdown({ rows: 1, cols: -1, cells: [['x']] }), '');
+  assert.strictEqual(tableToMarkdown({ rows: 0, cols: 3 }), '');
+  assert.strictEqual(tableToMarkdown({}), '');
+  assert.strictEqual(tableToMarkdown(null), '');
+});
+
+test('tableToMarkdown 单元格仅安全字符串化：对象/数组/null 空串，数字/布尔转字符串', () => {
+  assert.strictEqual(tableToMarkdown({ rows: 1, cols: 4, cells: [[{}, [], null, 'ok']] }), '|  |  |  | ok |\n| --- | --- | --- | --- |');
+  assert.strictEqual(tableToMarkdown({ rows: 1, cols: 3, cells: [[12, true, undefined]] }), '| 12 | true |  |\n| --- | --- | --- |');
+});
+
+test('tableToMarkdown 巨大 span/索引在小表上有界完成且不修改源数据', () => {
+  const tbl = {
+    rows: 2, cols: 2,
+    cells: [['A', 'B'], ['C', 'D']],
+    merges: [{ r: 0, c: 0, rowspan: 1e9, colspan: 1e9 }],
+    diagonals: [{ r: 0, c: 1, rowspan: 1e9, t1: 'x', t2: 'y' }]
+  };
+  const before = JSON.stringify(tbl);
+  const md = tableToMarkdown(tbl);
+  assert.strictEqual(md, ['| A |  |', '| --- | --- |', '|  |  |'].join('\n'));
+  assert.strictEqual(JSON.stringify(tbl), before);
+});
+
+test('tableToMarkdown 过大有限维度描述性拒绝而非静默截断', () => {
+  for (const dims of [{ rows: 201, cols: 2 }, { rows: 2, cols: 100000 }, { rows: '201', cols: '1' }]) {
+    assert.throws(
+      () => tableToMarkdown({ ...dims, cells: [] }),
+      (err) => err && err.code === 'TABLE_MD_TOO_LARGE' && err.limit === 200 && /too large to export/.test(err.message)
+    );
+  }
+});
+
 test('referencedMedia 收集被引用的媒体（含回收站），不含孤儿', () => {
   const data = {
     settings: { backgroundImage: 'note-bg://local/bg-x.png', customFonts: [{ url: 'note-font://local/f.tf' }], reminderSoundPath: 'note-sound://local/s.mp3' },
@@ -271,6 +323,32 @@ test('tableBlockHtml 生成表格 HTML、斜线表头与样式', () => {
   assert.ok(html.includes('data-table-id="t1"'));
 });
 
+test('斜线表头使用 2×2 对角网格包裹，方向与象限正确', () => {
+  setRenderLocale({ tr: (k) => k, mdOn: () => true });
+  const tlbr = tableBlockHtml({ id: 't1', rows: 1, cols: 1, cells: [['']], diagonals: [{ r: 0, c: 0, dir: 'tlbr', t1: '上右', t2: '下左' }] });
+  assert.ok(tlbr.includes('td class="diag diag-tlbr"'), 'tlbr cell class');
+  assert.ok(/diag-box">[\s\S]*diag-cell diag-b[^>]*>[\s\S]*tbl-t1[\s\S]*上右[\s\S]*diag-cell diag-c[^>]*>[\s\S]*tbl-t2[\s\S]*下左/.test(tlbr), 'tlbr: t1 左上 / t2 右下');
+  const trbl = tableBlockHtml({ id: 't2', rows: 1, cols: 1, cells: [['']], diagonals: [{ r: 0, c: 0, dir: 'trbl', t1: '上左', t2: '下右' }] });
+  assert.ok(trbl.includes('td class="diag diag-trbl"'), 'trbl cell class');
+  assert.ok(/diag-cell diag-a[^>]*>[\s\S]*上左[\s\S]*diag-cell diag-d[^>]*>[\s\S]*下右/.test(trbl), 'trbl: t1 右上 / t2 左下');
+  // 无绝对定位/45% 旧样式，保留 svg 覆盖整格
+  assert.ok(!tlbr.includes('tbl-t1" style="top'), 'no absolute label style');
+  assert.ok(tlbr.includes('class="diag-line"'), 'svg retained');
+});
+
+test('斜线长文本经内联格式化(转义)且 Markdown 输出不变', () => {
+  setRenderLocale({ tr: (k) => k, mdOn: () => true });
+  const long = '甲'.repeat(30) + '\n' + 'B'.repeat(80) + '<b>x</b>';
+  const tbl = { id: 't1', rows: 1, cols: 1, cells: [['']], diagonals: [{ r: 0, c: 0, dir: 'tlbr', t1: long, t2: 'z' }] };
+  const html = tableBlockHtml(tbl);
+  assert.ok(!html.includes('<b>x</b>'), 'diagonal text escaped, no raw HTML');
+  const md = tableToMarkdown(tbl);
+  // Markdown 保持完整对角文本（t1 + t2 以空格连接），未被截断/改写
+  assert.ok(md.includes('甲'.repeat(30)), 'full CJK kept');
+  assert.ok(md.includes('B'.repeat(80)), 'full unbroken english kept');
+  assert.ok(md.includes(' z '), 't2 kept');
+});
+
 test('renderRichContent 组装表格/图片/文件引用', () => {
   setRenderLocale({ tr: (k) => k, mdOn: () => true });
   const note = {
@@ -293,6 +371,70 @@ test('sanitizeCss 去掉危险字符、保留合法颜色', () => {
   // 注入样式会被剥离开闭字符
   assert.ok(!sanitizeCss('red;position:fixed;z-index:999').includes(';'));
   assert.ok(!sanitizeCss('red;position:fixed').includes(':'));
+});
+
+test('clampInt/clampNum 仅接受数字/数字字符串，其它回退默认且不抛错', () => {
+  assert.strictEqual(clampInt('5', 1, 1, 10), 5);
+  assert.strictEqual(clampInt('  7 ', 0, 0, 10), 7);
+  assert.strictEqual(clampInt(99, 1, 1, 10), 10);
+  assert.strictEqual(clampInt(-3, 1, 1, 10), 1);
+  assert.strictEqual(clampInt({}, 7, 0, 10), 7);
+  assert.strictEqual(clampInt(NaN, 7, 0, 10), 7);
+  assert.strictEqual(clampInt(Infinity, 7, 0, 10), 7);
+  assert.strictEqual(clampNum('2.5', 0, 0, 10), 2.5);
+  assert.strictEqual(clampNum(-2.5, 0, -5, 5), -2.5);
+  assert.strictEqual(clampNum('abc', 3, 0, 10), 3);
+  assert.strictEqual(clampNum([], 4, 0, 10), 4);
+  assert.strictEqual(clampNum([5], 4, 0, 10), 4);
+  assert.strictEqual(clampNum(true, 4, 0, 10), 4);
+  assert.strictEqual(clampNum('   ', 4, 0, 10), 4);
+  assert.strictEqual(clampNum(null, 4, 0, 10), 4);
+  // JSON 往返后仍是该形状：{toString:null,valueOf:0} 会让裸 Number() 抛 TypeError
+  const hostile = JSON.parse('{"toString":null,"valueOf":0}');
+  assert.deepStrictEqual(JSON.parse(JSON.stringify(hostile)), hostile);
+  assert.strictEqual(clampInt(hostile, 7, 0, 10), 7);
+  assert.strictEqual(clampNum(hostile, 7, 0, 10), 7);
+  assert.strictEqual(isCssNumber(hostile), false);
+  assert.strictEqual(isCssNumber('16'), true);
+  assert.strictEqual(isCssNumber(16), true);
+  assert.strictEqual(isCssNumber(false), false);
+  assert.strictEqual(isCssNumber(''), false);
+  assert.strictEqual(isCssNumber({}), false);
+});
+
+test('tableBlockHtml 遇到恶意对象数值字段不抛错、回退默认且不改数据', () => {
+  setRenderLocale({ tr: (k) => k, mdOn: () => true });
+  const hostile = JSON.parse('{"toString":null,"valueOf":0}');
+  const tbl = {
+    id: 't1', rows: hostile, cols: 1, cells: [['x']], borderWidth: hostile,
+    merges: [{ r: 0, c: 0, rowspan: hostile, colspan: 1 }],
+    diagonals: [{ r: 0, c: 0, dir: 'tlbr', tColor: '#808080', tSize: hostile }]
+  };
+  const before = JSON.stringify(tbl);
+  const html = tableBlockHtml(tbl);
+  assert.ok(html.includes('note-table'));
+  assert.ok(html.includes('--tbl-border-width:3px'));
+  assert.ok(!html.includes('<a '));
+  assert.strictEqual(JSON.stringify(tbl), before); // 原始值未被改写
+});
+
+test('tableBlockHtml 对恶意 borderWidth/span 数值化，保留 0 边框与合法值', () => {
+  setRenderLocale({ tr: (k) => k, mdOn: () => true });
+  const bad = tableBlockHtml({
+    id: 't1', rows: 1, cols: 1, cells: [['x']],
+    borderWidth: '3"><a href="https://evil.example">x</a>',
+    merges: [{ r: 0, c: 0, rowspan: '2"><a href="https://evil.example">y</a>', colspan: 1 }]
+  });
+  assert.ok(!bad.includes('evil.example'));
+  assert.ok(!bad.includes('<a '));
+  assert.ok(bad.includes('--tbl-border-width:3px'));
+  assert.ok(bad.includes('rowspan="1"'));
+
+  const zero = tableBlockHtml({ id: 't1', rows: 1, cols: 1, cells: [['x']], borderWidth: 0 });
+  assert.ok(zero.includes('--tbl-border-width:0px'));
+
+  const huge = tableBlockHtml({ id: 't1', rows: 1e9, cols: 1, cells: [] });
+  assert.ok((huge.match(/<tr>/g) || []).length <= 200);
 });
 
 test('内联颜色被清洗，阻断样式注入', () => {

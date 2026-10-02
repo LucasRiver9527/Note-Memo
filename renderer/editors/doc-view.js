@@ -18,8 +18,9 @@ function renderDocView(visible) {
   if (!docNoteId) {
     const items = getSortedNotes(visible).map((n) => {
       const tc = n.textColor || state.settings.noteTextColor || autoTextColor(n.color);
+      const c = sanitizeCss(n.color);
       return `
-      <div class="doc-pick-item${n.archived ? ' archived' : ''}" data-id="${n.id}" style="--note-color:${n.color};background:${n.color};color:${tc}">
+      <div class="doc-pick-item${n.archived ? ' archived' : ''}" data-id="${escapeHtml(n.id)}" style="--note-color:${c};background:${c || 'transparent'};color:${sanitizeCss(tc)}">
         <div class="dp-info">
           <div class="dp-title">${escapeHtml(n.title || t('untitled'))}</div>
           <div class="dp-sub">${escapeHtml((noteText(n) || '').slice(0, 80))}</div>
@@ -57,31 +58,41 @@ function renderDocView(visible) {
     ? `<ul class="todo-list" style="margin-top:12px">${(n.items || []).map((it) => `<li class="todo-item ${it.done ? 'done' : ''}"><span style="font-size:16px">${it.done ? '☑' : '☐'}</span><span style="margin-left:8px;${it.done ? 'text-decoration:line-through;opacity:.5' : ''}">${escapeHtml(it.text || t('empty_item'))}</span></li>`).join('')}</ul>`
     : '';
   list.innerHTML = `
-    <div class="doc-toolbar" style="--note-color:${n.color};color:${textColor}">
-      <button class="doc-back" id="btnDocBack">${t('doc_back')}</button>
-      ${!isTodo ? `<button class="doc-fmt-btn" id="btnDocBold" title="${t('bold')}"><b>B</b></button>
-      <button class="doc-fmt-btn" id="btnDocHighlight" title="${t('highlight')}">🖍</button>
-      <input type="color" id="btnDocHlColor" class="doc-hl-color" title="${t('highlight_color')}" value="${highlightColor()}" />
-      <span class="doc-tb-sep"></span>
-      <button class="doc-fmt-btn" id="btnDocAlignLeft" title="${t('align_left')}">⇤</button>
-      <button class="doc-fmt-btn" id="btnDocAlignCenter" title="${t('align_center')}">⇹</button>
-      <button class="doc-fmt-btn" id="btnDocAlignRight" title="${t('align_right')}">⇥</button>` : ''}
-      <span class="doc-tb-sep"></span>
-      ${!isTodo ? `<button class="doc-fmt-btn" id="btnDocPreview" title="${t(n.preview ? 'note_preview_off' : 'note_preview')}">👁</button>` : ''}
-      <button class="doc-fmt-btn" id="btnDocDesktop" title="${t('desktop')}">📌</button>
-      <button class="doc-fmt-btn" id="btnDocTodo" title="${t('todo_mode')}">☑</button>
-      <button class="doc-fmt-btn" id="btnDocGroup" title="${t('add_to_group')}">🏷</button>
-      <button class="doc-fmt-btn" id="btnDocImage" title="${t('insert_image')}">🖼️</button>
-      <button class="doc-fmt-btn" id="btnDocTable" title="${t('insert_table')}">▦</button>
-      <button class="doc-fmt-btn" id="btnDocRemind" title="${t('todo_remind')}">⏰</button>
-      <button class="doc-fmt-btn" id="btnDocColor" title="${t('color')}">🎨</button>
-      <button class="doc-fmt-btn" id="btnDocPin" title="${t('pin')}">🔝</button>
-      <span class="doc-tb-sep"></span>
-      <button class="doc-fmt-btn doc-export-btn" id="btnDocExportMd" title="${t('export_markdown')}" aria-label="${t('export_markdown')}">MD↓</button>
-      <button class="doc-fmt-btn" id="btnDocDel" title="${t('delete')}">🗑</button>
+    <div class="doc-toolbar" style="--note-color:${sanitizeCss(n.color)};color:${sanitizeCss(textColor)}">
+      <div class="doc-group doc-group-nav" role="group" aria-label="${t('doc_group_nav')}">
+        <button class="doc-back" id="btnDocBack">${t('doc_back')}</button>
+        ${!isTodo ? `<button class="doc-fmt-btn doc-preview-btn" id="btnDocPreview" title="${t(n.preview ? 'note_preview_off' : 'note_preview')}" aria-label="${t(n.preview ? 'note_preview_off' : 'note_preview')}" aria-pressed="${n.preview ? 'true' : 'false'}">👁<span class="doc-btn-label">${t(n.preview ? 'note_preview_off' : 'note_preview')}</span></button>` : ''}
+      </div>
+      ${!isTodo ? `<div class="doc-group doc-group-format" role="group" aria-label="${t('doc_group_format')}">
+        <button class="doc-fmt-btn" id="btnDocBold" title="${t('bold')}"><b>B</b></button>
+        <button class="doc-fmt-btn" id="btnDocHighlight" title="${t('highlight')}">🖍</button>
+        <input type="color" id="btnDocHlColor" class="doc-hl-color" title="${t('highlight_color')}" value="${sanitizeCss(highlightColor())}" />
+        <span class="doc-tb-sep"></span>
+        <button class="doc-fmt-btn" id="btnDocAlignLeft" title="${t('align_left')}">⇤</button>
+        <button class="doc-fmt-btn" id="btnDocAlignCenter" title="${t('align_center')}">⇹</button>
+        <button class="doc-fmt-btn" id="btnDocAlignRight" title="${t('align_right')}">⇥</button>
+      </div>` : ''}
+      <div class="doc-group doc-group-insert" role="group" aria-label="${t('doc_group_insert')}">
+        <button class="doc-fmt-btn" id="btnDocImage" title="${t('insert_image')}">🖼️</button>
+        <button class="doc-fmt-btn" id="btnDocTable" title="${t('insert_table')}">▦</button>
+      </div>
+      <div class="doc-group doc-group-manage" role="group" aria-label="${t('doc_group_manage')}">
+        <button class="doc-fmt-btn" id="btnDocDesktop" title="${t('desktop')}">📌</button>
+        <button class="doc-fmt-btn" id="btnDocTodo" title="${t('todo_mode')}">☑</button>
+        <button class="doc-fmt-btn" id="btnDocGroup" title="${t('add_to_group')}">🏷</button>
+        <button class="doc-fmt-btn" id="btnDocRemind" title="${t('todo_remind')}">⏰</button>
+        <button class="doc-fmt-btn" id="btnDocColor" title="${t('color')}">🎨</button>
+        <button class="doc-fmt-btn" id="btnDocPin" title="${t('pin')}">🔝</button>
+      </div>
+      <div class="doc-group doc-group-export" role="group" aria-label="${t('doc_group_export')}">
+        <button class="doc-fmt-btn doc-export-btn" id="btnDocExportMd" title="${t('export_markdown')}" aria-label="${t('export_markdown')}">MD↓</button>
+      </div>
+      <div class="doc-group doc-group-danger" role="group" aria-label="${t('delete')}">
+        <button class="doc-fmt-btn doc-del-btn" id="btnDocDel" title="${t('delete')}" aria-label="${t('delete')}">🗑</button>
+      </div>
       <span class="doc-hint">${t('doc_hint')}</span>
     </div>
-    <div class="doc-editor ${isDarkColor(textColor) ? '' : 'note-text-light'}" style="--note-color:${n.color};${n.fontSize ? '--note-font-size:' + n.fontSize + 'px;' : ''}color:${textColor}">
+    <div class="doc-editor ${isDarkColor(textColor) ? '' : 'note-text-light'}" style="--note-color:${sanitizeCss(n.color)};${(n.fontSize && isCssNumber(n.fontSize)) ? '--note-font-size:' + clampNum(n.fontSize, 0, 0, 999) + 'px;' : ''}color:${sanitizeCss(textColor)}">
       <input id="docTitle" class="doc-title-input" value="${escapeHtml(n.title || '')}" placeholder="${t('note_title')}" />
       ${isTodo ? todoHtml : `<div id="docContent" class="doc-content${n.preview ? ' note-preview' : ''}" contenteditable="${n.preview ? 'false' : 'true'}" spellcheck="false" data-placeholder="${t('note_content')}">${renderRichCached(n)}</div>`}
     </div>`;
@@ -132,7 +143,19 @@ function wireDocView(n, isTodo) {
   const exportBtn = $('#btnDocExportMd');
   if (exportBtn) exportBtn.onclick = () => exportNoteAsMarkdown(n);
   const previewBtn = $('#btnDocPreview');
-  if (previewBtn) previewBtn.onclick = () => { n.preview = !n.preview; n.updatedAt = Date.now(); save(); renderAll(); };
+  if (previewBtn) previewBtn.onclick = () => {
+    // renderAll 会重建工具栏：若用户是通过键盘/焦点激活预览，重建后把焦点还给新的预览按钮，
+    // 这样可以继续用 Enter/Space 切换；无焦点的程序化重渲染不受影响（不抢焦点）。
+    const hadFocus = document.activeElement === previewBtn;
+    n.preview = !n.preview;
+    n.updatedAt = Date.now();
+    save();
+    renderAll();
+    if (hadFocus) {
+      const next = $('#btnDocPreview');
+      if (next) next.focus();
+    }
+  };
 
   if (isTodo) return;
   const content = $('#docContent');

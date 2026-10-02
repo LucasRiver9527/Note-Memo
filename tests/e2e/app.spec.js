@@ -520,6 +520,2484 @@ test('主窗口发起取消置顶时，独立便签保存失败则不关闭', as
   } finally { await closeApp(ctx); }
 });
 
+// —— UX-01 正式门槛子集：主窗↔独立便签保存/数据一致与可见保存失败 ——
+// 本地安全的 1×1 PNG 夹具（CSP 允许 data:），用于验证图片引用在钉桌往返后仍在。
+const UX01_PNG_1PX = 'data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAAC0lEQVR42mNkYPhfDwAChwGA60e6kgAAAABJRU5ErkJggg==';
+
+async function ux01ReadData(userDataDir) {
+  return JSON.parse(await fs.readFile(path.join(userDataDir, 'notes-data.json'), 'utf8'));
+}
+
+async function ux01PinFirstCard(ctx) {
+  const noteWinPromise = ctx.electronApp.waitForEvent('window');
+  await stableClick(ctx.win.locator('#board .note .t-desktop').first());
+  const noteWin = await noteWinPromise;
+  await noteWin.waitForLoadState('domcontentloaded');
+  return noteWin;
+}
+
+test('UX-01 主窗保存的表格/图片/提醒钉桌后独立窗可见，独立窗编辑回写并在重启后保持', async () => {
+  const ctx = await openApp();
+  let second;
+  try {
+    await stableClick(ctx.win.locator('#btnAdd'));
+    await expect(ctx.win.locator('#board .note')).toHaveCount(1);
+    // 新建后编辑区可能持有焦点；先失焦，避免后续以空 DOM 回写刚写入状态的富文本
+    await ctx.win.evaluate(() => { if (document.activeElement && document.activeElement.blur) document.activeElement.blur(); });
+    const noteId = await ctx.win.locator('#board .note').first().getAttribute('data-id');
+    // 在主窗写入富文本协议（表格 + 图片引用 + 提醒）并经主窗保存路径落盘
+    await ctx.win.evaluate((png) => {
+      const n = state.notes[0];
+      n.title = '富文本原题';
+      n.content = '前文[[table:t1]][[img:i1]]后文';
+      n.tables = [{ id: 't1', rows: 1, cols: 1, cells: [['单元格A']] }];
+      n.images = [{ id: 'i1', src: png, w: 80 }];
+      n.reminder = { enabled: true, time: new Date(Date.now() + 3600 * 1000).toISOString(), fired: false };
+    }, UX01_PNG_1PX);
+    expect(await ctx.win.evaluate(() => saveNow())).toBe(true);
+    const onDisk = (await ux01ReadData(ctx.userDataDir)).notes.find((n) => n.id === noteId);
+    expect(onDisk.content).toBe('前文[[table:t1]][[img:i1]]后文');
+    expect(onDisk.tables[0].cells[0][0]).toBe('单元格A');
+    expect(onDisk.images[0].src).toBe(UX01_PNG_1PX);
+
+    // 钉桌：独立窗读取主窗已保存的富文本
+    const noteWin = await ux01PinFirstCard(ctx);
+    await expect(noteWin.locator('#dnTitle')).toHaveValue('富文本原题');
+    await expect(noteWin.locator('#dnText .note-table')).toContainText('单元格A');
+    await expect(noteWin.locator('#dnText img')).toHaveAttribute('src', UX01_PNG_1PX);
+
+    // 独立窗改标题与正文（追加文字，保留表格/图片引用）
+    await noteWin.locator('#dnTitle').fill('独立窗改过的标题');
+    await noteWin.evaluate(() => {
+      const el = document.querySelector('#dnText');
+      el.appendChild(document.createTextNode(' 独立窗追加'));
+      el.dispatchEvent(new Event('input', { bubbles: true }));
+    });
+    await expect.poll(async () => {
+      const n = (await ux01ReadData(ctx.userDataDir)).notes.find((x) => x.id === noteId);
+      return n && n.title;
+    }).toBe('独立窗改过的标题');
+    // 便签仍隐藏（desktopPin），但主窗状态已同步到最新
+    await expect(ctx.win.locator('#board .note')).toHaveCount(0);
+    await expect.poll(() => ctx.win.evaluate((id) => {
+      const n = state.notes.find((x) => x.id === id);
+      return n && { title: n.title, content: n.content, desktopPin: n.desktopPin };
+    }, noteId)).toEqual({ title: '独立窗改过的标题', content: '前文[[table:t1]][[img:i1]]后文 独立窗追加', desktopPin: true });
+
+    // 取消钉住：回主窗显示最新值
+    await stableClick(noteWin.locator('#dnUnpin'));
+    await expect(ctx.win.locator('#board .note .note-title').first()).toHaveValue('独立窗改过的标题');
+    await expect.poll(async () => (await ux01ReadData(ctx.userDataDir)).notes.find((n) => n.id === noteId).desktopPin).toBe(false);
+    const afterUnpin = (await ux01ReadData(ctx.userDataDir)).notes.find((n) => n.id === noteId);
+    expect(afterUnpin.desktopPin).toBe(false);
+    expect(afterUnpin.content).toContain('[[table:t1]]');
+    expect(afterUnpin.content).toContain('[[img:i1]]');
+    expect(afterUnpin.content).toContain('独立窗追加');
+    expect(afterUnpin.tables[0].cells[0][0]).toBe('单元格A');
+    expect(afterUnpin.images[0].src).toBe(UX01_PNG_1PX);
+    expect(afterUnpin.reminder.enabled).toBe(true);
+
+    // 重启后富文本、媒体与提醒引用保持
+    await ctx.electronApp.evaluate(() => process.exit(0)).catch(() => {});
+    second = await openApp({ userDataDir: ctx.userDataDir });
+    await expect(second.win.locator('#board .note .note-title').first()).toHaveValue('独立窗改过的标题');
+    await expect(second.win.locator('#board .note .note-content .note-table')).toContainText('单元格A');
+    await expect(second.win.locator('#board .note .note-content img')).toHaveAttribute('src', UX01_PNG_1PX);
+    await expect(second.win.locator('#board .note .note-content')).toContainText('独立窗追加');
+  } finally {
+    if (second) await closeApp(second);
+    else {
+      await ctx.electronApp.close().catch(() => {});
+      await fs.rm(ctx.userDataDir, { recursive: true, force: true }).catch(() => {});
+    }
+  }
+});
+
+test('UX-01 待办便签钉桌后独立窗勾选/改文本同步主窗与磁盘', async () => {
+  const now = Date.now();
+  const seed = {
+    version: 2, settings: { viewMode: 'board', lastSeenVersion: EXPECTED_VERSION }, groups: [], trash: [],
+    notes: [{
+      id: 'ux01-todo', title: '待办原题', content: '', type: 'todo',
+      items: [{ id: 'ux01-1', text: '第一项', done: false }, { id: 'ux01-2', text: '第二项', done: false }],
+      images: [], files: [], tables: [], color: '#ffef9c', textColor: null, groupId: null,
+      pinned: false, desktopPin: false, reminder: null,
+      x: 40, y: 40, positionAll: { x: 40, y: 40 }, w: 240, h: 200, z: 1, createdAt: now, updatedAt: now
+    }]
+  };
+  const ctx = await openApp({ seed });
+  try {
+    const noteWin = await ux01PinFirstCard(ctx);
+    const items = noteWin.locator('.todo-item');
+    await expect(items).toHaveCount(2);
+    await items.nth(0).locator('input[type="checkbox"]').check({ force: true });
+    await items.nth(1).locator('.todo-text').fill('第二项已改');
+    await expect.poll(async () => {
+      const n = (await ux01ReadData(ctx.userDataDir)).notes.find((x) => x.id === 'ux01-todo');
+      return n && n.items.map((i) => `${i.done ? 'x' : 'o'}:${i.text}`).join('|');
+    }).toBe('x:第一项|o:第二项已改');
+    await expect.poll(() => ctx.win.evaluate(() => {
+      const n = state.notes.find((x) => x.id === 'ux01-todo');
+      return n && n.items.map((i) => `${i.done ? 'x' : 'o'}:${i.text}`).join('|');
+    })).toBe('x:第一项|o:第二项已改');
+
+    await stableClick(noteWin.locator('#dnUnpin'));
+    const row = ctx.win.locator('#board .note').first();
+    await expect(row.locator('.todo-item').nth(0).locator('input[type="checkbox"]')).toBeChecked();
+    await expect(row.locator('.todo-item').nth(1).locator('.todo-text')).toHaveValue('第二项已改');
+  } finally { await closeApp(ctx); }
+});
+
+test('UX-01 主窗保存其他便签的旧快照不会覆盖独立窗编辑，重启后两者都在', async () => {
+  const now = Date.now();
+  const mk = (id, title, desktopPin) => ({
+    id, title, content: id + '正文', type: 'note', items: [], images: [], files: [], tables: [],
+    color: '#93f1ce', textColor: null, groupId: null, pinned: false, desktopPin, reminder: null,
+    x: 40, y: 40, positionAll: { x: 40, y: 40 }, w: 220, h: 160, z: 1, createdAt: now, updatedAt: now
+  });
+  const seed = {
+    version: 2, settings: { viewMode: 'board', lastSeenVersion: EXPECTED_VERSION }, groups: [], trash: [],
+    notes: [mk('ux01-other', '其他便签', false), mk('ux01-pinned', '独立便签', false)]
+  };
+  const ctx = await openApp({ seed });
+  let second;
+  try {
+    // 钉桌第二张便签（订阅事件后再触发，避免与启动时序竞态）
+    const noteWinPromise = ctx.electronApp.waitForEvent('window');
+    await stableClick(ctx.win.locator('#board .note[data-id="ux01-pinned"] .t-desktop'));
+    const noteWin = await noteWinPromise;
+    await noteWin.waitForLoadState('domcontentloaded');
+    await expect(noteWin.locator('#dnTitle')).toHaveValue('独立便签');
+
+    // 拦截 data:save：记录主窗快照但不落盘（模拟该次保存尚未写入）。之后用真实处理器重放这张旧快照。
+    await ctx.electronApp.evaluate(({ ipcMain }) => {
+      globalThis.__ux01RealSave = ipcMain._invokeHandlers.get('data:save');
+      ipcMain.removeHandler('data:save');
+      ipcMain.handle('data:save', (e, data) => {
+        globalThis.__ux01HeldSnapshot = data;
+        return true;
+      });
+    });
+    // 主窗编辑其他便签并强制保存 → 抓取到「其他便签新、独立便签旧」的快照
+    await ctx.win.locator('#board .note[data-id="ux01-other"] .note-title').fill('其他便签已改');
+    await ctx.win.evaluate(() => { saveNow(); });
+    await expect.poll(() => ctx.electronApp.evaluate(() => {
+      const d = globalThis.__ux01HeldSnapshot;
+      if (!d) return null;
+      return d.notes.find((n) => n.id === 'ux01-other').title;
+    })).toBe('其他便签已改');
+
+    // 独立窗编辑自己 → note:update 立即写盘
+    await noteWin.locator('#dnTitle').fill('独立便签已改');
+    await expect.poll(async () => {
+      const n = (await ux01ReadData(ctx.userDataDir)).notes.find((x) => x.id === 'ux01-pinned');
+      return n && n.title;
+    }).toBe('独立便签已改');
+
+    // 恢复真实 data:save，并重放主窗那张旧快照（应为被延迟/交错落盘的保存）
+    await ctx.electronApp.evaluate(({ ipcMain }) => {
+      ipcMain.removeHandler('data:save');
+      ipcMain.handle('data:save', globalThis.__ux01RealSave);
+    });
+    const heldSnapshot = await ctx.electronApp.evaluate(() => globalThis.__ux01HeldSnapshot);
+    await ctx.win.evaluate((snapshot) => window.api.saveData(snapshot), heldSnapshot);
+
+    const saved = await ux01ReadData(ctx.userDataDir);
+    expect(saved.notes.find((n) => n.id === 'ux01-other').title).toBe('其他便签已改');
+    expect(saved.notes.find((n) => n.id === 'ux01-pinned').title).toBe('独立便签已改');
+
+    // 重启后两者都在：其他便签回到画布；仍钉桌的独立便签以最新标题重新开窗
+    await ctx.electronApp.evaluate(() => process.exit(0)).catch(() => {});
+    second = await openApp({ userDataDir: ctx.userDataDir, expectRecovery: true });
+    if (await second.win.locator('#cmOk').count()) await stableClick(second.win.locator('#cmOk'));
+    await expect(second.win.locator('#board .note[data-id="ux01-other"] .note-title')).toHaveValue('其他便签已改');
+    await expect.poll(async () => {
+      const wins = await second.electronApp.windows();
+      const nw = wins.find((w) => w.url().includes('note.html'));
+      return nw ? nw.locator('#dnTitle').inputValue() : null;
+    }).toBe('独立便签已改');
+  } finally {
+    if (second) await closeApp(second);
+    else {
+      await ctx.electronApp.evaluate(({ ipcMain }) => {
+        if (globalThis.__ux01RealSave) {
+          ipcMain.removeHandler('data:save');
+          ipcMain.handle('data:save', globalThis.__ux01RealSave);
+        }
+      }).catch(() => {});
+      await closeApp(ctx);
+    }
+  }
+});
+
+test('UX-01 独立便签保存抛错时可见警告保留脏内容，恢复后重试落盘并清除警告', async () => {
+  const ctx = await openApp();
+  try {
+    await stableClick(ctx.win.locator('#btnAdd'));
+    await ctx.win.locator('#board .note .note-title').first().fill('重试前标题');
+    const noteWin = await ux01PinFirstCard(ctx);
+    await expect(noteWin.locator('#dnTitle')).toHaveValue('重试前标题');
+
+    // note:update 抛错（拒绝/异常分支），保留真实处理器用于稍后恢复
+    await ctx.electronApp.evaluate(({ ipcMain }) => {
+      globalThis.__ux01RealNoteUpdate = ipcMain._invokeHandlers.get('note:update');
+      ipcMain.removeHandler('note:update');
+      ipcMain.handle('note:update', () => { throw new Error('模拟后端拒绝'); });
+    });
+    await noteWin.locator('#dnTitle').fill('重试后标题');
+    await stableClick(noteWin.locator('#dnUnpin'));
+    await expect(noteWin.locator('#dnUnpin')).toHaveText('⚠');
+    await expect(noteWin.locator('#dnUnpin')).toHaveAttribute('title', '保存失败，请检查磁盘/权限');
+    await expect(noteWin.locator('#dnTitle')).toHaveValue('重试后标题');
+    expect(await ctx.electronApp.evaluate(({ BrowserWindow }) => BrowserWindow.getAllWindows().length)).toBe(2);
+    expect((await ux01ReadData(ctx.userDataDir)).notes[0].title).toBe('重试前标题');
+
+    // 后端恢复：重挂真实处理器，再点取消钉住重试
+    await ctx.electronApp.evaluate(({ ipcMain }) => {
+      ipcMain.removeHandler('note:update');
+      ipcMain.handle('note:update', globalThis.__ux01RealNoteUpdate);
+    });
+    await stableClick(noteWin.locator('#dnUnpin'));
+    await expect.poll(async () => (await ux01ReadData(ctx.userDataDir)).notes[0].title).toBe('重试后标题');
+    await expect.poll(async () => ctx.electronApp.evaluate(({ BrowserWindow }) =>
+      BrowserWindow.getAllWindows().length)).toBe(1);
+    await expect(ctx.win.locator('#board .note .note-title').first()).toHaveValue('重试后标题');
+  } finally { await closeApp(ctx); }
+});
+
+test('UX-01 确认导入同 ID 钉桌便签后以导入内容落盘，旧独立窗被作废不再覆盖', async () => {
+  const now = Date.now();
+  // desktopPin:true → 启动即打开独立窗，持有「导入前」内容；导入备份会用同 ID、同 desktopPin
+  // 但标题/正文不同来替换它（不把 desktopPin 改成 false 来回避问题）。
+  const mk = (title, content) => ({
+    id: 'ux01-import', title, content, type: 'note', items: [], images: [], files: [], tables: [],
+    color: '#93f1ce', textColor: null, groupId: null, pinned: false, desktopPin: true, reminder: null,
+    x: 40, y: 40, positionAll: { x: 40, y: 40 }, w: 220, h: 160, z: 1, createdAt: now, updatedAt: now
+  });
+  const seed = {
+    version: 2, settings: { viewMode: 'board', lastSeenVersion: EXPECTED_VERSION }, groups: [], trash: [],
+    notes: [mk('导入前标题', '导入前正文')]
+  };
+  const ctx = await openApp({ seed });
+  try {
+    // 旧的独立窗（同 ID、旧内容）
+    let oldWin = null;
+    await expect.poll(async () => {
+      const wins = await ctx.electronApp.windows();
+      oldWin = wins.find((w) => w.url().includes('note.html')) || null;
+      return !!oldWin;
+    }).toBe(true);
+    await oldWin.waitForLoadState('domcontentloaded');
+    await expect(oldWin.locator('#dnTitle')).toHaveValue('导入前标题');
+    await ctx.electronApp.evaluate(({ BrowserWindow }) => {
+      globalThis.__ux01OldSender = BrowserWindow.getAllWindows().find((w) => w.webContents.getURL().includes('note.html')).webContents;
+    });
+    await ctx.win.evaluate(() => {
+      const originalToast = toast;
+      globalThis.__ux01Toasts = [];
+      toast = (message) => { __ux01Toasts.push(message); originalToast(message); };
+      window.api.captureDraft({ settings: state.settings, groups: state.groups, notes: state.notes, trash: state.trash });
+    });
+
+    // 仅替换 data:import 处理器（不弹真实文件对话框），模拟用户选中同 ID 的备份文件
+    const imported = {
+      version: 2, settings: { viewMode: 'board', lastSeenVersion: EXPECTED_VERSION }, groups: [], trash: [],
+      notes: [mk('导入后标题', '导入后正文')]
+    };
+    await ctx.electronApp.evaluate(({ ipcMain }, data) => {
+      globalThis.__ux01RealImport = ipcMain._invokeHandlers.get('data:import');
+      ipcMain.removeHandler('data:import');
+      ipcMain.handle('data:import', () => ({ ok: true, data }));
+      const realSave = ipcMain._invokeHandlers.get('data:save');
+      ipcMain.removeHandler('data:save');
+      ipcMain.handle('data:save', async (event, snapshot, opts) => {
+        if (opts && opts.replace) {
+          globalThis.__ux01ReplaceStarted = true;
+          await new Promise((resolve) => { globalThis.__ux01ReleaseImport = resolve; });
+        }
+        return realSave(event, snapshot, opts);
+      });
+    }, imported);
+
+    // 走真实 btnImport + 确认框：用户确认导入
+    await stableClick(ctx.win.locator('#btnSettings'));
+    await stableClick(ctx.win.locator('.sp-nav-item[data-tab="backup"]'));
+    await stableClick(ctx.win.locator('#btnImport'));
+    await expect(ctx.win.locator('#cmOk')).toBeVisible();
+    await stableClick(ctx.win.locator('#cmOk'));
+
+    await expect.poll(() => ctx.electronApp.evaluate(() => !!globalThis.__ux01ReplaceStarted)).toBe(true);
+    expect(await ctx.win.evaluate(() => __ux01Toasts.includes(t('toast_imported')))).toBe(false);
+    expect((await ux01ReadData(ctx.userDataDir)).notes[0].title).toBe('导入前标题');
+    // 保存交错不应取消已发出的显式替换请求。
+    await ctx.win.evaluate(() => saveNow());
+    await ctx.electronApp.evaluate(() => globalThis.__ux01ReleaseImport());
+    await expect.poll(() => ctx.win.evaluate(() => __ux01Toasts.includes(t('toast_imported')))).toBe(true);
+
+    // 用户确认后导入内容必须落盘（合并未被 replace 区分时这里会停在被顶掉的「导入前标题」）
+    await expect.poll(async () => {
+      const n = (await ux01ReadData(ctx.userDataDir)).notes.find((x) => x.id === 'ux01-import');
+      return n && { title: n.title, content: n.content, desktopPin: n.desktopPin };
+    }).toEqual({ title: '导入后标题', content: '导入后正文', desktopPin: true });
+
+    // 旧独立窗被作废关闭；仍钉桌的便签按导入内容重开，且只剩一扇
+    await expect.poll(async () => {
+      const wins = await ctx.electronApp.windows();
+      return wins.filter((w) => w.url().includes('note.html')).length;
+    }).toBe(1);
+    const wins = await ctx.electronApp.windows();
+    const reopened = wins.find((w) => w.url().includes('note.html'));
+    await expect(reopened.locator('#dnTitle')).toHaveValue('导入后标题');
+    await expect(reopened.locator('#dnText')).toContainText('导入后正文');
+
+    // 旧窗已关闭，不能再写回；等待超过防抖/交错窗口后磁盘仍是导入内容
+    await ctx.win.waitForTimeout(700);
+    const still = (await ux01ReadData(ctx.userDataDir)).notes.find((x) => x.id === 'ux01-import');
+    expect(still.title).toBe('导入后标题');
+    expect(still.content).toBe('导入后正文');
+    // 同 ID 新窗口已创建后，真实旧 sender 的迟到正式保存和恢复草稿仍应被拒绝。
+    const rejected = await ctx.electronApp.evaluate(async ({ ipcMain }, staleNote) => {
+      const event = { sender: globalThis.__ux01OldSender };
+      ipcMain.listeners('note:draft')[0](event, staleNote);
+      const update = await ipcMain._invokeHandlers.get('note:update')(event, staleNote);
+      return { draft: event.returnValue, update };
+    }, { ...still, title: '旧窗口迟到标题' });
+    expect(rejected).toEqual({ draft: false, update: false });
+    expect((await ux01ReadData(ctx.userDataDir)).notes[0].title).toBe('导入后标题');
+    const recovery = await fs.readFile(path.join(ctx.userDataDir, 'notes-recovery.json'), 'utf8').catch((err) => {
+      if (err.code === 'ENOENT') return '{}';
+      throw err;
+    });
+    expect(recovery).not.toContain('旧窗口迟到标题');
+    await reopened.locator('#dnTitle').fill('新窗口继续编辑');
+    await expect.poll(async () => (await ux01ReadData(ctx.userDataDir)).notes[0].title).toBe('新窗口继续编辑');
+  } finally {
+    await ctx.electronApp.evaluate(({ ipcMain }) => {
+      if (globalThis.__ux01RealImport) {
+        ipcMain.removeHandler('data:import');
+        ipcMain.handle('data:import', globalThis.__ux01RealImport);
+        delete globalThis.__ux01RealImport;
+      }
+    }).catch(() => {});
+    await closeApp(ctx);
+  }
+});
+
+test('UX-01 坏档导入失败保持只读，重试成功落盘后才解除保护', async () => {
+  const bad = '{broken-import-fixture';
+  const ctx = await openApp({ seedRaw: bad });
+  try {
+    await expect(ctx.win.locator('body')).toHaveClass(/data-readonly/);
+    const imported = { version: 2, settings: { lastSeenVersion: EXPECTED_VERSION }, groups: [], trash: [],
+      notes: [{ id: 'import-recovery', title: '备份恢复标题', content: '备份恢复正文', type: 'note', items: [] }] };
+    await ctx.electronApp.evaluate(({ ipcMain }, data) => {
+      globalThis.__ux01RecoverySave = ipcMain._invokeHandlers.get('data:save');
+      ipcMain.removeHandler('data:import');
+      ipcMain.handle('data:import', () => ({ ok: true, data }));
+      ipcMain.removeHandler('data:save');
+      ipcMain.handle('data:save', () => { throw new Error('模拟恢复写入失败'); });
+    }, imported);
+    await expect(ctx.win.locator('#btnDataRecovery')).toHaveAccessibleName('导入备份…');
+    await ctx.win.locator('#btnDataRecovery').focus();
+    await ctx.win.keyboard.press('Enter');
+    await expect(ctx.win.locator('#settingsPanel')).toBeVisible();
+    await expect(ctx.win.locator('#btnImport')).toBeVisible();
+    await stableClick(ctx.win.locator('#btnImport'));
+    await stableClick(ctx.win.locator('#cmOk'));
+    await expect(ctx.win.locator('#toast')).toContainText('保存失败');
+    await expect(ctx.win.locator('body')).toHaveClass(/data-readonly/);
+    expect(await fs.readFile(path.join(ctx.userDataDir, 'notes-data.json'), 'utf8')).toBe(bad);
+    expect(await ctx.win.evaluate(() => state.notes.length)).toBe(0);
+    await ctx.electronApp.evaluate(({ ipcMain }) => {
+      ipcMain.removeHandler('data:save');
+      ipcMain.handle('data:save', globalThis.__ux01RecoverySave);
+    });
+    await stableClick(ctx.win.locator('#btnImport'));
+    await stableClick(ctx.win.locator('#cmOk'));
+    await expect(ctx.win.locator('#toast')).toContainText('导入成功');
+    await expect(ctx.win.locator('body')).not.toHaveClass(/data-readonly/);
+    expect((await ux01ReadData(ctx.userDataDir)).notes[0].title).toBe('备份恢复标题');
+    expect(await ctx.win.evaluate(() => state.notes[0].title)).toBe('备份恢复标题');
+  } finally {
+    await ctx.electronApp.evaluate(({ ipcMain }) => {
+      if (globalThis.__ux01RecoverySave) {
+        ipcMain.removeHandler('data:save');
+        ipcMain.handle('data:save', globalThis.__ux01RecoverySave);
+      }
+    }).catch(() => {});
+    await closeApp(ctx);
+  }
+});
+
+// 取消/失败导入不得关闭独立窗或丢弃待保存编辑：只有确认后成功落盘才允许作废旧窗口。
+test('UX-01 取消导入时保留独立窗与磁盘存档不变', async () => {
+  const now = Date.now();
+  const mk = (title, content) => ({
+    id: 'ux01-cancel', title, content, type: 'note', items: [], images: [], files: [], tables: [],
+    color: '#93f1ce', textColor: null, groupId: null, pinned: false, desktopPin: true, reminder: null,
+    x: 40, y: 40, positionAll: { x: 40, y: 40 }, w: 220, h: 160, z: 1, createdAt: now, updatedAt: now
+  });
+  const seed = {
+    version: 2, settings: { viewMode: 'board', lastSeenVersion: EXPECTED_VERSION }, groups: [], trash: [],
+    notes: [mk('取消前标题', '取消前正文')]
+  };
+  const ctx = await openApp({ seed });
+  try {
+    await expect.poll(async () => {
+      const wins = await ctx.electronApp.windows();
+      return wins.filter((w) => w.url().includes('note.html')).length;
+    }).toBe(1);
+    const imported = {
+      version: 2, settings: { viewMode: 'board', lastSeenVersion: EXPECTED_VERSION }, groups: [], trash: [],
+      notes: [mk('取消后标题', '取消后正文')]
+    };
+    await ctx.electronApp.evaluate(({ ipcMain }, data) => {
+      globalThis.__ux01CancelRealImport = ipcMain._invokeHandlers.get('data:import');
+      ipcMain.removeHandler('data:import');
+      ipcMain.handle('data:import', () => ({ ok: true, data }));
+    }, imported);
+
+    await stableClick(ctx.win.locator('#btnSettings'));
+    await stableClick(ctx.win.locator('.sp-nav-item[data-tab="backup"]'));
+    await stableClick(ctx.win.locator('#btnImport'));
+    await expect(ctx.win.locator('#cmCancel')).toBeVisible();
+    await stableClick(ctx.win.locator('#cmCancel'));
+
+    await ctx.win.waitForTimeout(700);
+    const onDisk = (await ux01ReadData(ctx.userDataDir)).notes.find((x) => x.id === 'ux01-cancel');
+    expect(onDisk.title).toBe('取消前标题');
+    const wins = await ctx.electronApp.windows();
+    const noteWins = wins.filter((w) => w.url().includes('note.html'));
+    expect(noteWins.length).toBe(1);
+    await expect(noteWins[0].locator('#dnTitle')).toHaveValue('取消前标题');
+  } finally {
+    await ctx.electronApp.evaluate(({ ipcMain }) => {
+      if (globalThis.__ux01CancelRealImport) {
+        ipcMain.removeHandler('data:import');
+        ipcMain.handle('data:import', globalThis.__ux01CancelRealImport);
+        delete globalThis.__ux01CancelRealImport;
+      }
+    }).catch(() => {});
+    await closeApp(ctx);
+  }
+});
+
+test('UX-01 导入落盘失败时保留独立窗/存档，且不覆盖合法恢复草稿', async () => {
+  const now = Date.now();
+  const mk = (title, content) => ({
+    id: 'ux01-fail', title, content, type: 'note', items: [], images: [], files: [], tables: [],
+    color: '#93f1ce', textColor: null, groupId: null, pinned: false, desktopPin: true, reminder: null,
+    x: 40, y: 40, positionAll: { x: 40, y: 40 }, w: 220, h: 160, z: 1, createdAt: now, updatedAt: now
+  });
+  const seed = {
+    version: 2, settings: { viewMode: 'board', lastSeenVersion: EXPECTED_VERSION }, groups: [], trash: [],
+    notes: [mk('失败前标题', '失败前正文')]
+  };
+  const ctx = await openApp({ seed });
+  const readRecovery = async () => {
+    try { return JSON.parse(await fs.readFile(path.join(ctx.userDataDir, 'notes-recovery.json'), 'utf8')); }
+    catch (err) { if (err.code === 'ENOENT') return null; throw err; }
+  };
+  try {
+    await ctx.win.evaluate(() => {
+      const originalToast = toast;
+      globalThis.__ux01Toasts = [];
+      toast = (message) => { __ux01Toasts.push(message); originalToast(message); };
+    });
+    await expect.poll(async () => {
+      const wins = await ctx.electronApp.windows();
+      return wins.filter((w) => w.url().includes('note.html')).length;
+    }).toBe(1);
+    // 启动完成后再写入「合法恢复草稿」（不触发启动恢复弹窗），用于验证失败导入不会把它顶掉。
+    await ctx.win.evaluate(() => {
+      const snapshot = JSON.parse(JSON.stringify({ settings: state.settings, groups: state.groups, notes: state.notes, trash: state.trash }));
+      snapshot.notes[0].title = '合法草稿标题';
+      snapshot.notes[0].content = '合法草稿正文';
+      globalThis.__ux01LegitToken = window.api.captureDraft(snapshot);
+    });
+    const legit = await readRecovery();
+    expect(legit.main.data.notes[0].title).toBe('合法草稿标题');
+    // 备份与当前便签同 ID、不同标题/正文，且故意省略 positionAll（导入时需被就地补全）。
+    const imported = {
+      version: 2, settings: { viewMode: 'board', lastSeenVersion: EXPECTED_VERSION }, groups: [], trash: [],
+      notes: [mk('失败后标题', '失败后正文')]
+    };
+    delete imported.notes[0].positionAll;
+    await ctx.electronApp.evaluate(({ ipcMain }, data) => {
+      globalThis.__ux01FailRealImport = ipcMain._invokeHandlers.get('data:import');
+      globalThis.__ux01FailRealSave = ipcMain._invokeHandlers.get('data:save');
+      ipcMain.removeHandler('data:import');
+      ipcMain.handle('data:import', () => ({ ok: true, data }));
+    }, imported);
+
+    await stableClick(ctx.win.locator('#btnSettings'));
+    await stableClick(ctx.win.locator('.sp-nav-item[data-tab="backup"]'));
+    // 让确认后的 replace 保存失败（写盘被拒），验证不会作废独立窗、不清合法草稿、不留下未提交替换草稿
+    await ctx.electronApp.evaluate(({ ipcMain }) => {
+      ipcMain.removeHandler('data:save');
+      ipcMain.handle('data:save', () => { throw new Error('模拟写入失败'); });
+    });
+    await stableClick(ctx.win.locator('#btnImport'));
+    await expect(ctx.win.locator('#cmOk')).toBeVisible();
+    await stableClick(ctx.win.locator('#cmOk'));
+
+    await ctx.win.waitForTimeout(700);
+    // 原始内存/磁盘/独立窗均不变
+    const onDisk = (await ux01ReadData(ctx.userDataDir)).notes.find((x) => x.id === 'ux01-fail');
+    expect(onDisk.title).toBe('失败前标题');
+    const wins = await ctx.electronApp.windows();
+    const noteWins = wins.filter((w) => w.url().includes('note.html'));
+    expect(noteWins.length).toBe(1);
+    await expect(noteWins[0].locator('#dnTitle')).toHaveValue('失败前标题');
+    expect(await ctx.win.evaluate(() => state.notes[0].title)).toBe('失败前标题');
+    expect(await ctx.win.evaluate(() => __ux01Toasts.includes(t('toast_imported')))).toBe(false);
+    await expect(ctx.win.locator('#toast')).toContainText('保存失败');
+    // 合法恢复草稿原样保留，且不含任何导入内容（initAllLayout 不得在 replace 提交前 captureDraft）
+    const afterFail = await readRecovery();
+    expect(afterFail.main.data.notes[0].title).toBe('合法草稿标题');
+    expect(afterFail.main.data.notes[0].content).toBe('合法草稿正文');
+    expect(Object.keys(afterFail.notes).length).toBe(0);
+    expect(JSON.stringify(afterFail)).not.toContain('失败后标题');
+    expect(JSON.stringify(afterFail)).not.toContain('失败后正文');
+
+    // 恢复真实 data:save 后重试导入：旧备份（缺 positionAll）应成功补位落盘，恢复草稿不再回放导入前内容
+    await ctx.electronApp.evaluate(({ ipcMain }) => {
+      ipcMain.removeHandler('data:save');
+      ipcMain.handle('data:save', globalThis.__ux01FailRealSave);
+    });
+    await stableClick(ctx.win.locator('#btnImport'));
+    await expect(ctx.win.locator('#cmOk')).toBeVisible();
+    await stableClick(ctx.win.locator('#cmOk'));
+    await expect.poll(() => ctx.win.evaluate(() => __ux01Toasts.includes(t('toast_imported')))).toBe(true);
+    await expect.poll(async () => {
+      const n = (await ux01ReadData(ctx.userDataDir)).notes.find((x) => x.id === 'ux01-fail');
+      return n && { title: n.title, content: n.content, hasPositionAll: !!n.positionAll && typeof n.positionAll.x === 'number' && typeof n.positionAll.y === 'number' };
+    }).toEqual({ title: '失败后标题', content: '失败后正文', hasPositionAll: true });
+    await expect.poll(() => ctx.win.evaluate(async () => (await window.api.loadData()).recovery)).toBe(null);
+  } finally {
+    await ctx.electronApp.evaluate(({ ipcMain }) => {
+      if (globalThis.__ux01FailRealImport) {
+        ipcMain.removeHandler('data:import');
+        ipcMain.handle('data:import', globalThis.__ux01FailRealImport);
+        delete globalThis.__ux01FailRealImport;
+      }
+      if (globalThis.__ux01FailRealSave) {
+        ipcMain.removeHandler('data:save');
+        ipcMain.handle('data:save', globalThis.__ux01FailRealSave);
+        delete globalThis.__ux01FailRealSave;
+      }
+    }).catch(() => {});
+    await closeApp(ctx);
+  }
+});
+
+// —— P0-04：导入内容渲染注入 + 导航边界 ——
+// 恶意但形状合法的种子数据：注入串只用无害标记（pwn-*）与 https 字符串，不发生任何网络/OS 调用。
+function p004HostileNote(id, title, desktopPin) {
+  const now = Date.now();
+  const imgW = '200" ><span id="pwn-img-marker"></span><a id="pwn-img-link" href="https://evil.example/img">x</a><img src="x';
+  const bw = '3"><span id="pwn-tbl-marker"></span><a id="pwn-tbl-link" href="https://evil.example/tbl">t</a>';
+  const span = '1"><span id="pwn-span-marker"></span>';
+  return {
+    id, title, content: '正文[[img:i1]][[file:f1]][[table:t1]]', type: 'note',
+    items: [],
+    files: [{ id: 'f1', path: 'C:/notes/ok <b>escaped</b>.txt', isDir: false }],
+    images: [{ id: 'i1', src: 'note-img://local/a.png', w: imgW }],
+    tables: [{
+      id: 't1', rows: 1, cols: 1, cells: [['单元格']], borderWidth: bw, borderColor: 'rgba(0,0,0,0.7)',
+      merges: [{ r: 0, c: 0, rowspan: span, colspan: 1 }], diagonals: []
+    }],
+    color: '#93f1ce', textColor: null, groupId: 'g1', pinned: false, desktopPin: !!desktopPin, reminder: null,
+    x: 40, y: 40, positionAll: { x: 40, y: 40 }, w: 220, h: 160, z: 1, createdAt: now, updatedAt: now
+  };
+}
+const P004_MARKERS = [
+  'pwn-img-marker', 'pwn-img-link', 'pwn-tbl-marker', 'pwn-tbl-link', 'pwn-span-marker', 'pwn-group-marker',
+  'pwn-id-marker', 'pwn-color-marker', 'pwn-textcolor-marker', 'pwn-fontsize-marker', 'pwn-hl-marker',
+  'pwn-theme-bg-marker', 'pwn-theme-accent-marker', 'pwn-theme-mini-marker',
+  'pwn-tbl-bcolor-marker', 'pwn-tbl-bwidth-marker', 'pwn-tbl-tcolor-marker', 'pwn-tbl-fsize-marker',
+  'pwn-diag-color-marker', 'pwn-diag-size-marker'
+];
+
+// 预置真实图片文件，确保媒体引用在渲染后仍保留（不被“图片缺失”替换）。
+async function p004UserDataWithImage() {
+  const dir = await fs.mkdtemp(path.join(os.tmpdir(), 'mynotes-e2e-'));
+  await fs.mkdir(path.join(dir, 'images'), { recursive: true });
+  await fs.writeFile(path.join(dir, 'images', 'a.png'), Buffer.from(UX01_PNG_1PX.split(',')[1], 'base64'));
+  return dir;
+}
+
+async function p004AssertNoInjection(page) {
+  const r = await page.evaluate((ids) => ({
+    markers: ids.filter((id) => !!document.getElementById(id)),
+    hrefs: document.querySelectorAll('a[href]').length,
+    handlers: Array.from(document.querySelectorAll('*')).filter((el) => Array.from(el.attributes).some((a) => /^on/i.test(a.name))).length
+  }), P004_MARKERS);
+  expect(r.markers).toEqual([]);
+  expect(r.hrefs).toBe(0);
+  expect(r.handlers).toBe(0);
+}
+
+// 用真实鼠标点击，避免 Playwright locator 对被 will-navigate 拦截的“挂起导航”等待超时。
+// 坐标经 evaluate 计算，绕开 locator 的导航等待。
+async function p004MouseClick(page, selector) {
+  const box = await page.evaluate((sel) => {
+    const el = document.querySelector(sel);
+    if (!el) return null;
+    const r = el.getBoundingClientRect();
+    return { x: r.left + r.width / 2, y: r.top + r.height / 2 };
+  }, selector);
+  if (!box) throw new Error('p004MouseClick: element not found: ' + selector);
+  await page.mouse.click(box.x, box.y);
+}
+
+async function p004WaitForElement(page, selector) {
+  await expect.poll(() => page.evaluate((sel) => !!document.querySelector(sel), selector)).toBe(true);
+}
+
+test('P0-04 恶意导入字段在各视图/独立窗均不注入标记，合法内容保留', async () => {
+  const seed = {
+    version: 2, settings: { viewMode: 'board', lastSeenVersion: EXPECTED_VERSION },
+    groups: [{ id: 'g1', name: '安全分组', color: '#0f0" ><span id="pwn-group-marker"></span>' }],
+    trash: [], notes: [p004HostileNote('p004-hostile', '正常标题', false), p004HostileNote('p004-hostile-pin', '钉桌标题', true)]
+  };
+  const ctx = await openApp({ seed, userDataDir: await p004UserDataWithImage() });
+  try {
+    // 便签视图：标题保留，无注入
+    await expect(ctx.win.locator('#board .note .note-title').first()).toHaveValue('正常标题');
+    await p004AssertNoInjection(ctx.win);
+    // 图片宽度回退 200px，src 保留
+    await expect(ctx.win.locator('#board .note .inline-img img').first()).toHaveAttribute('style', /width:200px/);
+
+    // 备忘录视图
+    await stableClick(ctx.win.locator('#viewMemo'));
+    await expect(ctx.win.locator('.memo-row')).toHaveCount(1);
+    await p004AssertNoInjection(ctx.win);
+
+    // 文档视图：选择器列表 + 文档编辑器
+    await stableClick(ctx.win.locator('#viewDoc'));
+    await expect(ctx.win.locator('.doc-pick-item')).toHaveCount(1);
+    await p004AssertNoInjection(ctx.win);
+    await stableClick(ctx.win.locator('.doc-pick-item').first());
+    await expect(ctx.win.locator('#docContent')).toBeVisible();
+    await p004AssertNoInjection(ctx.win);
+
+    // 分组 chip（g.color 直接进 style）无注入；再打开「加入分组」弹窗覆盖另一处 sink
+    await p004AssertNoInjection(ctx.win);
+    await ctx.win.evaluate(() => { const n = state.notes.find((x) => x.id === 'p004-hostile'); openGroupPop(document.body, n); });
+    await expect(ctx.win.locator('.color-pop').first()).toBeVisible();
+    await p004AssertNoInjection(ctx.win);
+    await ctx.win.evaluate(() => closePops());
+
+    // 独立便签窗：标题与内容保留，无注入
+    await expect.poll(async () => (await ctx.electronApp.windows()).filter((w) => w.url().includes('note.html')).length).toBe(1);
+    const noteWin = (await ctx.electronApp.windows()).find((w) => w.url().includes('note.html'));
+    await expect(noteWin.locator('#dnTitle')).toHaveValue('钉桌标题');
+    await expect(noteWin.locator('#dnText')).toContainText('单元格');
+    await p004AssertNoInjection(noteWin);
+  } finally { await closeApp(ctx); }
+});
+
+test('P0-04 渲染 sink：id/颜色/字号/主题/表格属性转义，无注入标记', async () => {
+  const now = Date.now();
+  const mkNote = (id, title, desktopPin, tables) => ({
+    id, title, content: '[[table:t1]]', type: 'note', items: [], images: [], files: [],
+    tables: tables || [], color: '#93f1ce', textColor: null, groupId: null, pinned: false,
+    desktopPin: !!desktopPin, reminder: null, x: 40, y: 40, positionAll: { x: 40, y: 40 }, w: 220, h: 160, z: 1,
+    createdAt: now, updatedAt: now
+  });
+  const hostileTable = () => [{
+    id: 't1', rows: 1, cols: 1, cells: [['x']],
+    borderColor: '#808080" ><span id="pwn-tbl-bcolor-marker"></span>',
+    borderWidth: '3"><span id="pwn-tbl-bwidth-marker"></span>',
+    textColor: '#808080" ><span id="pwn-tbl-tcolor-marker"></span>',
+    fontSize: '12"><span id="pwn-tbl-fsize-marker"></span>',
+    merges: [], diagonals: [{ r: 0, c: 0, dir: 'tlbr', tColor: '#808080" ><span id="pwn-diag-color-marker"></span>', tSize: '12"><span id="pwn-diag-size-marker"></span>' }]
+  }];
+  const seed = {
+    version: 2, settings: { viewMode: 'board', lastSeenVersion: EXPECTED_VERSION, themeId: 'mint', customThemes: [] },
+    groups: [], trash: [],
+    notes: [
+      mkNote('p004-normal', '正常编辑器', false, []),
+      mkNote('p004-sink', '填充', false, []),
+      mkNote('p004-pin', '钉桌表', true, hostileTable())
+    ]
+  };
+  const ctx = await openApp({ seed });
+  try {
+    const hostileId = 'p004-sink"><span id="pwn-id-marker"></span>';
+    await ctx.win.evaluate((hid) => {
+      const n = state.notes.find((x) => x.id === 'p004-sink');
+      n.id = hid;
+      n.color = '#abc" ><span id="pwn-color-marker"></span>';
+      n.textColor = '#def" ><span id="pwn-textcolor-marker"></span>';
+      n.fontSize = '14"><span id="pwn-fontsize-marker"></span>';
+      state.settings.highlightColor = '#fff59d" ><span id="pwn-hl-marker"></span>';
+      state.settings.customThemes = [{
+        id: 'ct-hostile', name: '恶意主题', light: false,
+        bg: '#111" ><span id="pwn-theme-bg-marker"></span>',
+        accent: '#222" ><span id="pwn-theme-accent-marker"></span>',
+        mini: ['#333" ><span id="pwn-theme-mini-marker"></span>', '#444']
+      }];
+      setViewMode('doc');
+      renderThemePanel();
+    }, hostileId);
+
+    // 文档选择器：data-id 属性安全往返（仍能读到恶意原值），样式被清洗，无注入
+    await expect.poll(() => ctx.win.evaluate(() => document.querySelectorAll('.doc-pick-item').length)).toBe(2);
+    const dsIds = await ctx.win.evaluate(() => Array.from(document.querySelectorAll('.doc-pick-item')).map((e) => e.dataset.id));
+    expect(dsIds).toContain(hostileId);
+    const sinkStyle = await ctx.win.evaluate(() => {
+      const el = Array.from(document.querySelectorAll('.doc-pick-item')).find((e) => e.dataset.id.indexOf('pwn-id-marker') !== -1);
+      return el ? el.getAttribute('style') : null;
+    });
+    expect(sinkStyle).not.toMatch(/[<>"]/);
+    expect(sinkStyle).toContain('#abc');
+    await p004AssertNoInjection(ctx.win);
+
+    // 文档编辑器使用正常 id 便签：合法颜色仍显示
+    await ctx.win.evaluate(() => { docNoteId = 'p004-normal'; setViewMode('doc'); });
+    await expect(ctx.win.locator('#docContent')).toBeVisible();
+    const edStyle = await ctx.win.evaluate(() => { const el = document.querySelector('.doc-editor'); return el ? el.getAttribute('style') : null; });
+    expect(edStyle).toContain('#93f1ce');
+    await p004AssertNoInjection(ctx.win);
+
+    // 自定义主题卡片（bg/mini）与主题编辑器（bg/accent/mini）：合法预设仍显示真实颜色
+    await expect(ctx.win.locator('.theme-card.custom')).toHaveCount(1);
+    const presetBg = await ctx.win.evaluate(() => {
+      const c = document.querySelector('.theme-card:not(.custom):not(.add-card) .preview');
+      return c ? getComputedStyle(c).backgroundColor : '';
+    });
+    expect(presetBg).toMatch(/rgb/);
+    await p004AssertNoInjection(ctx.win);
+    await ctx.win.evaluate(() => { openThemeEditor((state.settings.customThemes || [])[0]); });
+    await expect(ctx.win.locator('#teBg')).toBeVisible();
+    const te = await ctx.win.evaluate(() => ({
+      bg: document.querySelector('#teBg').getAttribute('value'),
+      accent: document.querySelector('#teAccent').getAttribute('value'),
+      mini1: document.querySelector('#teMini1').getAttribute('value')
+    }));
+    [te.bg, te.accent, te.mini1].forEach((v) => expect(v).not.toMatch(/[<>"]/));
+    expect(te.bg).toContain('#111');
+    expect(te.mini1).toContain('#333');
+    await p004AssertNoInjection(ctx.win);
+    await ctx.win.evaluate(() => document.querySelectorAll('[data-modal-overlay]').forEach((e) => e.remove()));
+
+    // 独立窗表格属性/斜线弹窗：恶意字段被清洗，合法默认值显示
+    await expect.poll(async () => (await ctx.electronApp.windows()).filter((w) => w.url().includes('note.html')).length).toBe(1);
+    const noteWin = (await ctx.electronApp.windows()).find((w) => w.url().includes('note.html'));
+    await noteWin.waitForLoadState('domcontentloaded');
+    await expect(noteWin.locator('#dnTitle')).toHaveValue('钉桌表');
+    await noteWin.evaluate(() => { openTableSettingsDialog(note.tables[0]); });
+    await expect(noteWin.locator('#tblBWidth')).toBeVisible();
+    const tblAttrs = await noteWin.evaluate(() => ({
+      bcolor: document.querySelector('#tblBColor').getAttribute('value'),
+      bwidth: document.querySelector('#tblBWidth').getAttribute('value'),
+      tcolor: document.querySelector('#tblTColor').getAttribute('value'),
+      tsize: document.querySelector('#tblTSize').getAttribute('value')
+    }));
+    expect(tblAttrs.bwidth).toBe('2');
+    expect(tblAttrs.tsize).toBe('');
+    expect(tblAttrs.bcolor).not.toMatch(/[<>"]/);
+    expect(tblAttrs.tcolor).not.toMatch(/[<>"]/);
+    await p004AssertNoInjection(noteWin);
+    // 关闭表格设置（取消）后打开斜线编辑器
+    await noteWin.evaluate(() => { const b = document.querySelector('#tblSetCancel'); if (b) b.click(); });
+    await noteWin.evaluate(() => { openDiagonalEditor(note.tables[0], 0, 0); });
+    await expect(noteWin.locator('#diagTSize')).toBeVisible();
+    const diagAttrs = await noteWin.evaluate(() => ({
+      color: document.querySelector('#diagTColor').getAttribute('value'),
+      size: document.querySelector('#diagTSize').getAttribute('value')
+    }));
+    expect(diagAttrs.size).toBe('');
+    expect(diagAttrs.color).not.toMatch(/[<>"]/);
+    await p004AssertNoInjection(noteWin);
+  } finally { await closeApp(ctx); }
+});
+
+test('P0-04 主窗/独立窗阻止顶层导航与新窗口，本地重载/query 仍可用', async () => {
+  const seed = {
+    version: 2, settings: { viewMode: 'board', lastSeenVersion: EXPECTED_VERSION }, groups: [], trash: [],
+    notes: [p004HostileNote('p004-hostile', '正常标题', true)]
+  };
+  const ctx = await openApp({ seed });
+  try {
+    const fixture = path.join(ctx.userDataDir, 'p004-fixture.html');
+    await fs.writeFile(fixture, '<!doctype html><title>FIXTURE</title><p>fixture</p>');
+    const fixtureUrl = 'file:///' + fixture.replace(/\\/g, '/');
+    const mainUrl = ctx.win.url();
+
+    // 主进程计数：will-navigate 尝试次数 + 新建窗口次数，证明点击确实触发了导航/开窗请求且被拦截
+    await ctx.electronApp.evaluate(({ app, BrowserWindow }) => {
+      globalThis.__p004Nav = { main: 0, mainFrame: 0, note: 0, noteFrame: 0, created: 0 };
+      const attach = (w) => {
+        const isNote = /note\.html/.test(w.webContents.getURL());
+        w.webContents.on('will-navigate', () => { if (isNote) globalThis.__p004Nav.note++; else globalThis.__p004Nav.main++; });
+        w.webContents.on('will-frame-navigate', () => { if (isNote) globalThis.__p004Nav.noteFrame++; else globalThis.__p004Nav.mainFrame++; });
+      };
+      BrowserWindow.getAllWindows().forEach(attach);
+      app.on('browser-window-created', () => { globalThis.__p004Nav.created++; });
+    });
+    const nav = () => ctx.electronApp.evaluate(() => ({ ...globalThis.__p004Nav }));
+
+    // 主窗：普通锚点点击 -> will-navigate 被观察到，但 URL 不变、API 可用
+    await ctx.win.evaluate((href) => {
+      const a = document.createElement('a'); a.id = 'p004-nav-main'; a.href = href; a.textContent = 'go';
+      a.style.cssText = 'position:fixed;left:4px;bottom:4px;z-index:2147483647;background:#fff;color:#000;padding:6px;font-size:14px;';
+      document.body.appendChild(a);
+    }, fixtureUrl);
+    await p004WaitForElement(ctx.win, '#p004-nav-main');
+    await p004MouseClick(ctx.win, '#p004-nav-main');
+    await ctx.win.waitForTimeout(300);
+    const navAfterMain = await nav();
+    expect(navAfterMain.main + navAfterMain.mainFrame).toBeGreaterThanOrEqual(1); // 守卫确实观察到点击发起的导航
+    expect(ctx.win.url()).toBe(mainUrl);
+    expect(ctx.win.url()).toBe(mainUrl);
+    expect(await ctx.win.evaluate(() => typeof window.api)).toBe('object');
+
+    // target=_blank：点击被观察到、不新建窗口、URL 不变
+    const wc = (await ctx.electronApp.windows()).length;
+    const createdBefore = (await nav()).created;
+    await ctx.win.evaluate((href) => {
+      const a = document.createElement('a'); a.id = 'p004-blank-main'; a.href = href; a.target = '_blank'; a.textContent = 'go';
+      a.style.cssText = 'position:fixed;left:4px;bottom:40px;z-index:2147483647;background:#fff;color:#000;padding:6px;font-size:14px;';
+      a.addEventListener('click', () => { window.__p004BlankMain = true; });
+      document.body.appendChild(a);
+    }, fixtureUrl);
+    await p004MouseClick(ctx.win, '#p004-blank-main');
+    await ctx.win.waitForTimeout(400);
+    expect(await ctx.win.evaluate(() => window.__p004BlankMain === true)).toBe(true);
+    expect((await nav()).created).toBe(createdBefore);
+    expect((await ctx.electronApp.windows()).length).toBe(wc);
+    expect(ctx.win.url()).toBe(mainUrl);
+
+    // window.open：被拒绝（返回空），不新建窗口
+    const openMain = await ctx.win.evaluate((href) => (window.open(href) ? 'opened' : 'denied'), fixtureUrl);
+    await ctx.win.waitForTimeout(400);
+    expect(openMain).toBe('denied');
+    expect((await nav()).created).toBe(createdBefore);
+    expect((await ctx.electronApp.windows()).length).toBe(wc);
+    expect(ctx.win.url()).toBe(mainUrl);
+
+    // 程序化重载不受影响（应用仍可用）
+    await ctx.win.reload();
+    await ctx.win.waitForLoadState('domcontentloaded');
+    await expect(ctx.win.locator('#btnAdd')).toBeVisible();
+    await expect.poll(() => ctx.win.evaluate(() => typeof window.api)).toBe('object');
+
+    // 独立窗：query 加载正常；普通锚点 / _blank / window.open 均被拦截
+    const noteWin = (await ctx.electronApp.windows()).find((w) => w.url().includes('note.html'));
+    expect(noteWin.url()).toContain('note.html?id=');
+    await expect(noteWin.locator('#dnTitle')).toHaveValue('正常标题');
+    const noteUrl = noteWin.url();
+    await noteWin.evaluate((href) => {
+      const a = document.createElement('a'); a.id = 'p004-nav-note'; a.href = href; a.textContent = 'go';
+      a.style.cssText = 'position:fixed;left:4px;bottom:4px;z-index:2147483647;background:#fff;color:#000;padding:6px;font-size:14px;';
+      document.body.appendChild(a);
+    }, fixtureUrl);
+    await p004WaitForElement(noteWin, '#p004-nav-note');
+    await p004MouseClick(noteWin, '#p004-nav-note');
+    await noteWin.waitForTimeout(300);
+    const navAfterNote = await nav();
+    expect(navAfterNote.note + navAfterNote.noteFrame).toBeGreaterThanOrEqual(1); // 独立窗守卫同样观察到导航尝试
+    expect(noteWin.url()).toBe(noteUrl);
+
+    const wc2 = (await ctx.electronApp.windows()).length;
+    const createdBefore2 = (await nav()).created;
+    await noteWin.evaluate((href) => {
+      const a = document.createElement('a'); a.id = 'p004-blank-note'; a.href = href; a.target = '_blank'; a.textContent = 'go';
+      a.style.cssText = 'position:fixed;left:4px;bottom:40px;z-index:2147483647;background:#fff;color:#000;padding:6px;font-size:14px;';
+      a.addEventListener('click', () => { window.__p004BlankNote = true; });
+      document.body.appendChild(a);
+    }, fixtureUrl);
+    await p004MouseClick(noteWin, '#p004-blank-note');
+    await noteWin.waitForTimeout(400);
+    expect(await noteWin.evaluate(() => window.__p004BlankNote === true)).toBe(true);
+    expect((await nav()).created).toBe(createdBefore2);
+    expect((await ctx.electronApp.windows()).length).toBe(wc2);
+    expect(noteWin.url()).toBe(noteUrl);
+
+    const openNote = await noteWin.evaluate((href) => (window.open(href) ? 'opened' : 'denied'), fixtureUrl);
+    await noteWin.waitForTimeout(400);
+    expect(openNote).toBe('denied');
+    expect((await nav()).created).toBe(createdBefore2);
+    expect((await ctx.electronApp.windows()).length).toBe(wc2);
+    expect(noteWin.url()).toBe(noteUrl);
+    await expect.poll(() => noteWin.evaluate(() => { const el = document.querySelector('#dnTitle'); return el ? el.value : null; })).toBe('正常标题');
+  } finally { await closeApp(ctx); }
+});
+
+test('P0-04 open-external 仅放行真实 http(s)，openPath 附件仍放行（mock shell）', async () => {
+  const ctx = await openApp();
+  try {
+    await ctx.electronApp.evaluate(({ shell }) => {
+      globalThis.__p004RealOpenExternal = shell.openExternal;
+      globalThis.__p004RealOpenPath = shell.openPath;
+      globalThis.__p004Opened = [];
+      globalThis.__p004OpenedPath = [];
+      shell.openExternal = async (u) => { globalThis.__p004Opened.push(u); };
+      shell.openPath = async (p) => { globalThis.__p004OpenedPath.push(p); return ''; };
+    });
+
+    const r = await ctx.win.evaluate(async () => ({
+      https: await window.api.openExternal('https://example.com/a'),
+      http: await window.api.openExternal('http://host.example/b'),
+      mailto: await window.api.openExternal('mailto:a@b.c'),
+      file: await window.api.openExternal('file:///C:/Windows/win.ini'),
+      js: await window.api.openExternal('javascript:alert(1)'),
+      ctrl: await window.api.openExternal('https://evil.example/x\ncalc.exe'),
+      nohost: await window.api.openExternal('https://'),
+      opened: await window.api.openFilePath('C:/notes/ok.txt', false)
+    }));
+    expect(r.https).toBe(true);
+    expect(r.http).toBe(true);
+    expect(r.mailto).toBe(false);
+    expect(r.file).toBe(false);
+    expect(r.js).toBe(false);
+    expect(r.ctrl).toBe(false);
+    expect(r.nohost).toBe(false);
+    expect(r.opened && r.opened.ok).toBe(true);
+
+    const recorded = await ctx.electronApp.evaluate(() => ({ opened: globalThis.__p004Opened, paths: globalThis.__p004OpenedPath }));
+    expect(recorded.opened).toEqual(['https://example.com/a', 'http://host.example/b']);
+    expect(recorded.paths).toEqual(['C:/notes/ok.txt']);
+
+    // 被 mock 的 openExternal 抛错时返回 false 且不产生未处理拒绝
+    await ctx.electronApp.evaluate(({ shell }) => { shell.openExternal = async () => { throw new Error('模拟失败'); }; });
+    expect(await ctx.win.evaluate(() => window.api.openExternal('https://example.com/fail'))).toBe(false);
+  } finally {
+    await ctx.electronApp.evaluate(({ shell }) => {
+      if (globalThis.__p004RealOpenExternal) shell.openExternal = globalThis.__p004RealOpenExternal;
+      if (globalThis.__p004RealOpenPath) shell.openPath = globalThis.__p004RealOpenPath;
+      delete globalThis.__p004RealOpenExternal;
+      delete globalThis.__p004RealOpenPath;
+      delete globalThis.__p004Opened;
+      delete globalThis.__p004OpenedPath;
+    }).catch(() => {});
+    await closeApp(ctx);
+  }
+});
+
+test('P0-04 IPC 来源：未注册窗口被拒且无 OS 启动项/shell/写盘/可见性副作用', async () => {
+  const ctx = await openApp();
+  const dataPath = path.join(ctx.userDataDir, 'notes-data.json');
+  const recPath = path.join(ctx.userDataDir, 'notes-recovery.json');
+  const readMaybe = async (p) => { try { return await fs.readFile(p, 'utf8'); } catch (e) { return null; } };
+  try {
+    // mock 外部 OS 副作用：shell 与开机自启动都必须 0 调用
+    await ctx.electronApp.evaluate(({ shell, app, BrowserWindow }) => {
+      globalThis.__p004Shell = { external: [], path: [] };
+      globalThis.__p004Login = { set: 0, get: 0 };
+      globalThis.__p004RealExt = shell.openExternal;
+      globalThis.__p004RealPath = shell.openPath;
+      globalThis.__p004RealSetLogin = app.setLoginItemSettings;
+      globalThis.__p004RealGetLogin = app.getLoginItemSettings;
+      shell.openExternal = async (u) => { globalThis.__p004Shell.external.push(u); };
+      shell.openPath = async (p) => { globalThis.__p004Shell.path.push(p); return ''; };
+      app.setLoginItemSettings = () => { globalThis.__p004Login.set++; };
+      app.getLoginItemSettings = () => { globalThis.__p004Login.get++; return { openAtLogin: false }; };
+      globalThis.__p004MainRef = BrowserWindow.getAllWindows().find((x) => /renderer[\\/]index\.html/.test(x.webContents.getURL()));
+    });
+    const mainBefore = await ctx.electronApp.evaluate(() => ({
+      opacity: globalThis.__p004MainRef.getOpacity(),
+      top: globalThis.__p004MainRef.isAlwaysOnTop(),
+      visible: globalThis.__p004MainRef.isVisible()
+    }));
+
+    // 未注册的隐藏窗口：真实 preload + 应用页面（index.html）
+    await ctx.electronApp.evaluate(({ BrowserWindow }, { preload, page }) => {
+      const w = new BrowserWindow({ show: false, webPreferences: { preload, contextIsolation: true, nodeIntegration: false } });
+      globalThis.__p004RogueWin = w;
+      return w.loadFile(page);
+    }, { preload: path.join(ROOT, 'preload.js'), page: path.join(ROOT, 'renderer', 'index.html') });
+
+    let rogue = null;
+    await expect.poll(async () => {
+      rogue = (await ctx.electronApp.windows()).find((p) => p.url().includes('renderer/index.html') && p !== ctx.win) || null;
+      return !!rogue;
+    }).toBe(true);
+    await expect.poll(() => rogue.evaluate(() => typeof (window.api && window.api.loadData))).toBe('function');
+
+    // 先让合法首启保存/窗口状态落定，再对磁盘做快照
+    await ctx.win.waitForTimeout(900);
+    const diskBefore = { data: await readMaybe(dataPath), recovery: await readMaybe(recPath) };
+
+    const rogueResults = await rogue.evaluate(async () => {
+      const out = {};
+      out.load = await window.api.loadData().then(() => 'resolved', () => 'rejected');
+      out.save = await window.api.saveData({ notes: [] }).then(() => 'resolved', () => 'rejected');
+      out.draft = window.api.captureDraft({ settings: {}, groups: [], notes: [], trash: [] });
+      out.noteUpdate = await window.api.noteUpdate({ id: 'x' }).then((v) => v, () => 'rejected');
+      out.noteDraft = window.api.captureNoteDraft({ id: 'x' });
+      out.fileOpen = await window.api.openFilePath('C:/Windows/win.ini', false).then(() => 'resolved', () => 'rejected');
+      out.openExternal = await window.api.openExternal('https://example.com/').then((v) => v, () => 'rejected');
+      out.fontSize = await window.api.setFontSize(99).then(() => 'resolved', () => 'rejected');
+      out.startup = await window.api.setAutoLaunch(true).then(() => 'resolved', () => 'rejected');
+      // 代表性命中 send 通道：不得改变主窗状态（含可见性）
+      window.api.setAlwaysOnTop(true);
+      window.api.setOpacity(0.1);
+      window.api.hide();
+      return out;
+    });
+    expect(rogueResults.load).toBe('rejected');
+    expect(rogueResults.save).toBe('rejected');
+    expect(rogueResults.draft).toBe(false);
+    expect(rogueResults.noteUpdate).toBe(false);
+    expect(rogueResults.noteDraft).toBe(false);
+    expect(rogueResults.fileOpen).toBe('rejected');
+    expect(rogueResults.openExternal).toBe('rejected');
+    expect(rogueResults.fontSize).toBe('rejected');
+    expect(rogueResults.startup).toBe('rejected');
+
+    const external = await ctx.electronApp.evaluate(() => ({
+      shell: { external: globalThis.__p004Shell.external.length, path: globalThis.__p004Shell.path.length },
+      login: { ...globalThis.__p004Login }
+    }));
+    expect(external.shell).toEqual({ external: 0, path: 0 });
+    expect(external.login).toEqual({ set: 0, get: 0 });
+    const mainAfter = await ctx.electronApp.evaluate(() => ({
+      opacity: globalThis.__p004MainRef.getOpacity(),
+      top: globalThis.__p004MainRef.isAlwaysOnTop(),
+      visible: globalThis.__p004MainRef.isVisible()
+    }));
+    expect(mainAfter).toEqual(mainBefore);
+
+    // 拒绝调用不得写盘：等待屏障后正式存档与恢复草稿内容/缺失状态均不变
+    await ctx.win.waitForTimeout(900);
+    const diskAfter = { data: await readMaybe(dataPath), recovery: await readMaybe(recPath) };
+    expect(diskAfter).toEqual(diskBefore);
+
+    // 缺失 / 销毁 / 受信 sender 但 frame 缺失、null、getter 抛异常的入口（模拟事件）一律失败关闭
+    const degenerates = await ctx.electronApp.evaluate(async ({ ipcMain, BrowserWindow }) => {
+      const out = {};
+      const mainRef = globalThis.__p004MainRef;
+      const load = ipcMain._invokeHandlers.get('data:load');
+      const update = ipcMain._invokeHandlers.get('note:update');
+      const draft = ipcMain.listeners('data:draft')[0];
+      const noteDraft = ipcMain.listeners('note:draft')[0];
+      try { await load({}); out.noSender = 'resolved'; } catch (e) { out.noSender = 'rejected'; }
+      try { await load({ sender: { isDestroyed: () => true } }); out.destroyedObj = 'resolved'; } catch (e) { out.destroyedObj = 'rejected'; }
+      try { await load({ sender: mainRef.webContents }); out.missingFrame = 'resolved'; } catch (e) { out.missingFrame = 'rejected'; }
+      try { await load({ sender: mainRef.webContents, senderFrame: null }); out.nullFrame = 'resolved'; } catch (e) { out.nullFrame = 'rejected'; }
+      const throwEv = { sender: mainRef.webContents };
+      Object.defineProperty(throwEv, 'senderFrame', { get() { throw new Error('boom'); } });
+      try { await load(throwEv); out.throwFrame = 'resolved'; } catch (e) { out.throwFrame = 'rejected'; }
+      const dEv = { sender: mainRef.webContents, senderFrame: null }; draft(dEv, {}); out.nullFrameDraft = dEv.returnValue;
+      const dEv2 = { sender: mainRef.webContents }; noteDraft(dEv2, { id: 'x' }); out.missingFrameNoteDraft = dEv2.returnValue;
+      // 真实销毁的 WebContents 与其 frame（非 {isDestroyed:true} 伪对象）
+      const bt = new BrowserWindow({ show: false });
+      await bt.loadURL('about:blank');
+      const deadWc = bt.webContents;
+      let deadFrame = null; try { deadFrame = deadWc.mainFrame; } catch (e) { /* ignore */ }
+      bt.destroy();
+      try { await load({ sender: deadWc, senderFrame: deadFrame }); out.deadWc = 'resolved'; } catch (e) { out.deadWc = 'rejected'; }
+      try { await load({ sender: mainRef.webContents, senderFrame: deadFrame }); out.deadFrame = 'resolved'; } catch (e) { out.deadFrame = 'rejected'; }
+      out.updateNoSender = await update({}, { id: 'x', title: 't' });
+      return out;
+    });
+    expect(degenerates.noSender).toBe('rejected');
+    expect(degenerates.destroyedObj).toBe('rejected');
+    expect(degenerates.missingFrame).toBe('rejected');
+    expect(degenerates.nullFrame).toBe('rejected');
+    expect(degenerates.throwFrame).toBe('rejected');
+    expect(degenerates.nullFrameDraft).toBe(false);
+    expect(degenerates.missingFrameNoteDraft).toBe(false);
+    expect(degenerates.deadWc).toBe('rejected');
+    expect(degenerates.deadFrame).toBe('rejected');
+    expect(degenerates.updateNoSender).toBe(false);
+  } finally {
+    await ctx.electronApp.evaluate(({ shell, app }) => {
+      if (globalThis.__p004RealExt) shell.openExternal = globalThis.__p004RealExt;
+      if (globalThis.__p004RealPath) shell.openPath = globalThis.__p004RealPath;
+      if (globalThis.__p004RealSetLogin) app.setLoginItemSettings = globalThis.__p004RealSetLogin;
+      if (globalThis.__p004RealGetLogin) app.getLoginItemSettings = globalThis.__p004RealGetLogin;
+      delete globalThis.__p004RealExt; delete globalThis.__p004RealPath;
+      delete globalThis.__p004RealSetLogin; delete globalThis.__p004RealGetLogin;
+      if (globalThis.__p004RogueWin && !globalThis.__p004RogueWin.isDestroyed()) globalThis.__p004RogueWin.destroy();
+    }).catch(() => {});
+    await closeApp(ctx);
+  }
+});
+
+test('P0-04 IPC 来源：受信窗口被 loadURL 到其它本地页面后拒绝（含同名伪装路径）', async () => {
+  const ctx = await openApp();
+  try {
+    const dir = ctx.userDataDir;
+    await fs.mkdir(path.join(dir, 'p004-look'), { recursive: true });
+    await fs.writeFile(path.join(dir, 'p004-other.html'), '<!doctype html><title>other</title>');
+    await fs.writeFile(path.join(dir, 'p004-look', 'index.html'), '<!doctype html><title>look</title>');
+    await fs.writeFile(path.join(dir, 'p004-look', 'index.html.evil'), '<!doctype html><title>evil</title>');
+    await ctx.electronApp.evaluate(({ BrowserWindow }) => {
+      globalThis.__p004MainRef = BrowserWindow.getAllWindows().find((x) => /renderer[\\/]index\.html/.test(x.webContents.getURL()));
+    });
+
+    const tryLoadAndCall = async (filePath) => {
+      await ctx.electronApp.evaluate(({ BrowserWindow }, url) => globalThis.__p004MainRef.loadURL(url), 'file:///' + filePath.replace(/\\/g, '/'));
+      await expect.poll(() => ctx.win.evaluate(() => typeof (window.api && window.api.loadData))).toBe('function');
+      return ctx.win.evaluate(async () => ({
+        load: await window.api.loadData().then(() => 'resolved', () => 'rejected'),
+        draft: window.api.captureDraft({ settings: {}, groups: {}, notes: [], trash: [] })
+      }));
+    };
+
+    const files = [
+      path.join(dir, 'p004-other.html'),
+      path.join(dir, 'p004-look', 'index.html'),       // 同名不同目录
+      path.join(dir, 'p004-look', 'index.html.evil')   // 前缀伪装
+    ];
+    for (const f of files) {
+      const r = await tryLoadAndCall(f);
+      expect(r.load).toBe('rejected');
+      expect(r.draft).toBe(false);
+    }
+  } finally { await closeApp(ctx); }
+});
+
+test('P0-04 IPC 来源：子框架 senderFrame 被拒（真实子框架对象，模拟处理器入口证据）', async () => {
+  const ctx = await openApp();
+  try {
+    const dir = ctx.userDataDir;
+    const capPreload = path.join(dir, 'p004-cap-preload.js');
+    await fs.writeFile(capPreload, "const { contextBridge, ipcRenderer } = require('electron');\ncontextBridge.exposeInMainWorld('p004cap', { capture: () => ipcRenderer.invoke('p004:capture-frame') });\n");
+    await fs.writeFile(path.join(dir, 'p004-parent.html'), '<!doctype html><html><body><iframe id="f" srcdoc="child" style="width:200px;height:80px"></iframe></body></html>');
+
+    await ctx.electronApp.evaluate(({ BrowserWindow, ipcMain }, { preload, parent }) => {
+      globalThis.__p004Cap = null;
+      ipcMain.handle('p004:capture-frame', (event) => {
+        globalThis.__p004Cap = { frame: event.senderFrame, isMain: false, url: '' };
+        try { globalThis.__p004Cap.isMain = event.senderFrame === event.sender.mainFrame; } catch (e) { /* ignore */ }
+        try { globalThis.__p004Cap.url = event.senderFrame ? event.senderFrame.url : ''; } catch (e) { /* ignore */ }
+        return true;
+      });
+      const w = new BrowserWindow({ show: false, webPreferences: { preload, contextIsolation: true, nodeIntegration: false, nodeIntegrationInSubFrames: true } });
+      globalThis.__p004CapWin = w;
+      return w.loadFile(parent);
+    }, { preload: capPreload, parent: path.join(dir, 'p004-parent.html') });
+
+    let capWin = null;
+    await expect.poll(async () => {
+      capWin = (await ctx.electronApp.windows()).find((p) => p.url().includes('p004-parent.html')) || null;
+      return !!capWin;
+    }).toBe(true);
+    await expect.poll(() => capWin.evaluate(() => { const f = document.getElementById('f'); return !!(f && f.contentWindow && f.contentWindow.p004cap); })).toBe(true);
+
+    await capWin.evaluate(() => document.getElementById('f').contentWindow.p004cap.capture());
+    await expect.poll(() => ctx.electronApp.evaluate(() => !!(globalThis.__p004Cap && globalThis.__p004Cap.frame))).toBe(true);
+
+    const cap = await ctx.electronApp.evaluate(() => ({ isMain: globalThis.__p004Cap.isMain, url: globalThis.__p004Cap.url }));
+    expect(cap.isMain).toBe(false);                 // 真实子框架对象（frame !== mainFrame）
+    expect(cap.url).toContain('srcdoc');
+
+    // 用真实子框架对象作为受信主窗事件的 senderFrame：处理器入口被拒（模拟入口，非端到端帧暴露）
+    const rejected = await ctx.electronApp.evaluate(async ({ BrowserWindow, ipcMain }) => {
+      const mainWin = BrowserWindow.getAllWindows().find((x) => /renderer[\\/]index\.html/.test(x.webContents.getURL()));
+      const event = { sender: mainWin.webContents, senderFrame: globalThis.__p004Cap.frame };
+      try { await ipcMain._invokeHandlers.get('data:load')(event); return 'resolved'; } catch (e) { return 'rejected'; }
+    });
+    expect(rejected).toBe('rejected');
+  } finally {
+    await ctx.electronApp.evaluate(({ ipcMain }) => {
+      try { ipcMain.removeHandler('p004:capture-frame'); } catch (e) { /* ignore */ }
+      if (globalThis.__p004CapWin && !globalThis.__p004CapWin.isDestroyed()) globalThis.__p004CapWin.destroy();
+    }).catch(() => {});
+    await closeApp(ctx);
+  }
+});
+
+test('P0-04 IPC 来源：受信独立窗自更新成功、跨 ID 拒绝，主窗与磁盘/草稿不受影响', async () => {
+  const now = Date.now();
+  const mk = (id, title, pin) => ({
+    id, title, content: '正文', type: 'note', items: [], images: [], files: [], tables: [],
+    color: '#93f1ce', textColor: null, groupId: null, pinned: false, desktopPin: !!pin, reminder: null,
+    x: 40, y: 40, positionAll: { x: 40, y: 40 }, w: 220, h: 160, z: 1, createdAt: now, updatedAt: now
+  });
+  const seed = {
+    version: 2, settings: { viewMode: 'board', lastSeenVersion: EXPECTED_VERSION }, groups: [], trash: [],
+    notes: [mk('p004-note-a', 'A 原题', true), mk('p004-note-b', 'B 原题', false)]
+  };
+  const ctx = await openApp({ seed });
+  const dataPath = path.join(ctx.userDataDir, 'notes-data.json');
+  const recPath = path.join(ctx.userDataDir, 'notes-recovery.json');
+  const readMaybe = async (p) => { try { return await fs.readFile(p, 'utf8'); } catch (e) { return null; } };
+  try {
+    await expect.poll(async () => (await ctx.electronApp.windows()).filter((w) => w.url().includes('note.html')).length).toBe(1);
+    const noteWin = (await ctx.electronApp.windows()).find((w) => w.url().includes('note.html'));
+
+    // 自身 ID：同步草稿 + 更新成功且落盘保留
+    const own = await noteWin.evaluate(async () => {
+      const api = window.api;
+      const note = { id: 'p004-note-a', title: 'A 自更新', content: 'A 正文', type: 'note', items: [], images: [], files: [], tables: [], updatedAt: Date.now() };
+      const token = api.captureNoteDraft(note);
+      const saved = await api.noteUpdate(note, { draftToken: token });
+      return { tokenType: typeof token, saved };
+    });
+    expect(own.saved).toBe(true);
+    expect(own.tokenType).toBe('number');
+
+    // 跨 ID：更新/同步草稿都必须被拒（false），且磁盘与恢复草稿不变
+    await ctx.win.waitForTimeout(500);
+    const recoveryBeforeCross = await readMaybe(recPath);
+    const cross = await noteWin.evaluate(async () => {
+      const api = window.api;
+      return {
+        update: await api.noteUpdate({ id: 'p004-note-b', title: 'B 被篡改' }, {}).then((v) => v, () => 'rejected'),
+        draft: api.captureNoteDraft({ id: 'p004-note-b', title: 'B 草稿' })
+      };
+    });
+    expect(cross.update).toBe(false);
+    expect(cross.draft).toBe(false);
+    await ctx.win.waitForTimeout(500);
+    expect(await readMaybe(recPath)).toBe(recoveryBeforeCross);
+    const disk = JSON.parse(await readMaybe(dataPath));
+    const a = disk.notes.find((n) => n.id === 'p004-note-a');
+    const b = disk.notes.find((n) => n.id === 'p004-note-b');
+    expect(a.title).toBe('A 自更新');
+    expect(b.title).toBe('B 原题');
+    expect(JSON.stringify(b)).not.toContain('篡改');
+
+    // 受信独立窗被程序化加载到另一个 note.html?id=：身份受信但 note id 不匹配 -> 仍拒绝
+    await ctx.electronApp.evaluate(({ BrowserWindow }, notePage) => {
+      const w = BrowserWindow.getAllWindows().find((x) => x.webContents.getURL().includes('note.html'));
+      return w.loadFile(notePage, { query: { id: 'p004-note-b' } });
+    }, path.join(ROOT, 'renderer', 'note.html'));
+    await expect.poll(() => noteWin.evaluate(() => typeof (window.api && window.api.loadData))).toBe('function');
+    const mismatch = await noteWin.evaluate(async () => ({
+      load: await window.api.loadData().then(() => 'resolved', () => 'rejected'),
+      draft: window.api.captureNoteDraft({ id: 'p004-note-a', title: 'A via mismatch' })
+    }));
+    expect(mismatch.load).toBe('rejected');
+    expect(mismatch.draft).toBe(false);
+
+    // 主窗合法来源不受影响
+    const mainOk = await ctx.win.evaluate(async () => ({
+      load: await window.api.loadData().then((r) => !!(r && 'status' in r), () => false),
+      font: await window.api.setFontSize(15).then((v) => v, () => 'rejected')
+    }));
+    expect(mainOk.load).toBe(true);
+    expect(mainOk.font).toBe(15);
+
+    // 恢复为自身 ID 后合法来源再次可用
+    await ctx.electronApp.evaluate(({ BrowserWindow }, notePage) => {
+      const w = BrowserWindow.getAllWindows().find((x) => x.webContents.getURL().includes('note.html'));
+      return w.loadFile(notePage, { query: { id: 'p004-note-a' } });
+    }, path.join(ROOT, 'renderer', 'note.html'));
+    await expect.poll(() => noteWin.evaluate(() => typeof (window.api && window.api.loadData))).toBe('function');
+    const restored = await noteWin.evaluate(async () => ({
+      load: await window.api.loadData().then((r) => !!(r && 'status' in r), () => false),
+      draft: window.api.captureNoteDraft({ id: 'p004-note-a', title: 'A 恢复草稿' })
+    }));
+    expect(restored.load).toBe(true);
+    expect(typeof restored.draft).toBe('number');
+  } finally {
+    await closeApp(ctx);
+  }
+});
+
+test('P0-04 协议：注册的 note-* 协议按目录返回真实字节并支持编码文件名（含渲染加载）', async () => {
+  const ctx = await openApp();
+  try {
+    const png = Buffer.from(UX01_PNG_1PX.split(',')[1], 'base64');
+    const put = async (dir, name, buf) => {
+      await fs.mkdir(path.join(ctx.userDataDir, dir), { recursive: true });
+      await fs.writeFile(path.join(ctx.userDataDir, dir, name), buf);
+    };
+    await put('images', 'a b.png', png);
+    await put('backgrounds', '背景.png', Buffer.from('BG-CN'));
+    await put('fonts', 'f test.woff', Buffer.from('FONT-BYTES'));
+    await put('sounds', 's test.mp3', Buffer.from('SOUND-BYTES'));
+
+    const results = await ctx.electronApp.evaluate(async ({ net }) => {
+      const get = async (u) => {
+        try { const r = await net.fetch(u); const buf = Buffer.from(await r.arrayBuffer()); return { status: r.status, hex: buf.toString('hex'), text: buf.toString('utf8') }; }
+        catch (e) { return { transport: String((e && e.message) || e) }; }
+      };
+      return {
+        img: await get('note-img://local/a%20b.png'),
+        bg: await get('note-bg://local/' + encodeURIComponent('背景.png')),
+        font: await get('note-font://local/' + encodeURIComponent('f test.woff')),
+        sound: await get('note-sound://local/' + encodeURIComponent('s test.mp3'))
+      };
+    });
+    expect(results.img.status).toBe(200);
+    expect(results.img.hex).toBe(png.toString('hex'));
+    expect(results.bg.status).toBe(200);
+    expect(results.bg.text).toBe('BG-CN');
+    expect(results.font.text).toBe('FONT-BYTES');
+    expect(results.sound.text).toBe('SOUND-BYTES');
+
+    // 真实渲染加载：背景 CSS 生效 + <img> 从 note-img 解码加载（1x1 png）
+    const rendered = await ctx.win.evaluate(async () => {
+      state.settings.backgroundImage = 'note-bg://local/' + encodeURIComponent('背景.png');
+      applyBackground();
+      const bg = getComputedStyle(document.getElementById('bgLayer')).backgroundImage;
+      const im = document.createElement('img');
+      im.id = 'p004-proto-img';
+      const loaded = new Promise((res) => { im.onload = () => res(true); im.onerror = () => res(false); });
+      im.src = 'note-img://local/a%20b.png';
+      document.body.appendChild(im);
+      const ok = await loaded;
+      return { bg, ok, w: im.naturalWidth, h: im.naturalHeight };
+    });
+    expect(rendered.bg).toContain('note-bg');
+    expect(rendered.ok).toBe(true);
+    expect(rendered.w).toBe(1);
+    expect(rendered.h).toBe(1);
+  } finally { await closeApp(ctx); }
+});
+
+test('P0-04 协议：非法 host/路径/缺失被拒（404 或 Chromium 传输拒绝）', async () => {
+  const ctx = await openApp();
+  try {
+    await fs.mkdir(path.join(ctx.userDataDir, 'images', 'subdir'), { recursive: true });
+    await fs.writeFile(path.join(ctx.userDataDir, 'images', 'ok.png'), Buffer.from('OK'));
+    await fs.writeFile(path.join(ctx.userDataDir, 'secret.png'), Buffer.from('SECRET'));
+
+    const results = await ctx.electronApp.evaluate(async ({ net }) => {
+      const probe = async (u) => {
+        try { const r = await net.fetch(u); return { status: r.status, body: Buffer.from(await r.arrayBuffer()).toString('utf8') }; }
+        catch (e) { return { transport: 'rejected' }; }
+      };
+      return {
+        ok: await probe('note-img://local/ok.png'),
+        wrongHost: await probe('note-img://evil/ok.png'),
+        userinfo: await probe('note-img://user@local/ok.png'),
+        port: await probe('note-img://local:8080/ok.png'),
+        crossScheme: await probe('note-bg://local/ok.png'),
+        missing: await probe('note-img://local/missing.png'),
+        dir: await probe('note-img://local/subdir'),
+        encSlash: await probe('note-img://local/a%2fok.png'),
+        encBackslash: await probe('note-img://local/a%5cok.png'),
+        dotEnc: await probe('note-img://local/%2e%2e%2fsecret.png'),
+        ads: await probe('note-img://local/ok.png%3aads'),
+        nul: await probe('note-img://local/ok%00.png')
+      };
+    });
+    expect(results.ok.status).toBe(200);
+    expect(results.ok.body).toBe('OK');
+    for (const key of ['wrongHost', 'userinfo', 'port', 'crossScheme', 'missing', 'dir', 'encSlash', 'encBackslash', 'dotEnc', 'ads', 'nul']) {
+      const r = results[key];
+      const rejected = r.transport === 'rejected' || (r.status === 404 && r.body === 'Not Found');
+      expect(rejected, key + ' -> ' + JSON.stringify(r)).toBe(true);
+    }
+  } finally { await closeApp(ctx); }
+});
+
+test('P0-04 数值：非法入参不触达原生 setter/广播/落盘（模拟受信事件入口）', async () => {
+  const ctx = await openApp();
+  const dataPath = path.join(ctx.userDataDir, 'notes-data.json');
+  const recPath = path.join(ctx.userDataDir, 'notes-recovery.json');
+  const readMaybe = async (p) => { try { return await fs.readFile(p, 'utf8'); } catch (e) { return null; } };
+  try {
+    await ctx.electronApp.evaluate(({ BrowserWindow }) => {
+      globalThis.__p004Opacity = [];
+      globalThis.__p004Send = [];
+      globalThis.__p004RealSetOpacity = BrowserWindow.prototype.setOpacity;
+      BrowserWindow.prototype.setOpacity = function (v) { globalThis.__p004Opacity.push(v); };
+      const main = BrowserWindow.getAllWindows().find((x) => /renderer[\\/]index\.html/.test(x.webContents.getURL()));
+      globalThis.__p004MainRef = main;
+      globalThis.__p004RealSend = main.webContents.send;
+      main.webContents.send = function (...a) { globalThis.__p004Send.push(a); };
+    });
+    await ctx.win.waitForTimeout(900);
+    const diskBefore = { data: await readMaybe(dataPath), recovery: await readMaybe(recPath) };
+
+    const out = await ctx.electronApp.evaluate(async ({ ipcMain }) => {
+      const main = globalThis.__p004MainRef;
+      const ev = { sender: main.webContents, senderFrame: main.webContents.mainFrame };
+      const invoke = (ch, ...args) => ipcMain._invokeHandlers.get(ch)(ev, ...args);
+      const fire = (ch, ...args) => { const e = { sender: main.webContents, senderFrame: main.webContents.mainFrame }; ipcMain.listeners(ch)[0](e, ...args); return e.returnValue; };
+      const bad = [NaN, Infinity, -Infinity, true, false, {}, { toString: null, valueOf: 0 }, [], [1], '', '   ', null, undefined, 'abc'];
+      const results = { fontRejected: 0, fontResolved: 0, fireNoThrow: 0, fireFalse: 0, fireOther: 0, threw: 0 };
+      for (const v of bad) {
+        try { await invoke('settings:set-font-size', v); results.fontResolved++; } catch (e) { results.fontRejected++; }
+      }
+      for (const ch of ['window:set-opacity', 'window:set-self-opacity', 'window:set-note-opacity', 'note:save-note-opacity']) {
+        for (const v of bad) {
+          let rv;
+          try { rv = fire(ch, v); } catch (e) { results.threw++; continue; }
+          results.fireNoThrow++;
+          if (rv === false) results.fireFalse++; else results.fireOther++;
+        }
+      }
+      return { ...results, badCount: bad.length };
+    });
+    expect(out.badCount).toBe(14);
+    expect(out.fontRejected).toBe(out.badCount);
+    expect(out.fontResolved).toBe(0);
+    expect(out.threw).toBe(0);
+    expect(out.fireNoThrow).toBe(out.badCount * 4);
+    expect(out.fireFalse).toBe(out.badCount * 4); // 非法 send 明确返回 false
+    expect(out.fireOther).toBe(0);
+
+    const spies = await ctx.electronApp.evaluate(() => ({ opacity: globalThis.__p004Opacity.length, send: globalThis.__p004Send.length }));
+    expect(spies).toEqual({ opacity: 0, send: 0 });
+
+    await ctx.win.waitForTimeout(700);
+    expect({ data: await readMaybe(dataPath), recovery: await readMaybe(recPath) }).toEqual(diskBefore);
+  } finally {
+    await ctx.electronApp.evaluate(({ BrowserWindow }) => {
+      if (globalThis.__p004RealSetOpacity) BrowserWindow.prototype.setOpacity = globalThis.__p004RealSetOpacity;
+      if (globalThis.__p004MainRef && globalThis.__p004RealSend) globalThis.__p004MainRef.webContents.send = globalThis.__p004RealSend;
+      delete globalThis.__p004RealSetOpacity; delete globalThis.__p004RealSend;
+    }).catch(() => {});
+    await closeApp(ctx);
+  }
+});
+
+test('P0-04 数值：合法/夹取值经真实 preload 生效、持久化并广播，透明恢复', async () => {
+  const now = Date.now();
+  const note = {
+    id: 'p004-num-note', title: '数值便签', content: 'x', type: 'note', items: [], images: [], files: [], tables: [],
+    color: '#93f1ce', textColor: null, groupId: null, pinned: false, desktopPin: true, reminder: null,
+    x: 40, y: 40, positionAll: { x: 40, y: 40 }, w: 220, h: 160, z: 1, createdAt: now, updatedAt: now
+  };
+  const ctx = await openApp({ seed: { version: 2, settings: { viewMode: 'board', lastSeenVersion: EXPECTED_VERSION }, groups: [], trash: [], notes: [note] } });
+  const dataPath = path.join(ctx.userDataDir, 'notes-data.json');
+  const readFontSize = async () => JSON.parse(await fs.readFile(dataPath, 'utf8')).settings.fontSize;
+  const readNoteOpacity = async () => JSON.parse(await fs.readFile(dataPath, 'utf8')).settings.noteOpacity;
+  try {
+    await ctx.electronApp.evaluate(({ BrowserWindow }) => {
+      const main = BrowserWindow.getAllWindows().find((x) => /renderer[\\/]index\.html/.test(x.webContents.getURL()));
+      globalThis.__p004MainRef = main;
+      globalThis.__p004Send = [];
+      BrowserWindow.getAllWindows().forEach((w) => {
+        const wc = w.webContents;
+        wc.__p004RealSend = wc.send;
+        wc.send = function (...a) { globalThis.__p004Send.push(a); return wc.__p004RealSend.apply(wc, a); };
+      });
+    });
+
+    // 主窗不透明度：合法 + 夹取（0..1）
+    await ctx.win.evaluate(() => window.api.setOpacity(0.62));
+    await expect.poll(() => ctx.electronApp.evaluate(() => globalThis.__p004MainRef.getOpacity())).toBeCloseTo(0.62, 2);
+    await ctx.win.evaluate(() => window.api.setOpacity(5));
+    await expect.poll(() => ctx.electronApp.evaluate(() => globalThis.__p004MainRef.getOpacity())).toBeCloseTo(1, 2);
+    await ctx.win.evaluate(() => window.api.setOpacity(-3));
+    await expect.poll(() => ctx.electronApp.evaluate(() => globalThis.__p004MainRef.getOpacity())).toBeCloseTo(0, 2);
+    // self opacity 作用于发送者主窗
+    await ctx.win.evaluate(() => window.api.setSelfOpacity(0.5));
+    await expect.poll(() => ctx.electronApp.evaluate(() => globalThis.__p004MainRef.getOpacity())).toBeCloseTo(0.5, 2);
+
+    // 字号：合法 + 夹取（11..22），返回并落盘
+    const fonts = await ctx.win.evaluate(async () => ({ ok: await window.api.setFontSize(15), hi: await window.api.setFontSize(99), lo: await window.api.setFontSize(-1) }));
+    expect(fonts).toEqual({ ok: 15, hi: 22, lo: 11 });
+    await expect.poll(readFontSize).toBe(11);
+
+    // noteOpacity：合法 + 夹取（0..100），持久化并广播给主窗
+    await ctx.win.evaluate(async () => { await window.api.saveNoteOpacity(55); await window.api.saveNoteOpacity(150); });
+    await expect.poll(readNoteOpacity).toBe(100);
+    expect(await ctx.electronApp.evaluate(() => globalThis.__p004Send.map((a) => [a[0], a[1]]))).toEqual(expect.arrayContaining([
+      ['settings:font-size', 15], ['settings:font-size', 22], ['settings:font-size', 11],
+      ['window:note-opacity-setting', 55], ['window:note-opacity-setting', 100]
+    ]));
+
+    // setNoteOpacity 转发给独立窗
+    await ctx.win.evaluate(() => window.api.setNoteOpacity(70));
+    await expect.poll(() => ctx.electronApp.evaluate(() => globalThis.__p004Send.some((a) => a[0] === 'window:note-opacity' && a[1] === 70))).toBe(true);
+
+    expect(await ctx.electronApp.evaluate(() => globalThis.__p004MainRef.isVisible())).toBe(true);
+  } finally {
+    await ctx.electronApp.evaluate(({ BrowserWindow }) => {
+      const main = globalThis.__p004MainRef;
+      if (main && !main.isDestroyed()) main.setOpacity(1); // 恢复不透明，避免残留副作用
+      BrowserWindow.getAllWindows().forEach((w) => { const wc = w.webContents; if (wc.__p004RealSend) wc.send = wc.__p004RealSend; });
+    }).catch(() => {});
+    await closeApp(ctx);
+  }
+});
+
+test('P0-04 图片复制：合法编码图片可复制、别名/非法/非图片一律 false 且不写剪贴板', async () => {
+  const ctx = await openApp();
+  try {
+    // 夹具必须是 nativeImage 可解码的非空位图：用原生位图生成 PNG（避免浏览器可显示、nativeImage 却解码为空的夹具）。
+    const png = Buffer.from(await ctx.electronApp.evaluate(({ nativeImage }) => {
+      const bmp = Buffer.alloc(4); bmp[0] = 255; bmp[1] = 0; bmp[2] = 0; bmp[3] = 255; // BGRA 不透明红，1x1
+      return nativeImage.createFromBitmap(bmp, { width: 1, height: 1 }).toPNG().toString('base64');
+    }), 'base64');
+    await fs.mkdir(path.join(ctx.userDataDir, 'images', 'sub'), { recursive: true });
+    await fs.writeFile(path.join(ctx.userDataDir, 'images', '图 片.png'), png);
+    await fs.writeFile(path.join(ctx.userDataDir, 'images', 'not-image.png'), Buffer.from('NOT A PNG'));
+    await fs.mkdir(path.join(ctx.userDataDir, 'images', 'dir.png'), { recursive: true });
+    // 先断言初始夹具确实被 nativeImage 解码为非空图片，否则测试失去意义
+    expect(await ctx.electronApp.evaluate(({ nativeImage }, f) => {
+      const im = nativeImage.createFromPath(f);
+      const s = im.getSize();
+      return { empty: im.isEmpty(), w: s.width, h: s.height };
+    }, path.join(ctx.userDataDir, 'images', '图 片.png'))).toEqual({ empty: false, w: 1, h: 1 });
+
+    // 只 mock 最终 clipboard.writeImage（nativeImage 解码仍为真实）；finally 还原。
+    await ctx.electronApp.evaluate(({ clipboard }) => {
+      globalThis.__p004Clip = [];
+      globalThis.__p004RealWriteImage = clipboard.writeImage;
+      clipboard.writeImage = (img) => {
+        const s = img.getSize();
+        globalThis.__p004Clip.push({ empty: img.isEmpty(), w: s.width, h: s.height });
+      };
+    });
+
+    const enc = encodeURIComponent('图 片.png');
+    const results = await ctx.win.evaluate(async (name) => {
+      const call = (v) => window.api.copyImage(v).then((r) => r, (e) => 'rejected:' + (e && e.message));
+      return {
+        valid: await call('note-img://local/' + name),
+        query: await call('note-img://local/' + name + '?cache=1#frag'),
+        nested: await call('note-img://local/sub/' + name),
+        wrongHost: await call('note-img://evil/' + name),
+        ads: await call('note-img://local/' + name + '%3aads'),
+        missing: await call('note-img://local/nope.png'),
+        dir: await call('note-img://local/dir.png'),
+        notImage: await call('note-img://local/not-image.png'),
+        number: await call(123),
+        nul: await call(null),
+        obj: await call({})
+      };
+    }, enc);
+
+    expect(results.valid).toBe(true);
+    expect(results.query).toBe(true); // 查询/片段无害
+    for (const k of ['nested', 'wrongHost', 'ads', 'missing', 'dir', 'notImage', 'number', 'nul', 'obj']) {
+      expect(results[k], k + ' -> ' + JSON.stringify(results[k])).toBe(false);
+    }
+    const clips = await ctx.electronApp.evaluate(() => globalThis.__p004Clip);
+    expect(clips).toHaveLength(2); // 仅两次合法调用写剪贴板
+    for (const c of clips) { expect(c.empty).toBe(false); expect(c.w).toBe(1); expect(c.h).toBe(1); }
+  } finally {
+    await ctx.electronApp.evaluate(({ clipboard }) => {
+      if (globalThis.__p004RealWriteImage) clipboard.writeImage = globalThis.__p004RealWriteImage;
+      delete globalThis.__p004RealWriteImage;
+    }).catch(() => {});
+    await closeApp(ctx);
+  }
+});
+
+test('P0-04 表格导出：超大表格被可见拒绝且不写入文件', async () => {
+  const now = Date.now();
+  const rows = 201;
+  const cells = Array.from({ length: rows }, () => ['x', 'y']);
+  const seed = {
+    version: 2, settings: { viewMode: 'board', lastSeenVersion: EXPECTED_VERSION }, groups: [], trash: [],
+    notes: [{
+      id: 'p004-big-table', title: '大表', content: '[[table:t1]]', type: 'note', items: [], images: [], files: [],
+      tables: [{ id: 't1', rows, cols: 2, cells, merges: [], diagonals: [] }],
+      color: '#93f1ce', textColor: null, groupId: null, pinned: false, desktopPin: false, reminder: null,
+      x: 40, y: 40, positionAll: { x: 40, y: 40 }, w: 220, h: 160, z: 1, createdAt: now, updatedAt: now
+    }]
+  };
+  const ctx = await openApp({ seed });
+  try {
+    await ctx.electronApp.evaluate(({ ipcMain }) => {
+      globalThis.__p004ExportCalls = 0;
+      globalThis.__p004RealExportMd = ipcMain._invokeHandlers.get('note:export-markdown');
+      ipcMain.removeHandler('note:export-markdown');
+      ipcMain.handle('note:export-markdown', () => { globalThis.__p004ExportCalls++; return { ok: true, path: 'should-not-happen' }; });
+    });
+    const r = await ctx.win.evaluate(() => {
+      const n = state.notes.find((x) => x.id === 'p004-big-table');
+      return exportNoteAsMarkdown(n);
+    });
+    expect(r.ok).toBe(false);
+    expect(r.code).toBe('TABLE_MD_TOO_LARGE');
+    expect(String(r.error)).toMatch(/too large to export/);
+    // 可见 toast（当前语言=中文）：行 / 列 + 上限
+    await expect(ctx.win.locator('#toast')).toContainText('行数');
+    await expect(ctx.win.locator('#toast')).toContainText('列数');
+    await expect(ctx.win.locator('#toast')).toContainText('200');
+    // 同一实例内切换当前语言再次导出：toast 使用英文的 row/col 文案（不新增启动或设置导航）
+    const en = await ctx.win.evaluate(() => {
+      state.settings.language = 'en';
+      applyLanguage();
+      return exportNoteAsMarkdown(state.notes.find((x) => x.id === 'p004-big-table'));
+    });
+    expect(en.ok).toBe(false);
+    await expect(ctx.win.locator('#toast')).toContainText('Rows');
+    await expect(ctx.win.locator('#toast')).toContainText('Cols');
+    await expect(ctx.win.locator('#toast')).toContainText('200');
+    // 源数据未被修改
+    expect(await ctx.win.evaluate(() => {
+      const t = state.notes.find((x) => x.id === 'p004-big-table').tables[0];
+      return { rows: t.rows, cells: t.cells.length };
+    })).toEqual({ rows: 201, cells: 201 });
+    expect(await ctx.electronApp.evaluate(() => globalThis.__p004ExportCalls)).toBe(0);
+  } finally {
+    await ctx.electronApp.evaluate(({ ipcMain }) => {
+      if (globalThis.__p004RealExportMd) {
+        ipcMain.removeHandler('note:export-markdown');
+        ipcMain.handle('note:export-markdown', globalThis.__p004RealExportMd);
+      }
+    }).catch(() => {});
+    await closeApp(ctx);
+  }
+});
+
+test('UX-19A 文档工具栏：可访问命名分组、键盘预览焦点、宽窄与主题布局', async () => {
+  const ctx = await openApp();
+  try {
+    const wideShot = test.info().outputPath('ux19a-doc-wide.png');
+    const narrowShot = test.info().outputPath('ux19a-doc-narrow.png');
+    const geometry = () => {
+      const tb = document.querySelector('.doc-toolbar');
+      const tr = tb.getBoundingClientRect();
+      const els = Array.from(tb.querySelectorAll('button, input')).filter((el) => el.offsetParent !== null);
+      const rects = els.map((el) => el.getBoundingClientRect());
+      let outOfBounds = 0;
+      rects.forEach((r) => { if (r.left < tr.left - 1 || r.right > tr.right + 1 || r.top < tr.top - 1 || r.bottom > tr.bottom + 1) outOfBounds++; });
+      let overlaps = 0;
+      for (let i = 0; i < rects.length; i++) for (let j = i + 1; j < rects.length; j++) {
+        const a = rects[i], b = rects[j];
+        if (a.left < b.right - 1 && b.left < a.right - 1 && a.top < b.bottom - 1 && b.top < a.bottom - 1) overlaps++;
+      }
+      return { count: els.length, outOfBounds, overlaps, over: tb.scrollWidth - tb.clientWidth };
+    };
+
+    await stableClick(ctx.win.locator('#btnAdd'));
+    await ctx.win.locator('#board .note .note-title').first().fill('文档工具栏');
+    await stableClick(ctx.win.locator('#viewDoc'));
+    await stableClick(ctx.win.locator('.doc-pick-item').first());
+    await expect(ctx.win.locator('.doc-toolbar')).toBeVisible();
+
+    // 可访问命名分组（不绑定精确数量/顺序）
+    const groups = await ctx.win.evaluate(() => Array.from(document.querySelectorAll('.doc-toolbar [role="group"]')).map((g) => ({ role: g.getAttribute('role'), name: (g.getAttribute('aria-label') || '').trim() })));
+    expect(groups.length).toBeGreaterThanOrEqual(4);
+    expect(groups.every((g) => g.role === 'group' && g.name.length > 0)).toBe(true);
+
+    // 代表性可操作控件可见
+    for (const id of ['#btnDocBack', '#btnDocPreview', '#btnDocBold', '#btnDocHighlight', '#btnDocHlColor', '#btnDocAlignCenter', '#btnDocImage', '#btnDocTable', '#btnDocDesktop', '#btnDocTodo', '#btnDocGroup', '#btnDocRemind', '#btnDocColor', '#btnDocPin', '#btnDocExportMd', '#btnDocDel']) {
+      await expect(ctx.win.locator(id)).toBeVisible();
+    }
+
+    // 键盘预览：Enter 进入、Space 退出；重建后焦点保留；contenteditable 同步；不触发全局空白/平移
+    await ctx.win.locator('#btnDocPreview').focus();
+    await ctx.win.keyboard.press('Enter');
+    await expect(ctx.win.locator('#btnDocPreview .doc-btn-label')).toHaveText('退出预览');
+    await expect(ctx.win.locator('#btnDocPreview')).toHaveAttribute('aria-pressed', 'true');
+    await expect(ctx.win.locator('#docContent')).toHaveAttribute('contenteditable', 'false');
+    expect(await ctx.win.evaluate(() => document.activeElement && document.activeElement.id)).toBe('btnDocPreview');
+
+    await ctx.win.keyboard.press('Space');
+    await expect(ctx.win.locator('#btnDocPreview .doc-btn-label')).toHaveText('预览');
+    await expect(ctx.win.locator('#btnDocPreview')).toHaveAttribute('aria-pressed', 'false');
+    await expect(ctx.win.locator('#docContent')).toHaveAttribute('contenteditable', 'true');
+    expect(await ctx.win.evaluate(() => document.activeElement && document.activeElement.id)).toBe('btnDocPreview');
+    expect(await ctx.win.evaluate(() => document.body.classList.contains('pan-mode'))).toBe(false);
+
+    // 焦点保留后下一次 Tab 到达有效控件
+    await ctx.win.keyboard.press('Tab');
+    expect(await ctx.win.evaluate(() => { const el = document.activeElement; return !!el && el !== document.body && (el.tagName === 'BUTTON' || el.tagName === 'INPUT' || el.tagName === 'SELECT' || el.tagName === 'TEXTAREA'); })).toBe(true);
+
+    // 浅色非玻璃宽窗（经现有外观应用路径；不注入背景）
+    await ctx.win.evaluate(() => { state.settings.appearanceMode = 'light'; state.settings.glass = false; state.settings.backgroundImage = null; applyTheme(); });
+    await ctx.electronApp.evaluate(({ BrowserWindow }) => { const w = BrowserWindow.getAllWindows().find((x) => x.webContents.getURL().includes('renderer/index.html')); w.setBounds({ width: 1080, height: 760 }); });
+    await ctx.win.waitForTimeout(250);
+    const wide = await ctx.win.evaluate(geometry);
+    expect(wide.count).toBeGreaterThanOrEqual(10);
+    expect(wide.outOfBounds).toBe(0);
+    expect(wide.overlaps).toBe(0);
+    expect(wide.over).toBeLessThanOrEqual(1);
+    await ctx.win.screenshot({ path: wideShot });
+
+    // 深色 + 玻璃 + 受控本地背景（data URI 仅作视觉夹具）窄窗 640，并切换英文后复检边界
+    await ctx.win.evaluate(() => {
+      state.settings.appearanceMode = 'dark';
+      state.settings.glass = true;
+      state.settings.backgroundImage = 'data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAAC0lEQVR42mNkYPhfDwAChwGA60e6kgAAAABJRU5ErkJggg==';
+      state.settings.language = 'en';
+      applyTheme();
+      applyLanguage();
+      renderAll();
+    });
+    // 确认视觉状态确实生效（不是“因为没改所以看起来没坏”）
+    const visual = await ctx.win.evaluate(() => ({
+      glass: document.body.classList.contains('glass'),
+      light: document.body.classList.contains('light-mode'),
+      toolbarBlur: getComputedStyle(document.querySelector('.doc-toolbar')).backdropFilter || getComputedStyle(document.querySelector('.doc-toolbar')).webkitBackdropFilter || ''
+    }));
+    expect(visual.glass).toBe(true);
+    expect(visual.light).toBe(false);
+    expect(visual.toolbarBlur).toContain('blur');
+
+    await ctx.electronApp.evaluate(({ BrowserWindow }) => { const w = BrowserWindow.getAllWindows().find((x) => x.webContents.getURL().includes('renderer/index.html')); w.setBounds({ width: 640, height: 700 }); });
+    await ctx.win.waitForTimeout(250);
+    const narrowEn = await ctx.win.evaluate(geometry);
+    expect(narrowEn.outOfBounds).toBe(0);
+    expect(narrowEn.overlaps).toBe(0);
+    expect(narrowEn.over).toBeLessThanOrEqual(1);
+    expect(await ctx.win.locator('#btnDocPreview .doc-btn-label')).toHaveText('Preview');
+    await ctx.win.screenshot({ path: narrowShot });
+
+    // 待办文档变体：不得含格式/预览按钮，导出与删除仍在
+    const todo = await ctx.win.evaluate(() => {
+      const n = state.notes.find((x) => x.id === docNoteId);
+      n.type = 'todo'; n.items = []; renderAll();
+      return {
+        format: !!document.querySelector('.doc-group-format'),
+        preview: !!document.querySelector('#btnDocPreview'),
+        export: !!document.querySelector('#btnDocExportMd'),
+        del: !!document.querySelector('#btnDocDel')
+      };
+    });
+    expect(todo).toEqual({ format: false, preview: false, export: true, del: true });
+  } finally { await closeApp(ctx); }
+});
+
+test('UX-20A 桌面便签摘要：计数/只读标题/普通与键盘唤起同一窗、编辑刷新、窄窗主题与重启保留', async () => {
+  const ctx = await openApp();
+  let second;
+  try {
+    const wideShot = test.info().outputPath('ux20a-desktop-wide.png');
+    const narrowShot = test.info().outputPath('ux20a-desktop-narrow.png');
+    const ids = () => ctx.electronApp.evaluate(({ BrowserWindow }) => BrowserWindow.getAllWindows().filter((w) => w.webContents.getURL().includes('note.html')).map((w) => w.webContents.id));
+
+    await stableClick(ctx.win.locator('#btnAdd'));
+    await ctx.win.locator('#board .note .note-title').first().fill('桌面一');
+    const noteWinPromise = ctx.electronApp.waitForEvent('window');
+    await stableClick(ctx.win.locator('#board .note .t-desktop').first());
+    const noteWin = await noteWinPromise;
+    await noteWin.waitForLoadState('domcontentloaded');
+    await expect(noteWin.locator('#dnTitle')).toHaveValue('桌面一');
+    const noteId = await ctx.win.evaluate(() => (state.notes.find((n) => n.desktopPin) || {}).id);
+
+    // 普通视图排除钉桌便签；摘要计数/标题正确且只读
+    await expect(ctx.win.locator('#board .note')).toHaveCount(0);
+    await expect(ctx.win.locator('#desktopNotesCount')).toHaveText('1');
+    await expect(ctx.win.locator('.dn-row')).toHaveCount(1);
+    await expect(ctx.win.locator('.dn-row')).toHaveText('桌面一');
+    expect(await ctx.win.evaluate(() => document.querySelectorAll('#desktopNotes input, #desktopNotes textarea, #desktopNotes [contenteditable]').length)).toBe(0);
+    await expect(ctx.win.locator('#desktopNotesSummary')).toContainText('桌面便签');
+
+    // 普通鼠标点击（无 force）：展开 -> 点击行唤起 -> 收起按钮折叠并归还焦点
+    await ctx.win.locator('#desktopNotesSummary').click();
+    await expect(ctx.win.locator('#desktopNotes')).toHaveAttribute('open', '');
+    await ctx.win.locator('.dn-row').first().click();
+    await expect(ctx.win.locator('#btnDesktopNotesClose')).toBeVisible();
+    await ctx.win.locator('#btnDesktopNotesClose').click();
+    await expect(ctx.win.locator('#desktopNotes')).not.toHaveAttribute('open', '');
+    await expect(ctx.win.locator('#desktopNotesSummary')).toBeFocused();
+
+    // 键盘：Enter 展开；行 Enter 唤起两次同一 WC；Esc 折叠并归还焦点
+    await ctx.win.locator('#desktopNotesSummary').focus();
+    await ctx.win.keyboard.press('Enter');
+    await expect(ctx.win.locator('#desktopNotes')).toHaveAttribute('open', '');
+    const before = await ids();
+    await ctx.win.locator('.dn-row').first().focus();
+    await ctx.win.keyboard.press('Enter');
+    await ctx.win.keyboard.press('Enter');
+    await ctx.win.waitForTimeout(250);
+    expect(await ids()).toEqual(before);
+    await ctx.win.keyboard.press('Escape');
+    await expect(ctx.win.locator('#desktopNotes')).not.toHaveAttribute('open', '');
+    await expect(ctx.win.locator('#desktopNotesSummary')).toBeFocused();
+    await ctx.win.locator('#desktopNotesSummary').focus();
+    await ctx.win.keyboard.press('Enter');
+
+    // 独立窗编辑保存 -> 摘要标题经 onNoteChanged 刷新
+    await noteWin.locator('#dnTitle').fill('桌面一改');
+    await expect.poll(async () => (await ux01ReadData(ctx.userDataDir)).notes.find((x) => x.id === noteId).title).toBe('桌面一改');
+    await expect(ctx.win.locator('.dn-row').first()).toHaveText('桌面一改');
+
+    // 最小化后键盘唤起 -> 恢复/可见
+    await ctx.electronApp.evaluate(({ BrowserWindow }) => {
+      const w = BrowserWindow.getAllWindows().find((x) => x.webContents.getURL().includes('note.html'));
+      w.minimize();
+    });
+    await ctx.win.locator('.dn-row').first().focus();
+    await ctx.win.keyboard.press('Enter');
+    await expect.poll(() => ctx.electronApp.evaluate(({ BrowserWindow }) => {
+      const w = BrowserWindow.getAllWindows().find((x) => x.webContents.getURL().includes('note.html'));
+      return !!w && !w.isMinimized() && w.isVisible();
+    })).toBe(true);
+
+    // 宽窗截图（浅色默认）
+    await ctx.electronApp.evaluate(({ BrowserWindow }) => { const w = BrowserWindow.getAllWindows().find((x) => x.webContents.getURL().includes('renderer/index.html')); w.setBounds({ width: 1080, height: 760 }); });
+    await ctx.win.waitForTimeout(200);
+    await ctx.win.screenshot({ path: wideShot });
+
+    // 窄窗 640 + 深色玻璃背景 + 英文：普通点击仍可用、几何不越界/不重叠/不横向溢出
+    await ctx.win.evaluate(() => {
+      state.settings.appearanceMode = 'dark';
+      state.settings.glass = true;
+      state.settings.backgroundImage = 'data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAAC0lEQVR42mNkYPhfDwAChwGA60e6kgAAAABJRU5ErkJggg==';
+      state.settings.language = 'en';
+      applyTheme(); applyLanguage(); renderAll();
+    });
+    await ctx.electronApp.evaluate(({ BrowserWindow }) => { const w = BrowserWindow.getAllWindows().find((x) => x.webContents.getURL().includes('renderer/index.html')); w.setBounds({ width: 640, height: 700 }); });
+    await ctx.win.waitForTimeout(250);
+    await expect(ctx.win.locator('#desktopNotesSummary')).toContainText('Desktop notes');
+    await expect(ctx.win.locator('#btnDesktopNotesClose')).toHaveText('Collapse');
+    // 展开后普通点击行（窄窗玻璃背景）
+    if ((await ctx.win.locator('#desktopNotes').getAttribute('open')) === null) await ctx.win.locator('#desktopNotesSummary').click();
+    await ctx.win.locator('.dn-row').first().click();
+    const geom = await ctx.win.evaluate(() => {
+      const box = document.querySelector('#desktopNotes');
+      const br = box.getBoundingClientRect();
+      const els = [box.querySelector('.dn-summary'), box.querySelector('#btnDesktopNotesClose'), ...box.querySelectorAll('.dn-row')].filter(Boolean);
+      const bad = els.filter((el) => { const r = el.getBoundingClientRect(); return r.left < br.left - 1 || r.right > br.right + 1; });
+      return { over: box.scrollWidth - box.clientWidth, bad: bad.length };
+    });
+    expect(geom.over).toBeLessThanOrEqual(1);
+    expect(geom.bad).toBe(0);
+    await ctx.win.screenshot({ path: narrowShot });
+
+    // 强制结束后重启：磁盘内容与摘要计数保留
+    await ctx.electronApp.evaluate(() => process.exit(1)).catch(() => {});
+    second = await openApp({ userDataDir: ctx.userDataDir });
+    await expect.poll(async () => (await ux01ReadData(ctx.userDataDir)).notes.find((x) => x.id === noteId).title).toBe('桌面一改');
+    await expect(second.win.locator('#desktopNotesCount')).toHaveText('1');
+    await expect.poll(async () => (await second.electronApp.windows()).filter((w) => w.url().includes('note.html')).length).toBe(1);
+  } finally {
+    // 若第二个实例尚未接管/创建，则必须关闭本次拥有的实例，绝不遗留运行中的应用
+    if (second) await closeApp(second);
+    else await closeApp(ctx);
+  }
+});
+
+test('UX-20A 唤起缺失窗口安全重建；非钉桌/未知 id 与独立窗来源拒绝；不干扰失败中的保存', async () => {
+  const ctx = await openApp();
+  try {
+    await stableClick(ctx.win.locator('#btnAdd'));
+    await ctx.win.locator('#board .note .note-title').first().fill('重建标题');
+    const p = ctx.electronApp.waitForEvent('window');
+    await stableClick(ctx.win.locator('#board .note .t-desktop').first());
+    const w1 = await p;
+    await w1.waitForLoadState('domcontentloaded');
+    await expect(w1.locator('#dnTitle')).toHaveValue('重建标题');
+    const noteId = await ctx.win.evaluate(() => (state.notes.find((n) => n.desktopPin) || {}).id);
+
+    // 模拟窗口丢失但保存的 pin 不变
+    await ctx.electronApp.evaluate(({ BrowserWindow }) => {
+      const w = BrowserWindow.getAllWindows().find((x) => x.webContents.getURL().includes('note.html'));
+      w.suppressUnpin = true;
+      w.destroy();
+    });
+    await expect.poll(() => ctx.electronApp.evaluate(({ BrowserWindow }) => BrowserWindow.getAllWindows().filter((x) => x.webContents.getURL().includes('note.html')).length)).toBe(0);
+    expect((await ux01ReadData(ctx.userDataDir)).notes.find((n) => n.id === noteId).desktopPin).toBe(true);
+
+    await ctx.win.waitForTimeout(700); // 让启动/窗口状态写入落定后再快照
+    const dataPath = path.join(ctx.userDataDir, 'notes-data.json');
+    const diskBefore = await fs.readFile(dataPath, 'utf8');
+    const ids = () => ctx.electronApp.evaluate(({ BrowserWindow }) => BrowserWindow.getAllWindows().filter((x) => x.webContents.getURL().includes('note.html')).map((w) => w.webContents.id));
+
+    // 并发挂起加载：两个请求共享同一窗口；加载完成前都不得报告成功，release 后均成功
+    await ctx.electronApp.evaluate(({ BrowserWindow }) => {
+      globalThis.__ux20Gate = { release: null };
+      const gate = new Promise((res) => { globalThis.__ux20Gate.release = res; });
+      const BWP = BrowserWindow.prototype;
+      globalThis.__ux20RealLoadFile = BWP.loadFile;
+      BWP.loadFile = function (...a) { return gate.then(() => globalThis.__ux20RealLoadFile.apply(this, a)); };
+    });
+    const winCounts = () => ctx.electronApp.evaluate(({ BrowserWindow }) => ({
+      total: BrowserWindow.getAllWindows().length,
+      note: BrowserWindow.getAllWindows().filter((w) => w.webContents.getURL().includes('note.html')).length
+    }));
+    // 分别跟踪每个请求的完成标志与结果：仅 Promise.all 挂起不足以证明“没有提前返回单个 true”。
+    await ctx.win.evaluate((id) => {
+      window.__ux20Done = [false, false];
+      window.__ux20Results = [null, null];
+      window.__ux20Both = Promise.all([0, 1].map((i) => window.api.showDesktopNote(id).then((v) => {
+        window.__ux20Done[i] = true;
+        window.__ux20Results[i] = v;
+        return v;
+      })));
+    }, noteId);
+    await ctx.win.waitForTimeout(400);
+    expect(await ctx.win.evaluate(() => window.__ux20Done)).toEqual([false, false]); // 两个请求都未提前返回
+    expect(await winCounts()).toEqual({ total: 2, note: 0 }); // 加载中：仅主窗 + 1 个新建（未完成加载）的独立窗
+    await ctx.electronApp.evaluate(() => globalThis.__ux20Gate.release());
+    expect(await ctx.win.evaluate(() => window.__ux20Both)).toEqual([true, true]);
+    expect(await ctx.win.evaluate(() => window.__ux20Results)).toEqual([true, true]);
+    expect(await ctx.win.evaluate(() => window.__ux20Done)).toEqual([true, true]);
+    expect(await winCounts()).toEqual({ total: 2, note: 1 });
+    await ctx.electronApp.evaluate(({ BrowserWindow }) => { if (globalThis.__ux20RealLoadFile) BrowserWindow.prototype.loadFile = globalThis.__ux20RealLoadFile; delete globalThis.__ux20RealLoadFile; });
+
+    await expect.poll(async () => (await ids()).length).toBe(1);
+    const w2id = (await ids())[0];
+    const w2 = (await ctx.electronApp.windows()).find((w) => w.url().includes('note.html'));
+    await expect(w2.locator('#dnTitle')).toHaveValue('重建标题');
+    // 重复唤起同一窗口；不写盘
+    expect(await ctx.win.evaluate((id) => window.api.showDesktopNote(id), noteId)).toBe(true);
+    expect(await ids()).toEqual([w2id]);
+    expect(await fs.readFile(dataPath, 'utf8')).toBe(diskBefore);
+
+    // 非钉桌 / 未知 / 空 id 拒绝，且不新建窗口、不写盘
+    const nonpinned = await ctx.win.evaluate(() => {
+      const n = { id: 'np1', title: 'x', type: 'note', items: [], images: [], files: [], tables: [], desktopPin: false, x: 1, y: 1 };
+      state.notes.push(n); return n.id;
+    });
+    expect(await ctx.win.evaluate((id) => window.api.showDesktopNote(id), nonpinned)).toBe(false);
+    expect(await ctx.win.evaluate(() => window.api.showDesktopNote('no-such-id'))).toBe(false);
+    expect(await ctx.win.evaluate(() => window.api.showDesktopNote(''))).toBe(false);
+    expect(await ids()).toEqual([w2id]);
+    expect(await fs.readFile(dataPath, 'utf8')).toBe(diskBefore);
+
+    // 受信独立窗也不能唤起（仅主窗）
+    expect(await w2.evaluate((id) => window.api.showDesktopNote(id), noteId)).toBe(false);
+
+    // 独立窗保存失败时唤起不得 flush/清编辑/关窗
+    await ctx.electronApp.evaluate(({ ipcMain }) => {
+      globalThis.__ux20RealUpdate = ipcMain._invokeHandlers.get('note:update');
+      ipcMain.removeHandler('note:update');
+      ipcMain.handle('note:update', () => { throw new Error('模拟保存失败'); });
+    });
+    await w2.locator('#dnTitle').fill('失败中的编辑');
+    await expect(w2.locator('#dnUnpin')).toHaveText('⚠');
+    await ctx.win.evaluate((id) => window.api.showDesktopNote(id), noteId);
+    await ctx.win.waitForTimeout(300);
+    expect(await ids()).toEqual([w2id]);
+    await expect(w2.locator('#dnTitle')).toHaveValue('失败中的编辑');
+  } finally {
+    await ctx.electronApp.evaluate(({ ipcMain, BrowserWindow }) => {
+      if (globalThis.__ux20RealUpdate) { try { ipcMain.removeHandler('note:update'); } catch (e) { /* ignore */ } ipcMain.handle('note:update', globalThis.__ux20RealUpdate); delete globalThis.__ux20RealUpdate; }
+      if (globalThis.__ux20RealLoadFile) { BrowserWindow.prototype.loadFile = globalThis.__ux20RealLoadFile; delete globalThis.__ux20RealLoadFile; }
+    }).catch(() => {});
+    await closeApp(ctx);
+  }
+
+  // 损坏且无可用备份（隔离临时数据）：只读下唤起同样拒绝、无新窗口、无空写
+  const bad = await openApp({ seedRaw: '{broken-primary', seedBak: '{broken-backup' });
+  try {
+    await expect(bad.win.locator('body')).toHaveClass(/data-readonly/);
+    expect(await bad.win.evaluate(() => window.api.showDesktopNote('any-id'))).toBe(false);
+    expect(await bad.electronApp.evaluate(({ BrowserWindow }) => BrowserWindow.getAllWindows().filter((w) => w.webContents.getURL().includes('note.html')).length)).toBe(0);
+    expect(await fs.readFile(path.join(bad.userDataDir, 'notes-data.json'), 'utf8')).toBe('{broken-primary');
+  } finally { await closeApp(bad); }
+});
+
+test('UX-20A 摘要随取消钉桌/删除/成功导入刷新，陈旧行 API 拒绝', async () => {
+  const ctx = await openApp();
+  try {
+    // 展开摘要区（键盘），以便断言空态可见
+    await ctx.win.locator('#desktopNotesSummary').focus();
+    await ctx.win.keyboard.press('Enter');
+    await expect(ctx.win.locator('#desktopNotes')).toHaveAttribute('open', '');
+
+    for (const title of ['钉一', '钉二']) {
+      await stableClick(ctx.win.locator('#btnAdd'));
+      await ctx.win.locator('#board .note .note-title').last().fill(title);
+      const p = ctx.electronApp.waitForEvent('window');
+      await stableClick(ctx.win.locator('#board .note .t-desktop').first());
+      const w = await p;
+      await w.waitForLoadState('domcontentloaded');
+    }
+    await expect(ctx.win.locator('#desktopNotesCount')).toHaveText('2');
+    await expect(ctx.win.locator('.dn-row')).toHaveCount(2);
+
+    // 取消一个钉桌（独立窗）
+    const w1 = (await ctx.electronApp.windows()).find((w) => w.url().includes('note.html'));
+    await w1.locator('#dnUnpin').click();
+    await expect.poll(async () => ctx.win.locator('.dn-row').count()).toBe(1);
+    await expect(ctx.win.locator('#desktopNotesCount')).toHaveText('1');
+
+    // 删除剩余钉桌便签 -> 空态 + 计数 0；陈旧 id 拒绝
+    const remainingId = await ctx.win.evaluate(() => (state.notes.find((n) => n.desktopPin) || {}).id);
+    await ctx.win.evaluate((id) => deleteNote(id), remainingId);
+    await expect.poll(async () => ctx.win.locator('.dn-row').count()).toBe(0);
+    await expect(ctx.win.locator('#desktopNotesCount')).toHaveText('0');
+    await expect(ctx.win.locator('#desktopNotesEmpty')).toBeVisible();
+    // 等磁盘反映删除（渲染层 save 有防抖），再验证陈旧 id 拒绝
+    await expect.poll(async () => (await ux01ReadData(ctx.userDataDir)).notes.some((n) => n.id === remainingId)).toBe(false);
+    expect(await ctx.win.evaluate((id) => window.api.showDesktopNote(id), remainingId)).toBe(false);
+
+    // 成功导入替换：备份含 1 个钉桌便签（新 id/标题）-> 摘要 1/新标题/独立窗；旧 id 拒绝
+    const importedId = 'imp-pin-1';
+    const importedTitle = '导入钉桌';
+    await ctx.electronApp.evaluate(({ ipcMain }, data) => {
+      globalThis.__ux20RealImport = ipcMain._invokeHandlers.get('data:import');
+      ipcMain.removeHandler('data:import');
+      ipcMain.handle('data:import', () => ({ ok: true, data }));
+    }, {
+      version: 2, settings: { viewMode: 'board', lastSeenVersion: EXPECTED_VERSION }, groups: [], trash: [],
+      notes: [{ id: importedId, title: importedTitle, content: '', type: 'note', items: [], images: [], files: [], tables: [], color: '#93f1ce', textColor: null, groupId: null, pinned: false, desktopPin: true, x: 40, y: 40, positionAll: { x: 40, y: 40 }, w: 220, h: 160, z: 1, createdAt: 1, updatedAt: 1 }]
+    });
+    await stableClick(ctx.win.locator('#btnSettings'));
+    await stableClick(ctx.win.locator('.sp-nav-item[data-tab="backup"]'));
+    await stableClick(ctx.win.locator('#btnImport'));
+    await expect(ctx.win.locator('#cmOk')).toBeVisible();
+    await stableClick(ctx.win.locator('#cmOk'));
+    await expect.poll(async () => ctx.win.locator('#desktopNotesCount').textContent()).toBe('1');
+    await expect(ctx.win.locator('.dn-row')).toHaveCount(1);
+    await expect(ctx.win.locator('.dn-row')).toHaveText(importedTitle);
+    // 导入的钉桌便签窗口由成功替换路径重开
+    await expect.poll(async () => (await ctx.electronApp.windows()).filter((w) => w.url().includes('note.html')).length).toBe(1);
+    // 旧（已删除）id 拒绝；导入的新钉桌 id 可安全唤起（复用窗口、不写盘）
+    expect(await ctx.win.evaluate((id) => window.api.showDesktopNote(id), remainingId)).toBe(false);
+    expect(await ctx.win.evaluate((id) => window.api.showDesktopNote(id), importedId)).toBe(true);
+  } finally {
+    await ctx.electronApp.evaluate(({ ipcMain }) => {
+      if (globalThis.__ux20RealImport) { try { ipcMain.removeHandler('data:import'); } catch (e) { /* ignore */ } ipcMain.handle('data:import', globalThis.__ux20RealImport); delete globalThis.__ux20RealImport; }
+    }).catch(() => {});
+    await closeApp(ctx);
+  }
+});
+
+test('UX-22A 条件行：分组/搜索/归档/折叠逐个移除与全部清除、结果单位、安全长文本、键盘与窄窗', async () => {
+  const groupId = 'g" ><img src=x onerror=alert(1)>';
+  const longEn = 'Very long english group name that should truncate with ellipsis safely 1234567890';
+  const seed = {
+    version: 2, settings: { viewMode: 'board', lastSeenVersion: EXPECTED_VERSION },
+    groups: [
+      { id: groupId, name: 'A" ><b id="fs-pwn"></b>', color: '#93f1ce' },
+      { id: 'g2', name: longEn, color: '#f7d65a' }
+    ],
+    trash: [],
+    notes: [
+      { id: 'a1', title: 'Alpha', content: '', type: 'note', items: [], images: [], files: [], tables: [], color: '#93f1ce', textColor: null, groupId, pinned: false, desktopPin: false, archived: false, x: 10, y: 10, positionAll: { x: 10, y: 10 }, w: 200, h: 140, z: 1, createdAt: 1, updatedAt: 1 },
+      { id: 'b1', title: 'Beta', content: '', type: 'note', items: [], images: [], files: [], tables: [], color: '#93f1ce', textColor: null, groupId: 'g2', pinned: false, desktopPin: false, archived: false, x: 10, y: 10, positionAll: { x: 10, y: 10 }, w: 200, h: 140, z: 2, createdAt: 2, updatedAt: 2 },
+      { id: 'c1', title: 'Archived One', content: '', type: 'note', items: [], images: [], files: [], tables: [], color: '#93f1ce', textColor: null, groupId: null, pinned: false, desktopPin: false, archived: true, x: 10, y: 10, positionAll: { x: 10, y: 10 }, w: 200, h: 140, z: 3, createdAt: 3, updatedAt: 3 },
+      { id: 't1', title: 'Todo One', content: '', type: 'todo', items: [{ id: 'i1', text: 'task', done: false }], images: [], files: [], tables: [], color: '#93f1ce', textColor: null, groupId, pinned: false, desktopPin: false, archived: false, reminder: { enabled: true, time: new Date(Date.now() + 3600e3).toISOString(), fired: false }, x: 10, y: 10, positionAll: { x: 10, y: 10 }, w: 200, h: 140, z: 4, createdAt: 4, updatedAt: 4 }
+    ]
+  };
+  const ctx = await openApp({ seed });
+  try {
+    const wideShot = test.info().outputPath('ux22a-status-wide.png');
+    const narrowShot = test.info().outputPath('ux22a-status-narrow.png');
+
+    // 无条件下：条件行隐藏（有可见结果时不显示任何条件/状态）
+    await expect(ctx.win.locator('#filterStatus')).toHaveClass(/hidden/);
+
+    // 分组条件（带恶意名）：普通点击 + 安全文本，无注入元素
+    await ctx.win.evaluate((id) => setFilter('group', id), groupId);
+    await expect(ctx.win.locator('#filterStatus')).not.toHaveClass(/hidden/);
+    await expect(ctx.win.locator('#filterStatus .fs-tag-label')).toContainText('A" ><b id="fs-pwn"></b>');
+    expect(await ctx.win.evaluate(() => !!document.getElementById('fs-pwn'))).toBe(false);
+
+    // 搜索条件（键盘输入），行内显示安全查询
+    await ctx.win.locator('#searchInput').fill('Alpha');
+    await expect.poll(() => ctx.win.locator('#filterStatus .fs-tag').count()).toBe(2);
+    await expect(ctx.win.locator('#filterStatus')).toContainText('搜索: Alpha');
+    await expect(ctx.win.locator('.fs-count')).toHaveText('1 条便签');
+
+    // 移除搜索条件：其它状态（分组）保留，焦点回到搜索框
+    await ctx.win.locator('#filterStatus .fs-tag', { hasText: '搜索' }).locator('.fs-tag-x').click();
+    await expect.poll(() => ctx.win.locator('#filterStatus .fs-tag').count()).toBe(1);
+    await expect(ctx.win.locator('#filterStatus')).toContainText('分组');
+    await expect(ctx.win.locator('#searchInput')).toBeFocused();
+    expect(await ctx.win.evaluate(() => filter.group)).toBe(groupId);
+
+    // 折叠条件：显示折叠分组；可单独移除
+    await ctx.win.evaluate(() => toggleGroupCollapse('g2'));
+    await expect(ctx.win.locator('#filterStatus')).toContainText('已折叠');
+    await ctx.win.locator('#filterStatus .fs-tag', { hasText: '已折叠' }).locator('.fs-tag-x').click();
+    await expect(ctx.win.locator('#filterStatus')).not.toContainText('已折叠');
+    expect(await ctx.win.evaluate(() => state.settings.collapsedGroups.g2)).toBeFalsy();
+
+    // 折叠便签视图计数单位（任务与提醒项）
+    await stableClick(ctx.win.locator('#viewTodo'));
+    await ctx.win.evaluate((id) => setFilter('group', id), groupId);
+    await expect(ctx.win.locator('.fs-count')).toHaveText('2 个任务与提醒项');
+    await stableClick(ctx.win.locator('#viewBoard'));
+
+    // 归档：忽略底层分组，不显示为活动分组标签；有忽略说明；归档条件可移除
+    await stableClick(ctx.win.locator('#btnArchiveFilter'));
+    await expect(ctx.win.locator('#filterStatus')).toContainText('归档');
+    expect(await ctx.win.evaluate(() => document.querySelectorAll('#filterStatus .fs-tag').length)).toBe(1);
+    await expect(ctx.win.locator('#filterStatus')).toContainText('忽略分组');
+    await ctx.win.locator('#filterStatus .fs-tag-x').first().click();
+    await expect(ctx.win.locator('#filterStatus')).not.toContainText('归档');
+    expect(await ctx.win.evaluate(() => filter.group)).toBe(groupId); // 底层分组保留
+
+    // 长英文分组名：文本保留、省略号不溢出
+    await ctx.win.evaluate(() => setFilter('group', 'g2'));
+    const ell = await ctx.win.evaluate(() => {
+      const lab = document.querySelector('#filterStatus .fs-tag-label');
+      const x = document.querySelector('#filterStatus .fs-tag-x');
+      return {
+        text: lab.textContent,
+        clipped: lab.scrollWidth > lab.clientWidth + 1,
+        // 项目 tooltip 体系会把 title 转成 data-tip-text（title 被清空），完整文本仍在
+        full: lab.getAttribute('data-tip-text') || lab.title,
+        xAria: x.getAttribute('aria-label') || x.title
+      };
+    });
+    expect(ell.text).toContain('分组: ' + longEn);
+    expect(ell.full).toContain('分组: ' + longEn);
+    expect(ell.xAria).toContain(longEn);
+
+    // 键盘到达标签并移除（不强制点击）
+    await ctx.win.locator('#filterStatus .fs-tag-x').first().focus();
+    await ctx.win.keyboard.press('Enter');
+    await expect(ctx.win.locator('#filterStatus')).toHaveClass(/hidden/);
+
+    // 未分组条件行本地化（中文 -> 未分组；不是原始英文 ID）
+    await ctx.win.evaluate(() => setFilter('group', 'ungrouped'));
+    await expect(ctx.win.locator('#filterStatus .fs-tag-label')).toContainText('未分组');
+    expect(await ctx.win.evaluate(() => document.querySelector('#filterStatus .fs-tag-label').textContent)).not.toContain('ungrouped');
+
+    // 备忘录/文档视图：查询 + 分组下正确计数（Alpha 属于恶意分组 groupId）
+    await ctx.win.evaluate((id) => setFilter('group', id), groupId);
+    await ctx.win.locator('#searchInput').fill('Alpha');
+    await stableClick(ctx.win.locator('#viewMemo'));
+    await expect.poll(() => ctx.win.evaluate(() => (filter.query || '').trim())).toBe('Alpha');
+    await expect(ctx.win.locator('.fs-count')).toHaveText('1 条便签');
+    await stableClick(ctx.win.locator('#viewDoc'));
+    await expect(ctx.win.locator('.fs-count')).toHaveText('1 条便签');
+
+    // 清除分组后保留非空查询
+    await ctx.win.locator('#filterStatus .fs-tag', { hasText: '分组' }).locator('.fs-tag-x').click();
+    expect(await ctx.win.evaluate(() => ({ q: filter.query, g: filter.group }))).toEqual({ q: 'Alpha', g: 'all' });
+    await expect(ctx.win.locator('#filterStatus .fs-tag')).toHaveCount(1);
+    // 恢复分组，进入折叠多条件场景
+    await ctx.win.evaluate(() => setFilter('group', 'g2'));
+
+    // 折叠两组：清除其一保留另一个与快照，再全部清除复位
+    await ctx.win.evaluate(() => { toggleGroupCollapse('g2'); toggleGroupCollapse('g1'); });
+    await expect(ctx.win.locator('#filterStatus .fs-tag', { hasText: '已折叠' })).toHaveCount(2);
+    await ctx.win.locator('#filterStatus .fs-tag', { hasText: '已折叠' }).first().locator('.fs-tag-x').click();
+    const oneFold = await ctx.win.evaluate(() => ({
+      folded: document.querySelectorAll('#filterStatus .fs-tag').length &&
+        Array.from(document.querySelectorAll('#filterStatus .fs-tag')).filter((t) => /已折叠/.test(t.textContent)).length,
+      cg2: !!state.settings.collapsedGroups.g2, cg1: !!state.settings.collapsedGroups.g1,
+      snap: Object.keys(state.settings.collapseSnapshot || {}).length
+    }));
+    expect(oneFold.folded).toBe(1);            // 仅剩一个折叠标签
+    expect(oneFold.cg2 !== oneFold.cg1).toBe(true); // 其一保留
+    expect(oneFold.snap).toBeGreaterThanOrEqual(1);  // 保留的快照仍在
+    await ctx.win.evaluate(() => { if (state.settings.collapsedGroups.g1) toggleGroupCollapse('g1'); if (state.settings.collapsedGroups.g2) toggleGroupCollapse('g2'); });
+
+    // 多条件 + 长文本：1080 浅色截图与几何，搜索焦点跨窗口尺寸保持
+    await ctx.win.locator('#searchInput').fill('Alpha <b>x</b> 很长的搜索条件内容内容内容内容内容内容内容内容');
+    await ctx.win.evaluate(() => { toggleGroupCollapse('g2'); });
+    await ctx.electronApp.evaluate(({ BrowserWindow }) => { const w = BrowserWindow.getAllWindows().find((x) => x.webContents.getURL().includes('renderer/index.html')); w.setBounds({ width: 1080, height: 760 }); });
+    await ctx.win.waitForTimeout(200);
+    await ctx.win.locator('#searchInput').focus();
+    const g1 = await ctx.win.evaluate(() => {
+      const row = document.querySelector('#filterStatus');
+      const rr = row.getBoundingClientRect();
+      const bad = Array.from(row.children).filter((el) => { const r = el.getBoundingClientRect(); return r.left < rr.left - 1 || r.right > rr.right + 1; }).length;
+      return { hidden: row.classList.contains('hidden'), bad, over: row.scrollWidth - row.clientWidth };
+    });
+    expect(g1.hidden).toBe(false);
+    expect(g1.bad).toBe(0);
+    expect(g1.over).toBeLessThanOrEqual(1);
+    expect(await ctx.win.locator('#searchInput')).toBeFocused();
+    await ctx.win.screenshot({ path: wideShot });
+
+    // 640 深色玻璃 + 英文 + 长条件：无溢出/重叠、搜索焦点保持
+    await ctx.win.evaluate(() => {
+      state.settings.appearanceMode = 'dark';
+      state.settings.glass = true;
+      state.settings.language = 'en';
+      applyTheme(); applyLanguage(); renderAll();
+    });
+    await ctx.electronApp.evaluate(({ BrowserWindow }) => { const w = BrowserWindow.getAllWindows().find((x) => x.webContents.getURL().includes('renderer/index.html')); w.setBounds({ width: 640, height: 700 }); });
+    await ctx.win.waitForTimeout(250);
+    await ctx.win.locator('#searchInput').focus();
+    const g2 = await ctx.win.evaluate(() => {
+      const row = document.querySelector('#filterStatus');
+      const rr = row.getBoundingClientRect();
+      const els = Array.from(row.children).map((el) => el.getBoundingClientRect());
+      let overlap = 0;
+      for (let i = 0; i < els.length; i++) for (let j = i + 1; j < els.length; j++) {
+        const a = els[i], b = els[j];
+        if (a.left < b.right - 1 && b.left < a.right - 1 && a.top < b.bottom - 1 && b.top < a.bottom - 1) overlap++;
+      }
+      const bad = Array.from(row.children).filter((el) => { const r = el.getBoundingClientRect(); return r.left < rr.left - 1 || r.right > rr.right + 1; }).length;
+      return { bad, overlap, over: row.scrollWidth - row.clientWidth };
+    });
+    expect(g2.bad).toBe(0);
+    expect(g2.overlap).toBe(0);
+    expect(g2.over).toBeLessThanOrEqual(1);
+    expect(await ctx.win.locator('#searchInput')).toBeFocused();
+    await ctx.win.screenshot({ path: narrowShot });
+
+    // 1000 字符连续/无分词组名在 640 下不得撑破条件行；折叠标签过多时可滚动且全部可达
+    await ctx.win.evaluate(() => {
+      for (let i = 0; i < 10; i++) state.groups.push({ id: 'xg' + i, name: 'X'.repeat(1000), color: '#888' });
+      for (let i = 0; i < 10; i++) state.settings.collapsedGroups['xg' + i] = true;
+      renderAll();
+    });
+    const narrow2 = await ctx.win.evaluate(() => {
+      const row = document.querySelector('#filterStatus');
+      const note = row.querySelector('.fs-note');
+      const noteFits = note ? (note.getBoundingClientRect().right <= row.getBoundingClientRect().right + 1) : true;
+      row.scrollTop = row.scrollHeight; // 滚动到底，验证仍可到达底部控件
+      const last = row.lastElementChild;
+      const reach = last ? (last.getBoundingClientRect().bottom <= row.getBoundingClientRect().bottom + 1) : true;
+      return { over: row.scrollWidth - row.clientWidth, noteFits, capped: row.scrollHeight > row.clientHeight, reach };
+    });
+    expect(narrow2.over).toBeLessThanOrEqual(1);
+    expect(narrow2.noteFits).toBe(true);
+    expect(narrow2.capped).toBe(true); // 垂直受限滚动，不再撑满整窗
+    expect(narrow2.reach).toBe(true);
+    await ctx.win.evaluate(() => { state.groups = state.groups.filter((g) => !/^xg/.test(g.id)); renderAll(); });
+
+    // 全部清除（已有实现）：条件行隐藏、分组/搜索/归档/折叠复位、搜索聚焦
+    await ctx.win.locator('.fs-clear').click();
+    await expect(ctx.win.locator('#filterStatus')).toHaveClass(/hidden/);
+    expect(await ctx.win.evaluate(() => ({ q: filter.query, g: filter.group, a: filter.archive, c: state.settings.collapsedGroups.g2 }))).toEqual({ q: '', g: 'all', a: false, c: false });
+    await expect(ctx.win.locator('#searchInput')).toBeFocused();
+
+    // 顶部语义分组（不重构导航）：筛选范围 / 视图 可访问名称
+    expect(await ctx.win.evaluate(() => document.querySelector('.filter-scope').getAttribute('aria-label'))).toBe('Filter scope');
+    expect(await ctx.win.evaluate(() => document.querySelector('.view-toggle').getAttribute('aria-label'))).toBe('Views');
+    expect(await ctx.win.evaluate(() => document.querySelector('.view-toggle').getAttribute('role'))).toBe('group');
+  } finally { await closeApp(ctx); }
+});
+
+test('UX-22A 条件行：真正空数据与无匹配时的条件行状态', async () => {
+  const empty = await openApp({ seed: { version: 2, settings: { viewMode: 'board', lastSeenVersion: EXPECTED_VERSION }, groups: [], trash: [], notes: [] } });
+  try {
+    // 无任何条件：条件行始终隐藏；真正空数据由既有 emptyHint 展示新建入口
+    await expect(empty.win.locator('#filterStatus')).toHaveClass(/hidden/);
+    await expect(empty.win.locator('#filterStatus .fs-tag')).toHaveCount(0);
+    await expect(empty.win.locator('#emptyHint')).toBeVisible();
+    await expect(empty.win.locator('#btnEmptyCreate')).toBeVisible();
+  } finally { await closeApp(empty); }
+
+  const ctx = await openApp({ seed: { version: 2, settings: { viewMode: 'board', lastSeenVersion: EXPECTED_VERSION }, groups: [], trash: [], notes: [{ id: 'n1', title: 'One', content: '', type: 'note', items: [], images: [], files: [], tables: [], color: '#93f1ce', textColor: null, groupId: null, pinned: false, desktopPin: false, archived: false, x: 10, y: 10, positionAll: { x: 10, y: 10 }, w: 200, h: 140, z: 1, createdAt: 1, updatedAt: 1 }] } });
+  try {
+    await ctx.win.locator('#searchInput').fill('zzz-no-match');
+    await expect(ctx.win.locator('#filterStatus')).toContainText('无匹配结果');
+    await expect(ctx.win.locator('#filterStatus .fs-tag')).toHaveCount(1); // 搜索条件标签
+    await expect(ctx.win.locator('.fs-count')).toHaveText('0 条便签');
+    await expect(ctx.win.locator('#emptyHint')).toBeVisible();            // 既有 no-match emptyHint 保留
+    await ctx.win.locator('#filterStatus .fs-tag-x').first().click();
+    await expect(ctx.win.locator('#filterStatus')).toHaveClass(/hidden/); // 无条件后隐藏
+  } finally { await closeApp(ctx); }
+});
+
+test('TABLE-01 斜线表头长文本按正确象限布局，不越出单元格/对角线（板+独立窗）', async () => {
+  const now = Date.now();
+  const cjk = '甲'.repeat(60), ascii = 'B'.repeat(80);
+  const tables = [
+    { id: 't1', rows: 1, cols: 1, cells: [['']], merges: [], diagonals: [{ r: 0, c: 0, dir: 'tlbr', t1: cjk, t2: ascii, tColor: '#334', tSize: 24 }], borderWidth: 2, borderColor: '#888' },
+    { id: 't2', rows: 1, cols: 1, cells: [['']], merges: [], diagonals: [{ r: 0, c: 0, dir: 'trbl', t1: ascii + '\n' + '换行', t2: cjk, tSize: 24 }] }
+  ];
+  const mkNote = (id, pin) => ({
+    id, title: '斜线', content: '[[table:t1]][[table:t2]]', type: 'note', items: [], images: [], files: [], tables,
+    color: '#93f1ce', textColor: null, groupId: null, pinned: false, desktopPin: !!pin, reminder: null,
+    x: 20, y: 20, positionAll: { x: 20, y: 20 }, w: 260, h: 220, z: 1, createdAt: now, updatedAt: now
+  });
+  const seed = {
+    version: 2, settings: { viewMode: 'board', lastSeenVersion: EXPECTED_VERSION }, groups: [], trash: [],
+    notes: [mkNote('diag-main', false), mkNote('diag-pin', true)]
+  };
+  const ctx = await openApp({ seed });
+  try {
+    // 逐标签用「矩形四角」相对 TD 归一化判断对角线半平面；象限用几何中点判断；等行高用 gridTemplateRows。
+    const check = (page) => page.evaluate(() => {
+      const out = [];
+      document.querySelectorAll('td.diag').forEach((td) => {
+        const t = td.getBoundingClientRect();
+        const dir = td.classList.contains('diag-trbl') ? 'trbl' : 'tlbr';
+        const gridRows = getComputedStyle(td.querySelector('.diag-box')).gridTemplateRows.split(/\s+/).map(parseFloat).filter((n) => !isNaN(n));
+        [['.tbl-t1', 't1'], ['.tbl-t2', 't2']].forEach(([sel, name]) => {
+          const el = td.querySelector(sel);
+          const r = el.getBoundingClientRect();
+          const isT1 = name === 't1';
+          const inCell = r.left >= t.left - 0.5 && r.right <= t.right + 0.5 && r.top >= t.top - 0.5 && r.bottom <= t.bottom + 0.5;
+          // 四角归一化（相对 TD 宽高），逐角验证在与对角线正确的一侧，容差 0.03
+          const corners = [[r.left, r.top], [r.right, r.top], [r.left, r.bottom], [r.right, r.bottom]].map(([x, y]) => [ (x - t.left) / t.width, (y - t.top) / t.height ]);
+          const TOL = 0.03;
+          // tlbr 对角线 y=x；trbl 对角线 y=1-x。t1 在上侧，t2 在下侧；四角都必须满足。
+          const allAbove = corners.every(([x, y]) => (dir === 'tlbr' ? y <= x + TOL : y <= 1 - x + TOL));
+          const allBelow = corners.every(([x, y]) => (dir === 'tlbr' ? y >= x - TOL : y >= 1 - x - TOL));
+          const sideOK = isT1 ? allAbove : allBelow;
+          // 象限：几何中点属于预期半区（t1 上行；tlbr t2 左列 / trbl t2 右列）
+          const midX = (r.left + r.right) / 2, midY = (r.top + r.bottom) / 2;
+          const topHalf = midY < (t.top + t.bottom) / 2;
+          const leftHalf = midX < (t.left + t.right) / 2;
+          const expectedLeft = isT1 ? (dir === 'trbl') : (dir === 'tlbr');
+          const quadOK = (topHalf === isT1) && (leftHalf === expectedLeft);
+          out.push({ dir, name, inCell, quadOK, sideOK, rowsEqual: gridRows.length === 2 && Math.abs(gridRows[0] - gridRows[1]) < 1.5, gridRows });
+        });
+      });
+      return out;
+    });
+
+    const main = await check(ctx.win);
+    expect(main.length).toBe(4);
+    main.forEach((x) => { expect(x.inCell, JSON.stringify(x)).toBe(true); expect(x.quadOK, JSON.stringify(x)).toBe(true); expect(x.sideOK, JSON.stringify(x)).toBe(true); });
+    expect(main.every((x) => x.rowsEqual)).toBe(true);
+    await ctx.win.screenshot({ path: test.info().outputPath('table01-main.png') });
+
+    // 180 与 360 宽度下仍不越界（真实渲染路径，临时固定容器宽度）
+    const atWidth = (page, w) => page.evaluate((width) => {
+      const host = document.getElementById('t01-host') || (() => { const d = document.createElement('div'); d.id = 't01-host'; document.body.appendChild(d); return d; })();
+      host.style.width = width + 'px';
+      host.innerHTML = renderRichContent('[[table:t1]][[table:t2]]', state.notes.find((n) => n.id === 'diag-main'));
+      const bad = [];
+      document.querySelectorAll('#t01-host td.diag').forEach((td) => {
+        const t = td.getBoundingClientRect();
+        td.querySelectorAll('.tbl-t1,.tbl-t2').forEach((el) => { const r = el.getBoundingClientRect(); if (r.left < t.left - 0.5 || r.right > t.right + 0.5 || r.top < t.top - 0.5 || r.bottom > t.bottom + 0.5) bad.push(el.textContent.slice(0, 4)); });
+      });
+      return bad;
+    }, w);
+    expect(await atWidth(ctx.win, 180)).toEqual([]);
+    expect(await atWidth(ctx.win, 360)).toEqual([]);
+    await ctx.win.evaluate(() => { const h = document.getElementById('t01-host'); if (h) h.remove(); });
+
+    // 独立窗：同 markup/CSS（钉桌便签）
+    await expect.poll(async () => (await ctx.electronApp.windows()).filter((w) => w.url().includes('note.html')).length).toBe(1);
+    const noteWin = (await ctx.electronApp.windows()).find((w) => w.url().includes('note.html'));
+    await expect.poll(() => noteWin.locator('td.diag').count()).toBe(2);
+    const det = await check(noteWin);
+    expect(det.length).toBe(4);
+    det.forEach((x) => { expect(x.inCell, JSON.stringify(x)).toBe(true); expect(x.quadOK, JSON.stringify(x)).toBe(true); expect(x.sideOK, JSON.stringify(x)).toBe(true); });
+    expect(det.every((x) => x.rowsEqual)).toBe(true);
+    await noteWin.screenshot({ path: test.info().outputPath('table01-detached.png') });
+  } finally { await closeApp(ctx); }
+});
+
+test('TABLE-02 对角线工具栏/对话框：始终打开预填、Esc/取消无写入、应用保留、移除仅删斜线', async () => {
+  const now = Date.now();
+  const tables = [{ id: 't1', rows: 2, cols: 2, cells: [['A', 'B'], ['C', 'D']], merges: [], diagonals: [{ r: 0, c: 0, dir: 'tlbr', t1: '左上文本', t2: '右下文本', tColor: '#445566', tSize: 12 }], borderWidth: 2, borderColor: '#888' }];
+  const seed = {
+    version: 2, settings: { viewMode: 'board', lastSeenVersion: EXPECTED_VERSION, language: 'en' }, groups: [], trash: [],
+    notes: [{ id: 'tbl2', title: '表格', content: '[[table:t1]]', type: 'note', items: [], images: [], files: [], tables,
+      color: '#93f1ce', textColor: null, groupId: null, pinned: false, desktopPin: false, reminder: null,
+      x: 20, y: 20, positionAll: { x: 20, y: 20 }, w: 300, h: 240, z: 1, createdAt: now, updatedAt: now }]
+  };
+  const ctx = await openApp({ seed });
+  try {
+    const snap = () => ctx.win.evaluate(() => JSON.stringify(state.notes[0].tables[0].diagonals));
+    const tdOf = (r, c) => ctx.win.locator(`#board td[data-r="${r}"][data-c="${c}"]`).first();
+
+    // 选中已有斜线单元格（普通点击）-> 工具栏按钮英文可见短标签 + 禁用/启用状态
+    await tdOf(0, 0).click();
+    await expect(ctx.win.locator('.table-toolbar')).toBeVisible();
+    const labels = await ctx.win.evaluate(() => Array.from(document.querySelectorAll('.table-toolbar button')).map((b) => b.textContent));
+    expect(labels.join('|')).not.toMatch(/[\u4e00-\u9fff]/); // 英文无中文残留
+    expect(labels).toContain('+Row');
+    await expect(ctx.win.locator('.table-toolbar button[aria-label="Merge cells"]')).toBeDisabled(); // 无框选
+
+    const before = await snap();
+    // 点击「斜线」：已有斜线时应打开编辑器（预填），不得直接移除
+    await ctx.win.locator('.table-toolbar button[aria-label="Diagonal line"]').click();
+    await expect(ctx.win.locator('.diag-editor-modal')).toBeVisible();
+    await expect(ctx.win.locator('.diag-editor-modal')).toHaveAttribute('aria-modal', 'true');
+    await expect(ctx.win.locator('#diagT1')).toHaveValue('左上文本');
+    await expect(ctx.win.locator('#diagT2')).toHaveValue('右下文本');
+    expect(await ctx.win.evaluate(() => document.activeElement && document.activeElement.id)).toBe('diagT1'); // 初始焦点
+    expect(await snap()).toBe(before); // 打开未写入
+
+    // Esc 取消：无写入，且不触发背景快捷键
+    await ctx.win.keyboard.press('Escape');
+    await expect(ctx.win.locator('.diag-editor-modal')).toHaveCount(0);
+    expect(await snap()).toBe(before);
+
+    // 打开 -> 应用：保留完整文本/方向
+    await ctx.win.locator('.table-toolbar button[aria-label="Diagonal line"]').click();
+    await ctx.win.locator('#diagT1').fill('改后左上');
+    await ctx.win.locator('#diagOk').click();
+    await expect(ctx.win.locator('.diag-editor-modal')).toHaveCount(0);
+    expect(await ctx.win.evaluate(() => state.notes[0].tables[0].diagonals[0])).toMatchObject({ t1: '改后左上', t2: '右下文本', dir: 'tlbr' });
+
+    // 移除：仅删斜线，保留单元格内容
+    await tdOf(0, 0).click();
+    await ctx.win.locator('.table-toolbar button[aria-label="Diagonal line"]').click();
+    await ctx.win.locator('#diagRemove').click();
+    expect(await ctx.win.evaluate(() => state.notes[0].tables[0].diagonals.length)).toBe(0);
+    expect(await ctx.win.evaluate(() => state.notes[0].tables[0].cells[0][0])).toBe('A');
+
+    // 无斜线时 Remove 禁用
+    await tdOf(0, 1).click();
+    await ctx.win.locator('.table-toolbar button[aria-label="Diagonal line"]').click();
+    await expect(ctx.win.locator('#diagRemove')).toBeDisabled();
+    await ctx.win.locator('#diagCancel').click();
+
+    // 合并单元格（框选 2x2）后：拆分可用、斜线禁用（锚点已合并）
+    const b = ctx.win.locator('#board td[data-r="0"][data-c="0"]').first();
+    const box = await b.boundingBox();
+    await ctx.win.mouse.move(box.x + 4, box.y + 4);
+    await ctx.win.mouse.down();
+    await ctx.win.mouse.move(box.x + 60, box.y + 40, { steps: 4 });
+    await ctx.win.mouse.up();
+    await expect(ctx.win.locator('.table-toolbar button[aria-label="Merge cells"]')).toBeEnabled();
+    await ctx.win.locator('.table-toolbar button[aria-label="Merge cells"]').click();
+    await expect.poll(() => ctx.win.evaluate(() => (state.notes[0].tables[0].merges || []).length)).toBe(1);
+    await ctx.win.waitForTimeout(250); // 越过框选后的点击抑制窗口
+    await tdOf(0, 0).click();
+    await expect(ctx.win.locator('.table-toolbar button[aria-label="Split cell"]')).toBeEnabled();
+    await expect(ctx.win.locator('.table-toolbar button[aria-label="Diagonal line"]')).toBeDisabled();
+
+    // Tab 循环停留在对话框内（此时 (0,0) 已合并，(1,0) 被覆盖 -> 用未合并的 (1,1)）
+    await tdOf(1, 1).click();
+    await ctx.win.locator('.table-toolbar button[aria-label="Diagonal line"]').click();
+    for (let i = 0; i < 6; i++) await ctx.win.keyboard.press('Tab');
+    expect(await ctx.win.evaluate(() => !!document.activeElement.closest('.diag-editor-modal'))).toBe(true);
+    await ctx.win.keyboard.press('Escape');
+    await expect(ctx.win.locator('.diag-editor-modal')).toHaveCount(0);
+    // 焦点归还给打开者（斜线工具栏按钮）或表格块
+    expect(await ctx.win.evaluate(() => {
+      const el = document.activeElement;
+      return !!(el && (el.closest('.note-table-block') || el.closest('.table-toolbar') || el.classList.contains('table-toolbar')));
+    })).toBe(true);
+  } finally { await closeApp(ctx); }
+});
+
+test('TABLE-02 独立窗对角线对话框：初始焦点/Tab 循环/Esc 无写入/应用与移除', async () => {
+  const now = Date.now();
+  const tables = [{ id: 't1', rows: 2, cols: 2, cells: [['A', 'B'], ['C', 'D']], merges: [], diagonals: [{ r: 0, c: 0, dir: 'trbl', t1: 'T1原文', t2: 'T2原文', tColor: '#334455', tSize: 14 }], borderWidth: 2, borderColor: '#888' }];
+  const seed = {
+    version: 2, settings: { viewMode: 'board', lastSeenVersion: EXPECTED_VERSION, language: 'en' }, groups: [], trash: [],
+    notes: [{ id: 'tbl2d', title: '表格', content: '[[table:t1]]', type: 'note', items: [], images: [], files: [], tables,
+      color: '#93f1ce', textColor: null, groupId: null, pinned: false, desktopPin: true, reminder: null,
+      x: 20, y: 20, positionAll: { x: 20, y: 20 }, w: 300, h: 240, z: 1, createdAt: now, updatedAt: now }]
+  };
+  const ctx = await openApp({ seed });
+  try {
+    await expect.poll(async () => (await ctx.electronApp.windows()).filter((w) => w.url().includes('note.html')).length).toBe(1);
+    const noteWin = (await ctx.electronApp.windows()).find((w) => w.url().includes('note.html'));
+    await noteWin.waitForLoadState('domcontentloaded');
+    const diag = () => noteWin.evaluate(() => JSON.stringify(note.tables[0].diagonals));
+
+    await noteWin.locator('td[data-r="0"][data-c="0"]').first().click();
+    await expect(noteWin.locator('.table-toolbar')).toBeVisible();
+    const before = await diag();
+    await noteWin.locator('.table-toolbar button[aria-label="Diagonal line"]').click();
+    await expect(noteWin.locator('.diag-editor-modal')).toBeVisible();
+    await expect(noteWin.locator('#diagT1')).toHaveValue('T1原文');
+    expect(await noteWin.evaluate(() => document.activeElement && document.activeElement.id)).toBe('diagT1');
+    expect(await diag()).toBe(before);
+
+    for (let i = 0; i < 6; i++) await noteWin.keyboard.press('Tab');
+    expect(await noteWin.evaluate(() => !!document.activeElement.closest('.diag-editor-modal'))).toBe(true);
+    await noteWin.keyboard.press('Escape');
+    await expect(noteWin.locator('.diag-editor-modal')).toHaveCount(0);
+    expect(await diag()).toBe(before);
+
+    await noteWin.locator('td[data-r="0"][data-c="0"]').first().click();
+    await noteWin.locator('.table-toolbar button[aria-label="Diagonal line"]').click();
+    await noteWin.locator('#diagT1').fill('新 T1 文本');
+    await noteWin.locator('#diagOk').click();
+    expect(await noteWin.evaluate(() => note.tables[0].diagonals[0])).toMatchObject({ t1: '新 T1 文本', dir: 'trbl' });
+    await noteWin.locator('td[data-r="0"][data-c="0"]').first().click();
+    await noteWin.locator('.table-toolbar button[aria-label="Diagonal line"]').click();
+    await noteWin.locator('#diagRemove').click();
+    expect(await noteWin.evaluate(() => note.tables[0].diagonals.length)).toBe(0);
+    expect(await noteWin.evaluate(() => note.tables[0].cells[0][0])).toBe('A');
+
+    // 打开模态覆盖层时：工具栏按钮中心处 elementFromPoint 不得命中工具栏（不可穿越点击）
+    await noteWin.locator('td[data-r="0"][data-c="1"]').first().click();
+    await noteWin.locator('.table-toolbar button[aria-label="Diagonal line"]').click();
+    await expect(noteWin.locator('.diag-editor-modal')).toBeVisible();
+    const hit = await noteWin.evaluate(() => {
+      const btn = document.querySelector('.table-toolbar button');
+      if (!btn) return 'no-toolbar';
+      const r = btn.getBoundingClientRect();
+      const el = document.elementFromPoint(r.left + r.width / 2, r.top + r.height / 2);
+      return el ? (el.closest('.table-toolbar') ? 'toolbar' : 'overlay-or-other') : 'none';
+    });
+    expect(hit).toBe('overlay-or-other');
+    await noteWin.keyboard.press('Escape');
+    await expect(noteWin.locator('.diag-editor-modal')).toHaveCount(0);
+
+    // 结构变更后按钮可用性立即刷新：2x2 选中格删行 -> 仅剩 1 行 -> 删行禁用；再加行并重选 -> 启用
+    await noteWin.locator('td[data-r="0"][data-c="1"]').first().click();
+    await expect(noteWin.locator('.table-toolbar button[aria-label="Delete row"]')).toBeEnabled();
+    await noteWin.locator('.table-toolbar button[aria-label="Delete row"]').click();
+    await expect.poll(() => noteWin.evaluate(() => note.tables[0].rows)).toBe(1);
+    await noteWin.locator('td[data-r="0"][data-c="0"]').first().click();
+    await expect(noteWin.locator('.table-toolbar button[aria-label="Delete row"]')).toBeDisabled();
+    await noteWin.locator('.table-toolbar button[aria-label="Add row"]').click();
+    await expect.poll(() => noteWin.evaluate(() => note.tables[0].rows)).toBe(2);
+    await noteWin.locator('td[data-r="1"][data-c="0"]').first().click();
+    await expect(noteWin.locator('.table-toolbar button[aria-label="Delete row"]')).toBeEnabled();
+
+    // 钉窗默认窄宽：工具栏换行可读、禁用态可见
+    await noteWin.screenshot({ path: test.info().outputPath('table02-detached-toolbar.png') });
+  } finally { await closeApp(ctx); }
+});
+
 test('窗口置顶按钮：点击激活高亮、再次点击还原', async () => {
   const ctx = await openApp();
   try {
@@ -886,7 +3364,7 @@ test('保存当前排序后备忘录列表保持顺序且跨视图一致', async
 });
 
 // —— 排序：保存排序 ↔ 一键整理（恢复保存的快照布局，并对重叠便签轻移去重叠） ——
-test('画布视图：保存排序后一键整理恢复到保存的布局且不重叠', async () => {
+test('UX-30B arrange follows changed custom order despite old saved layout (no implicit restore)', async () => {
   const mk = (id, x, y) => ({
     id, title: id, content: 'c' + id, type: 'note', items: [], images: [], files: [], tables: [],
     color: '#93f1ce', textColor: null, groupId: null, pinned: false, desktopPin: false, reminder: null,
@@ -900,34 +3378,224 @@ test('画布视图：保存排序后一键整理恢复到保存的布局且不�
   };
   const ctx = await openApp({ seed });
   try {
-    await expect(ctx.win.locator('#noteCount')).toHaveText('3');
-    const pa = (id) => ctx.win.evaluate((i) => state.notes.find((n) => n.id === i).positionAll, id);
-    // 保存当前排序（记录布局快照 a/b/c）
-    await stableClick(ctx.win.locator('#btnSaveOrder'));
-    // 打乱位置
-    await ctx.win.evaluate(() => setEffPos(state.notes.find((n) => n.id === 'a'), 900, 500));
-    // 一键整理 → 恢复到保存时的布局
-    await stableClick(ctx.win.locator('#btnQuickArrange'));
-    expect(await pa('a')).toEqual({ x: 20, y: 20 });
-    expect(await pa('b')).toEqual({ x: 300, y: 20 });
-    expect(await pa('c')).toEqual({ x: 600, y: 20 });
-    // 恢复后任意两便签不重叠
-    const overlap = await ctx.win.evaluate(() => {
-      const rects = state.notes.map((n) => { const p = n.positionAll; return { x: p.x, y: p.y, w: n.w, h: n.h }; });
-      let bad = 0;
-      for (let i = 0; i < rects.length; i++) for (let j = i + 1; j < rects.length; j++) {
-        const a = rects[i], b = rects[j];
-        if (!(b.x > a.x + a.w || b.x + b.w < a.x || b.y > a.y + a.h || b.y + b.h < a.y)) bad++;
-      }
-      return bad;
+    // 普通种子（无钉桌）→ 只有一个主窗口；显式断言初始化完成
+    const win = ctx.win;
+    await expect(win.locator('#noteCount')).toHaveText('3');
+    const pos = (id) => win.evaluate((i) => { const n = state.notes.find((x) => x.id === i); return { x: n.positionAll.x, y: n.positionAll.y }; }, id);
+
+    // 保存当前排序与布局（记录快照 a/b/c）
+    await win.locator('#btnSaveOrder').click();
+    const savedA = await pos('a');
+    const snapBefore = await win.evaluate(() => JSON.stringify(state.settings.orderLayouts));
+
+    // 改为新自定义顺序 c,b,a（快照仍是 a/b/c）并打乱位置
+    await win.evaluate(() => { state.settings.sortMode = 'custom'; state.settings.noteOrder = ['c', 'b', 'a']; setEffPos(state.notes.find((n) => n.id === 'a'), 900, 500); });
+    // 一键整理：必须按当前顺序 c,b,a 紧凑打包，而不是恢复旧快照 a/b/c
+    await win.locator('#btnQuickArrange').click();
+    const order = await win.evaluate(() => getSortedNotes(visibleNotes()).map((n) => n.id));
+    expect(order).toEqual(['c', 'b', 'a']);
+    const rel = await win.evaluate(() => {
+      const p = (i) => state.notes.find((n) => n.id === i).positionAll;
+      const a = p('a'), b = p('b'), c = p('c');
+      const before = (u, v) => (u.y < v.y) || (u.y === v.y && u.x < v.x);
+      return { cBeforeB: before(c, b), bBeforeA: before(b, a) };
     });
-    expect(overlap).toBe(0);
+    expect(rel).toEqual({ cBeforeB: true, bBeforeA: true });
+    // arrange 不覆盖旧快照，不切换模式/顺序
+    expect(await win.evaluate(() => JSON.stringify(state.settings.orderLayouts))).toBe(snapBefore);
+    expect(await win.evaluate(() => state.settings.sortMode)).toBe('custom');
+    expect(await win.evaluate(() => state.settings.noteOrder)).toEqual(['c', 'b', 'a']);
+    // 与旧快照不同（证明没有隐式恢复）
+    expect(await pos('a')).not.toEqual(savedA);
   } finally {
     await closeApp(ctx);
   }
 });
 
-test('一键整理（便签视图触发）恢复保存的位置并跨视图保持', async () => {
+test('UX-30B explicit restore recovers saved positions independent of sortMode, preserving unsaved/hidden notes', async () => {
+  const mk = (id, x, y, extra) => Object.assign({
+    id, title: id, content: 'c' + id, type: 'note', items: [], images: [], files: [], tables: [],
+    color: '#93f1ce', textColor: null, groupId: null, pinned: false, desktopPin: false, reminder: null,
+    x, y, positionAll: { x, y }, w: 240, h: 200, z: 1, createdAt: 1000 + x, updatedAt: 1000 + x
+  }, extra || {});
+  const seed = {
+    version: 2,
+    settings: { viewMode: 'board', sortMode: 'updated' },
+    groups: [{ id: 'g1', name: 'G1' }], trash: [],
+    notes: [mk('a', 20, 20), mk('b', 300, 20), mk('c', 600, 20, { groupId: 'g1' })]
+  };
+  const ctx = await openApp({ seed });
+  try {
+    const win = ctx.win;
+    await expect(win.locator('#noteCount')).toHaveText('3');
+    const pos = (id) => win.evaluate((i) => { const n = state.notes.find((x) => x.id === i); return { x: n.positionAll.x, y: n.positionAll.y }; }, id);
+
+    // 保存布局（快照 a/b/c 在「全部」作用域）
+    await win.locator('#btnSaveOrder').click();
+    // 打乱并加一个未保存的可见新便签
+    await win.evaluate(() => {
+      setEffPos(state.notes.find((n) => n.id === 'a'), 900, 500);
+      setEffPos(state.notes.find((n) => n.id === 'b'), 950, 520);
+      state.notes.push({ id: 'new1', title: 'new1', content: '', type: 'note', items: [], images: [], files: [], tables: [], color: '#93f1ce', textColor: null, groupId: null, pinned: false, desktopPin: false, reminder: null, x: 60, y: 900, positionAll: { x: 60, y: 900 }, w: 240, h: 200, z: 9, createdAt: 5, updatedAt: 5 });
+      renderAll();
+    });
+    const newBefore = await pos('new1');
+    // c 在保存之后移离保存位置（保存位置为 600,20），随后折叠 g1 使其隐藏（隐藏项不得被恢复）
+    await win.evaluate(() => { setEffPos(state.notes.find((n) => n.id === 'c'), 700, 333); state.settings.collapsedGroups = { g1: true }; renderAll(); });
+    const cMoved = await pos('c');
+    expect(cMoved).not.toEqual({ x: 600, y: 20 });
+    // 非 custom 模式：恢复按钮应可用
+    await win.evaluate(() => { state.settings.sortMode = 'updated'; renderAll(); });
+    await expect(win.locator('#btnRestoreLayout')).toBeEnabled();
+    // 打开设置 → 数据/组织区（普通点击），显式恢复
+    await win.locator('#btnSettings').click();
+    await win.locator('.sp-nav-item[data-tab="data"]').click();
+    await win.locator('#btnRestoreLayout').click();
+    // a/b 回到保存位置；未保存新便签与隐藏项 c 均保持原位
+    expect(await pos('a')).toEqual({ x: 20, y: 20 });
+    expect(await pos('b')).toEqual({ x: 300, y: 20 });
+    expect(await pos('new1')).toEqual(newBefore);
+    expect(await pos('c')).toEqual(cMoved);
+    expect(await win.evaluate(() => state.settings.sortMode)).toBe('updated');
+    // 关闭设置，普通按钮切换备忘录/便签视图：已恢复位置保持（跨视图覆盖）
+    await win.locator('#btnCloseSettings').click();
+    await win.locator('#viewMemo').click();
+    await win.locator('#viewBoard').click();
+    expect(await pos('a')).toEqual({ x: 20, y: 20 });
+    expect(await pos('b')).toEqual({ x: 300, y: 20 });
+  } finally {
+    await closeApp(ctx);
+  }
+});
+
+test('UX-30C query-subset arrange reserves hidden same-scope notes; clearing search adds no overlap', async () => {
+  const mk = (id, title, x, y) => ({
+    id, title, content: 'c' + id, type: 'note', items: [], images: [], files: [], tables: [],
+    color: '#93f1ce', textColor: null, groupId: null, pinned: false, desktopPin: false, reminder: null,
+    x, y, positionAll: { x, y }, w: 240, h: 200, z: 1, createdAt: 1000 + x, updatedAt: 1000 + x
+  });
+  // 可见 Alpha 初始 600,400；隐藏 Beta 20,20 / Gamma 20,260（旧 arrange 会把 Alpha 落到 Beta 上）
+  const seed = {
+    version: 2,
+    settings: { viewMode: 'board', sortMode: 'updated', lastSeenVersion: EXPECTED_VERSION },
+    groups: [], trash: [],
+    notes: [mk('a', 'Alpha', 600, 400), mk('b', 'Beta', 20, 20), mk('c', 'Gamma', 20, 260)]
+  };
+  const ctx = await openApp({ seed });
+  try {
+    const win = ctx.win;
+    await expect(win.locator('#noteCount')).toHaveText('3');
+    const wholeNote = (id) => win.evaluate((i) => JSON.stringify(state.notes.find((x) => x.id === i)), id);
+    const pos = (id) => win.evaluate((i) => { const n = state.notes.find((x) => x.id === i); return { x: n.positionAll.x, y: n.positionAll.y }; }, id);
+    const betaBefore = await wholeNote('b'); // 隐藏项整对象基线
+    const gammaBefore = await wholeNote('c');
+    await win.locator('#searchInput').fill('Alpha');
+    await expect(win.locator('#board .note')).toHaveCount(1);
+    await win.locator('#btnQuickArrange').click();
+    // 隐藏两项整对象完全不变（坐标/尺寸/updatedAt）
+    expect(await wholeNote('b')).toBe(betaBefore);
+    expect(await wholeNote('c')).toBe(gammaBefore);
+    // Alpha 必须移动到不与隐藏障碍重叠的位置（旧行为会停在 600,400 与 Beta 无关；此断言要求其避让 Beta/Gamma）
+    const a = await pos('a');
+    const noHit = await win.evaluate(() => {
+      const A = state.notes.find((n) => n.id === 'a');
+      return ['b', 'c'].every((id) => {
+        const o = state.notes.find((n) => n.id === id);
+        return !((A.positionAll.x < o.positionAll.x + o.w + 18) && (A.positionAll.x + A.w + 18 > o.positionAll.x) && (A.positionAll.y < o.positionAll.y + o.h + 18) && (A.positionAll.y + A.h + 18 > o.positionAll.y));
+      });
+    });
+    expect(noHit).toBe(true);
+    expect(a).not.toEqual({ x: 600, y: 400 }); // 确实发生了重新排布
+    // 清空搜索：三张便签两两不重叠
+    await win.locator('#searchInput').fill('');
+    await expect(win.locator('#board .note')).toHaveCount(3);
+    const anyOverlap = await win.evaluate(() => {
+      const rs = state.notes.map((n) => ({ ...n.positionAll, w: n.w, h: n.h }));
+      for (let i = 0; i < rs.length; i++) for (let j = i + 1; j < rs.length; j++) {
+        const a = rs[i], b = rs[j];
+        if ((a.x < b.x + b.w + 18) && (a.x + a.w + 18 > b.x) && (a.y < b.y + b.h + 18) && (a.y + a.h + 18 > b.y)) return true;
+      }
+      return false;
+    });
+    expect(anyOverlap).toBe(false);
+  } finally { await closeApp(ctx); }
+});
+
+test('UX-30C explicit restore keeps exact coords even when oversized, warns visibly, then arrange handles current sizes', async () => {
+  const mk = (id, x, y, w, h) => ({
+    id, title: id, content: 'c' + id, type: 'note', items: [], images: [], files: [], tables: [],
+    color: '#93f1ce', textColor: null, groupId: null, pinned: false, desktopPin: false, reminder: null,
+    x, y, positionAll: { x, y }, w, h, z: 1, createdAt: 1000 + x, updatedAt: 1000 + x
+  });
+  const seed = {
+    version: 2,
+    settings: { viewMode: 'board', sortMode: 'updated', lastSeenVersion: EXPECTED_VERSION },
+    groups: [], trash: [],
+    notes: [mk('a', 20, 20, 240, 200), mk('b', 300, 20, 240, 200)]
+  };
+  const ctx = await openApp({ seed });
+  try {
+    const win = ctx.win;
+    await expect(win.locator('#noteCount')).toHaveText('2');
+    const pos = (id) => win.evaluate((i) => { const n = state.notes.find((x) => x.id === i); return { x: n.positionAll.x, y: n.positionAll.y }; }, id);
+    await win.locator('#btnSaveOrder').click(); // 保存布局（a 20,20 / b 300,20）
+    const snapBefore = await win.evaluate(() => JSON.stringify(state.settings.orderLayouts));
+    // 缩窄主窗到 640（minWidth 可能钳制），等待渲染后按「实际画布宽」定义超大宽度
+    await ctx.electronApp.evaluate(({ BrowserWindow }) => { const w = BrowserWindow.getAllWindows().find((x) => x.webContents.getURL().includes('renderer/index.html')); w.setBounds({ width: 640, height: 700 }); });
+    await win.waitForTimeout(250);
+    const oversizeInfo = await win.evaluate(() => {
+      const maxX = canvasMaxX();
+      const margin = (typeof LAYOUT !== 'undefined' ? LAYOUT.margin : 20);
+      return { maxX, margin, avail: Math.max(0, maxX - margin * 2) };
+    });
+    const oversizedWidth = await win.evaluate(() => canvasMaxX() + 100);
+    // 前置条件：确实超出可用宽（不是靠猜测常量）
+    expect(oversizedWidth).toBeGreaterThan(oversizeInfo.avail);
+    // 保存后：a 设为「实际超大宽度」，并把 a/b 移离保存位置
+    await win.evaluate((ow) => {
+      state.notes.find((n) => n.id === 'a').w = ow;
+      setEffPos(state.notes.find((n) => n.id === 'a'), 500, 700);
+      setEffPos(state.notes.find((n) => n.id === 'b'), 520, 720);
+      applyTheme(); renderAll();
+    }, oversizedWidth);
+    // 普通显式恢复
+    await win.locator('#btnSettings').click();
+    await win.locator('.sp-nav-item[data-tab="data"]').click();
+    await win.locator('#btnRestoreLayout').click();
+    // 精确还原保存坐标、尺寸不变（= 实际超大宽度）
+    expect(await pos('a')).toEqual({ x: 20, y: 20 });
+    expect(await pos('b')).toEqual({ x: 300, y: 20 });
+    expect(await win.evaluate(() => state.notes.find((n) => n.id === 'a').w)).toBe(oversizedWidth);
+    // 可见冲突提示（本地化，含「一键整理」）
+    await expect(win.locator('#toast')).toContainText('一键整理');
+    // 原快照保持未变
+    expect(await win.evaluate(() => JSON.stringify(state.settings.orderLayouts))).toBe(snapBefore);
+    // 一键整理：按当前尺寸处理（设置组织区的 #btnArrange 在窄窗仍可见；顶栏 #btnQuickArrange 在 640 会被收进 More 菜单）
+    await win.locator('#btnArrange').click();
+    await win.locator('#btnCloseSettings').click();
+    await win.waitForTimeout(150);
+    const r = await win.evaluate(() => {
+      const maxX = canvasMaxX();
+      const margin = (typeof LAYOUT !== 'undefined' ? LAYOUT.margin : 20);
+      const gap = (typeof LAYOUT !== 'undefined' ? LAYOUT.gap : 18);
+      const a = state.notes.find((n) => n.id === 'a'), b = state.notes.find((n) => n.id === 'b');
+      return {
+        maxX, margin, gap,
+        a: { x: a.positionAll.x, y: a.positionAll.y, w: a.w, h: a.h },
+        b: { x: b.positionAll.x, y: b.positionAll.y, w: b.w, h: b.h }
+      };
+    });
+    // 普通卡 b 在可用宽内；超大 a 在左边界且位于普通卡下方（间距为实际 LAYOUT.gap）；尺寸不变
+    expect(r.b.x + r.b.w).toBeLessThanOrEqual(r.maxX - r.margin + 1);
+    expect(r.a.x).toBe(r.margin);
+    expect(r.a.y).toBeGreaterThanOrEqual(r.b.y + r.b.h + r.gap);
+    expect({ a: r.a.w, b: r.b.w }).toEqual({ a: oversizedWidth, b: 240 });
+    // 无重叠
+    expect((r.a.x < r.b.x + r.b.w) && (r.a.x + r.a.w > r.b.x) && (r.a.y < r.b.y + r.b.h) && (r.a.y + r.a.h > r.b.y)).toBe(false);
+  } finally { await closeApp(ctx); }
+});
+
+test('UX-30D undo/redo layout chain: save changes mode+snapshot, undo restores, redo exact, arrange/restore undoable', async () => {
   const mk = (id, x, y) => ({
     id, title: id, content: 'c' + id, type: 'note', items: [], images: [], files: [], tables: [],
     color: '#93f1ce', textColor: null, groupId: null, pinned: false, desktopPin: false, reminder: null,
@@ -935,30 +3603,164 @@ test('一键整理（便签视图触发）恢复保存的位置并跨视图保�
   });
   const seed = {
     version: 2,
-    settings: { viewMode: 'board', sortMode: 'updated' },
+    settings: { viewMode: 'board', sortMode: 'updated', lastSeenVersion: EXPECTED_VERSION, orderLayouts: { _all: { a: { x: 33, y: 44 } } } },
     groups: [], trash: [],
-    notes: [mk('a', 20, 20), mk('b', 300, 20), mk('c', 600, 20)]
+    notes: [mk('a', 200, 200), mk('b', 700, 100)]
   };
   const ctx = await openApp({ seed });
   try {
-    await expect(ctx.win.locator('#noteCount')).toHaveText('3');
-    const pa = (id) => ctx.win.evaluate((i) => state.notes.find((n) => n.id === i).positionAll, id);
-    // 便签视图保存排序（记录布局快照）
-    await expect(ctx.win.locator('#btnSaveOrder')).toBeVisible();
-    await stableClick(ctx.win.locator('#btnSaveOrder'));
-    // 打乱位置
-    await ctx.win.evaluate(() => { setEffPos(state.notes.find((n) => n.id === 'a'), 900, 500); });
-    // 一键整理（按钮仅在便签视图）→ 恢复到保存时的位置
-    await expect(ctx.win.locator('#btnQuickArrange')).toBeVisible();
-    await stableClick(ctx.win.locator('#btnQuickArrange'));
-    expect(await pa('a')).toEqual({ x: 20, y: 20 });
-    // 跨视图：切备忘录再切回，位置仍保持
-    await stableClick(ctx.win.locator('#viewMemo'));
-    await stableClick(ctx.win.locator('#viewBoard'));
-    expect(await pa('a')).toEqual({ x: 20, y: 20 });
-  } finally {
-    await closeApp(ctx);
-  }
+    const win = ctx.win;
+    await ctx.electronApp.evaluate(({ BrowserWindow }) => { const w = BrowserWindow.getAllWindows().find((x) => x.webContents.getURL().includes('renderer/index.html')); w.setBounds({ width: 1300, height: 780 }); });
+    await win.waitForTimeout(200);
+    await expect(win.locator('#noteCount')).toHaveText('2');
+    const hist = () => win.evaluate(() => ({ u: UndoHistory.stacks().undoStack.length, r: UndoHistory.stacks().redoStack.length }));
+    const mode = () => win.evaluate(() => state.settings.sortMode);
+    const sortModeUi = () => win.locator('#sortMode').inputValue();
+    const layouts = () => win.evaluate(() => JSON.stringify(state.settings.orderLayouts));
+    const pos = (id) => win.evaluate((i) => ({ ...state.notes.find((n) => n.id === i).positionAll }), id);
+    const otherBefore = await win.evaluate(() => ({ theme: state.settings.themeId, zoom: state.settings.boardZoom }));
+
+    // 1) 保存排序（updated -> custom，含快照）
+    const layoutsBefore = await layouts();
+    const h0 = await hist();
+    await win.locator('#btnSaveOrder').click();
+    expect(await mode()).toBe('custom');
+    const layoutsCustom = await layouts();
+    expect(layoutsCustom).not.toBe(layoutsBefore);
+    expect(await hist()).toEqual({ u: h0.u + 1, r: 0 });
+    // 撤销：恢复 updated 模式、**精确旧布局 map**、并同步排序设置 UI；redo 有项
+    await win.locator('#btnUndo').click();
+    expect(await mode()).toBe('updated');
+    expect(await layouts()).toBe(layoutsBefore);
+    expect(await hist()).toEqual({ u: h0.u, r: 1 });
+    // 重做：恢复 custom 与精确快照
+    await win.locator('#btnRedo').click();
+    expect(await mode()).toBe('custom');
+    expect(await layouts()).toBe(layoutsCustom);
+    expect(await hist()).toEqual({ u: h0.u + 1, r: 0 });
+
+    // 2) 整理：坐标改变 + 一个历史项；撤销恢复旧坐标、重做精确
+    const before = { a: await pos('a'), b: await pos('b') };
+    const hArrange = await hist();
+    await win.locator('#btnQuickArrange').click();
+    const arranged = { a: await pos('a'), b: await pos('b') };
+    expect(await hist()).toEqual({ u: hArrange.u + 1, r: 0 });
+    await win.locator('#btnUndo').click();
+    expect({ a: await pos('a'), b: await pos('b') }).toEqual(before);
+    await win.locator('#btnRedo').click();
+    expect({ a: await pos('a'), b: await pos('b') }).toEqual(arranged);
+
+    // 3) 重复无变化：当前已就位，保存一次「已 arranged 的布局快照」后撤销该保存（坐标仍 arranged，redo 含该保存）
+    await win.locator('#btnSaveOrder').click();
+    const savedArrangedLayouts = await layouts();
+    await win.locator('#btnUndo').click();
+    // 坐标依旧 arranged（保存不改坐标）；redo 可重放该保存
+    expect({ a: await pos('a'), b: await pos('b') }).toEqual(arranged);
+    const hNoop = await hist();
+    expect(hNoop.r).toBeGreaterThanOrEqual(1);
+    // 现在重复整理（真正无变化）→ 历史/redo 不变
+    await win.locator('#btnQuickArrange').click();
+    expect(await hist()).toEqual(hNoop);
+    // redo 该保存 → 快照 map 恢复为 arranged 保存值
+    await win.locator('#btnRedo').click();
+    expect(await layouts()).toBe(savedArrangedLayouts);
+
+    // 4) 显式恢复：移动后恢复保存坐标，可撤销/重做；重复（无变化）不入栈
+    await win.locator('#btnSaveOrder').click();
+    const saved = { a: await pos('a'), b: await pos('b') };
+    await win.evaluate(() => { setEffPos(state.notes.find((n) => n.id === 'a'), 900, 900); renderAll(); });
+    const moved = await pos('a');
+    await win.locator('#btnSettings').click();
+    await win.locator('.sp-nav-item[data-tab="data"]').click();
+    const hRestore = await hist();
+    await win.locator('#btnRestoreLayout').click();
+    expect(await pos('a')).toEqual(saved.a);
+    expect(await hist()).toEqual({ u: hRestore.u + 1, r: 0 });
+    await win.locator('#btnCloseSettings').click();
+    await win.locator('#btnUndo').click();
+    expect(await pos('a')).toEqual(moved);
+    await win.locator('#btnRedo').click();
+    expect(await pos('a')).toEqual(saved.a);
+    // 重复显式恢复（位置已等于保存值）→ 无历史增长
+    await win.locator('#btnSettings').click();
+    await win.locator('.sp-nav-item[data-tab="data"]').click();
+    const hRepeatRestore = await hist();
+    await win.locator('#btnRestoreLayout').click();
+    expect(await hist()).toEqual(hRepeatRestore);
+    await win.locator('#btnCloseSettings').click();
+    // 排序设置 UI 与真实模式一致 + 无关设置未被快照改回
+    expect(await sortModeUi()).toBe(await mode());
+    expect(await win.evaluate(() => ({ theme: state.settings.themeId, zoom: state.settings.boardZoom }))).toEqual(otherBefore);
+  } finally { await closeApp(ctx); }
+});
+
+test('UX-30D group scope: arrange/save x,y vs positionAll independent; zero query/no-target does not grow history', async () => {
+  const mk = (id, groupId, x, y) => ({
+    id, title: id, content: 'c' + id, type: 'note', items: [], images: [], files: [], tables: [],
+    color: '#93f1ce', textColor: null, groupId, pinned: false, desktopPin: false, reminder: null,
+    x, y, positionAll: { x, y }, w: 240, h: 200, z: 1, createdAt: 1000 + x, updatedAt: 1000 + x
+  });
+  const seed = {
+    version: 2,
+    settings: { viewMode: 'board', sortMode: 'updated', lastSeenVersion: EXPECTED_VERSION },
+    groups: [{ id: 'g1', name: 'G1' }], trash: [],
+    notes: [mk('a', 'g1', 40, 40), mk('b', 'g1', 300, 40), mk('c', null, 600, 40)]
+  };
+  const ctx = await openApp({ seed });
+  try {
+    const win = ctx.win;
+    await ctx.electronApp.evaluate(({ BrowserWindow }) => { const w = BrowserWindow.getAllWindows().find((x) => x.webContents.getURL().includes('renderer/index.html')); w.setBounds({ width: 1300, height: 780 }); });
+    await win.waitForTimeout(200);
+    await expect(win.locator('#noteCount')).toHaveText('3');
+    const paOf = (id) => win.evaluate((i) => ({ ...state.notes.find((n) => n.id === i).positionAll }), id);
+    const xyOf = (id) => win.evaluate((i) => { const n = state.notes.find((x) => x.id === i); return { x: n.x, y: n.y }; }, id);
+    const hist = () => win.evaluate(() => ({ u: UndoHistory.stacks().undoStack.length, r: UndoHistory.stacks().redoStack.length }));
+    const base = { a: await paOf('a'), b: await paOf('b'), c: await paOf('c'), aXY: await xyOf('a'), bXY: await xyOf('b') };
+    // 通过真实分组 chip 进入 g1
+    await win.locator('#groupChips .chip', { hasText: 'G1' }).click();
+    await expect(win.locator('#board .note')).toHaveCount(2);
+    // 整理：只改分组作用域 x/y；位置(positionAll)全部自基准不变
+    const h0 = await hist();
+    await win.locator('#btnQuickArrange').click();
+    expect(await hist()).toEqual({ u: h0.u + 1, r: 0 });
+    expect(await paOf('a')).toEqual(base.a);
+    expect(await paOf('b')).toEqual(base.b);
+    expect(await paOf('c')).toEqual(base.c);
+    // a/b 的 x/y 确实被整理改变
+    const arrangedXY = { a: await xyOf('a'), b: await xyOf('b') };
+    expect(arrangedXY).not.toEqual({ a: base.aXY, b: base.bXY });
+    // 撤销恢复分组 x/y；重做重放
+    await win.locator('#btnUndo').click();
+    expect(await xyOf('a')).toEqual(base.aXY);
+    expect(await xyOf('b')).toEqual(base.bXY);
+    await win.locator('#btnRedo').click();
+    expect(await xyOf('a')).toEqual(arrangedXY.a);
+    expect(await xyOf('b')).toEqual(arrangedXY.b);
+    // 保存（分组作用域）：仅动组内顺序/快照作用域；撤销后 positionAll 仍自基准不变
+    await win.locator('#btnSaveOrder').click();
+    await win.locator('#btnUndo').click();
+    expect(await paOf('a')).toEqual(base.a);
+    expect(await paOf('b')).toEqual(base.b);
+    expect(await paOf('c')).toEqual(base.c);
+    // 零结果：普通点击 btnQuickArrange / btnSaveOrder，历史(含 redo)完全不变
+    await win.locator('#searchInput').fill('zzz-nothing');
+    await expect(win.locator('#board .note')).toHaveCount(0);
+    const hZero = await hist();
+    await win.locator('#btnQuickArrange').click();
+    await win.locator('#btnSaveOrder').click();
+    await win.waitForTimeout(150);
+    expect(await hist()).toEqual(hZero);
+    // 清空查询、无作用域快照 -> 恢复按钮禁用；内部 restore 返回 false 且历史不变
+    await win.locator('#searchInput').fill('');
+    await win.evaluate(() => { state.settings.orderLayouts = {}; renderAll(); });
+    await win.locator('#btnSettings').click();
+    await win.locator('.sp-nav-item[data-tab="data"]').click();
+    await expect(win.locator('#btnRestoreLayout')).toBeDisabled();
+    const hNoTarget = await hist();
+    expect(await win.evaluate(() => restoreSavedLayout())).toBe(false);
+    expect(await hist()).toEqual(hNoTarget);
+    await win.locator('#btnCloseSettings').click();
+  } finally { await closeApp(ctx); }
 });
 
 // —— 指针拖拽重排：备忘录 / 文档视图用 pointer 事件（支持边拖边滚，替代原生 HTML5 DnD）——
@@ -1484,8 +4286,14 @@ test('独立便签异常退出后恢复最新标题，启动前不打开旧钉�
     await stableClick(first.win.locator('#board .note .t-desktop').first());
     const noteWin = await noteWinPromise;
     await expect(noteWin.locator('#dnTitle')).toBeVisible();
-    await expect(noteWin.locator('#dnUnpin')).toHaveAttribute('title', /.+/);
+    // 可观察就绪：note.js init 在绑定标题 input 监听器之后才把 #dnUnpin.title 设为本地化 tr('unpin')
+    // （静态 HTML 是另一段文案），因此该条件成立即证明监听器已就绪，而不是仅 DOM 可见。
+    await expect.poll(() => noteWin.evaluate(() => {
+      const btn = document.querySelector('#dnUnpin');
+      return !!btn && typeof tr === 'function' && btn.title === tr('unpin');
+    })).toBe(true);
     await expect.poll(() => noteWin.evaluate(() => note && note.id)).toBeTruthy();
+
     await noteWin.evaluate(() => {
       const input = document.querySelector('#dnTitle');
       const originalSetTimeout = window.setTimeout;
@@ -1495,11 +4303,46 @@ test('独立便签异常退出后恢复最新标题，启动前不打开旧钉�
       window.setTimeout = originalSetTimeout;
     });
     const file = path.join(first.userDataDir, 'notes-data.json');
-    await expect.poll(async () => {
-      const raw = await fs.readFile(path.join(first.userDataDir, 'notes-recovery.json'), 'utf8').catch(() => null);
-      return raw && Object.keys(JSON.parse(raw).notes || {}).length > 0;
-    }).toBe(true);
+    const recoveryPath = path.join(first.userDataDir, 'notes-recovery.json');
+    try {
+      // 先证明真实交互确实执行了监听器（模型已更新），再验证同步草稿落地。
+      await expect.poll(() => noteWin.evaluate(() => note && note.title)).toBe('独立窗口最后编辑');
+      // 同步草稿（captureNoteDraft）必须已写入，且内容就是本次编辑，而不是其它残留条目。
+      await expect.poll(async () => {
+        const raw = await fs.readFile(recoveryPath, 'utf8').catch(() => null);
+        if (!raw) return null;
+        const notes = (JSON.parse(raw).notes) || {};
+        const ids = Object.keys(notes);
+        return ids.length ? (notes[ids[0]].note && notes[ids[0]].note.title) : null;
+      }).toBe('独立窗口最后编辑');
+    } catch (err) {
+      // 历史失败是草稿轮询超时；此处输出有界快照（不含完整大 JSON）后原样抛出，绝不吞掉失败。
+      const snap = {};
+      try {
+        snap.renderer = await noteWin.evaluate(() => ({
+          noteId: note && note.id,
+          noteTitle: note && note.title,
+          inputValue: (document.querySelector('#dnTitle') || {}).value
+        }));
+      } catch (e) { snap.renderer = 'unavailable'; }
+      try {
+        const raw = await fs.readFile(recoveryPath, 'utf8').catch(() => null);
+        if (!raw) snap.recovery = { absent: true };
+        else {
+          const notes = (JSON.parse(raw).notes) || {};
+          snap.recovery = {
+            noteCount: Object.keys(notes).length,
+            notes: Object.entries(notes).slice(0, 5).map(([id, entry]) => ({ id, title: entry && entry.note && entry.note.title, token: entry && entry.token }))
+          };
+        }
+      } catch (e) { snap.recovery = 'unreadable'; }
+      try { snap.savedTitle = JSON.parse(await fs.readFile(file, 'utf8')).notes[0].title; }
+      catch (e) { snap.savedTitle = 'unreadable'; }
+      console.log('A05_RECOVERY_FAILURE ' + JSON.stringify(snap));
+      throw err;
+    }
     expect(JSON.parse(await fs.readFile(file, 'utf8')).notes[0].title).not.toBe('独立窗口最后编辑');
+
     await first.electronApp.evaluate(() => process.exit(1)).catch(() => {});
     second = await openApp({ userDataDir: first.userDataDir, expectRecovery: true });
     await expect(second.win.locator('#cmOk')).toBeVisible();
@@ -2093,7 +4936,9 @@ test('分组折叠：折叠后该分组便签隐藏，展开恢复且持久化',
   }
 });
 
-test('分组折叠与一键整理：折叠时整理填满留白，取消折叠后恢复折叠前原始布局且不重叠', async () => {
+// 契约（UX-30C 已接受）：折叠隐藏但共享坐标作用域的便签是「固定障碍」，整理只移动可见便签；
+// 展开时回到折叠前的整体快照（UX-30E 全局快照恢复为刻意保留的现有行为）。
+test('分组折叠与一键整理：折叠时整理只移动可见便签并避让隐藏便签，取消折叠后恢复折叠前原始布局且不重叠', async () => {
   const now = Date.now();
   const mk = (id, title, groupId, x) => ({
     id, title, content: '内容' + id, type: 'note', items: [], images: [], files: [], tables: [],
@@ -2107,22 +4952,55 @@ test('分组折叠与一键整理：折叠时整理填满留白，取消折叠�
   };
   const ctx = await openApp({ seed });
   try {
-    await expect(ctx.win.locator('#board .note')).toHaveCount(4);
-    // 折叠 g1 后整理：只整理可见的 c/d，它们应被压到画布左上（填满折叠组腾出的留白）
-    await ctx.win.evaluate(() => toggleGroupCollapse('g1'));
-    await ctx.win.evaluate(() => arrangeNotes());
-    await ctx.win.waitForTimeout(150);
-    const cdAfter = await ctx.win.evaluate(() => ({
-      c: state.notes.find((n) => n.id === 'c').positionAll,
-      d: state.notes.find((n) => n.id === 'd').positionAll
-    }));
-    expect(Math.min(cdAfter.c.x, cdAfter.d.x)).toBeLessThanOrEqual(40);
-    expect(cdAfter.c.y).toBeLessThanOrEqual(40);
-    expect(cdAfter.d.y).toBeLessThanOrEqual(40);
+    const win = ctx.win;
+    await expect(win.locator('#board .note')).toHaveCount(4);
+    const wholeNote = (id) => win.evaluate((i) => JSON.stringify(state.notes.find((x) => x.id === i)), id);
+    const pos = (id) => win.evaluate((i) => { const n = state.notes.find((x) => x.id === i); return { x: n.positionAll.x, y: n.positionAll.y }; }, id);
+    const aBefore = await wholeNote('a'); // 隐藏障碍整对象基线
+    const bBefore = await wholeNote('b');
+
+    // 折叠 g1：只剩可见的 c/d
+    await win.evaluate(() => toggleGroupCollapse('g1'));
+    await expect(win.locator('#board .note')).toHaveCount(2);
+    expect(await win.evaluate(() => state.settings.collapsedGroups.g1)).toBe(true);
+
+    // 真实点击「一键整理」（不 force），只排布可见的 c/d，并避让隐藏的 a/b 固定障碍
+    await win.locator('#btnQuickArrange').click();
+    // c/d 确实被重新排布（离开初始 1000/1260），且位置为有限非负数
+    await expect.poll(async () => (await pos('c')).x).not.toBe(1000);
+    const cdAfter = await win.evaluate(() => {
+      const c = state.notes.find((n) => n.id === 'c');
+      const d = state.notes.find((n) => n.id === 'd');
+      return { c: { x: c.positionAll.x, y: c.positionAll.y }, d: { x: d.positionAll.x, y: d.positionAll.y } };
+    });
+    for (const p of [cdAfter.c, cdAfter.d]) {
+      expect(Number.isFinite(p.x) && p.x >= 0).toBe(true);
+      expect(Number.isFinite(p.y) && p.y >= 0).toBe(true);
+    }
+    // c 与 d 都确实被重新排布（都离开各自的初始位置，而非仅其中之一）
+    expect(cdAfter.c).not.toEqual({ x: 1000, y: 20 });
+    expect(cdAfter.d).not.toEqual({ x: 1260, y: 20 });
+    // 隐藏的 a/b 整对象完全不变（整理不得移动/改写隐藏障碍）
+    expect(await wholeNote('a')).toBe(aBefore);
+    expect(await wholeNote('b')).toBe(bBefore);
+    // 折叠期间四张便签（含隐藏障碍）两两均不重叠（沿用 LAYOUT.gap 语义），
+    // 旧「零障碍」实现会把 c/d 直接落到 a/b 矩形上而被此处捕获
+    const foldedOverlap = await win.evaluate(() => {
+      const gap = (typeof LAYOUT !== 'undefined' ? LAYOUT.gap : 18);
+      const rs = state.notes.map((n) => ({ id: n.id, x: n.positionAll.x, y: n.positionAll.y, w: n.w, h: n.h }));
+      for (let i = 0; i < rs.length; i++) for (let j = i + 1; j < rs.length; j++) {
+        const a = rs[i], b = rs[j];
+        if ((a.x < b.x + b.w + gap) && (a.x + a.w + gap > b.x) && (a.y < b.y + b.h + gap) && (a.y + a.h + gap > b.y)) return { bad: `${a.id}/${b.id}` };
+      }
+      return { bad: null };
+    });
+    expect(foldedOverlap.bad).toBeNull();
+
     // 取消折叠：整体恢复到折叠前的原始布局（a/b 回原位、c/d 也回原位）
-    await ctx.win.evaluate(() => toggleGroupCollapse('g1'));
-    await ctx.win.waitForTimeout(150);
-    const restored = await ctx.win.evaluate(() => {
+    await win.evaluate(() => toggleGroupCollapse('g1'));
+    await expect(win.locator('#board .note')).toHaveCount(4);
+    await expect.poll(async () => (await pos('c')).x).toBe(1000);
+    const restored = await win.evaluate(() => {
       const byId = {};
       state.notes.forEach((n) => { byId[n.id] = { x: n.positionAll.x, y: n.positionAll.y }; });
       return byId;
@@ -2132,7 +5010,7 @@ test('分组折叠与一键整理：折叠时整理填满留白，取消折叠�
     expect(restored.c).toEqual({ x: 1000, y: 20 });
     expect(restored.d).toEqual({ x: 1260, y: 20 });
     // 恢复后任意两张便签都不重叠
-    const overlap = await ctx.win.evaluate(() => {
+    const overlap = await win.evaluate(() => {
       const rects = state.notes.map((n) => {
         const p = n.positionAll || { x: n.x, y: n.y };
         return { id: n.id, x: p.x, y: p.y, w: n.w, h: n.h };
@@ -2779,6 +5657,474 @@ test('数据合法：正常启动，无警告条，可创建便签并落盘', as
     const parsed = JSON.parse(await fs.readFile(file, 'utf8'));
     expect(Array.isArray(parsed.notes)).toBe(true);
     expect(parsed.notes.length).toBe(1);
+  } finally {
+    await closeApp(ctx);
+  }
+});
+
+// ---------- UX-14：设置抽屉键盘 / 焦点（正式门槛） ----------
+
+// 面板内可见且可用可聚焦控件的状态快照，与 settings-bind.js 的选择器保持一致
+function settingsFocusState(win) {
+  return win.evaluate(() => {
+    const panel = document.getElementById('settingsPanel');
+    const list = Array.from(panel.querySelectorAll('a[href], button, input, select, textarea, [tabindex]:not([tabindex="-1"])'))
+      .filter((el) => !el.disabled && el.tabIndex !== -1 && el.offsetParent !== null);
+    const active = document.activeElement;
+    return {
+      count: list.length,
+      idx: list.indexOf(active),
+      inside: panel.contains(active),
+      inApp: document.getElementById('app').contains(active),
+      activeId: active ? (active.id || '') : ''
+    };
+  });
+}
+
+test('UX-14 设置抽屉：dialog 语义、打开聚焦、背景 inert、三种关闭方式均恢复打开者焦点', async () => {
+  const ctx = await openApp();
+  const win = ctx.win;
+  const overlay = win.locator('#settingsOverlay');
+  const panel = win.locator('#settingsPanel');
+  try {
+    const settingsBefore = await win.evaluate(() => JSON.stringify(state.settings));
+
+    // 键盘打开：聚焦触发按钮后回车，验证真实键盘路径可用
+    await win.locator('#btnSettings').focus();
+    await win.keyboard.press('Enter');
+    await expect(overlay).toBeVisible();
+
+    // 可访问对话框 + 本地化名称（aria-labelledby -> 标题文案）
+    await expect(panel).toHaveAttribute('role', 'dialog');
+    await expect(panel).toHaveAttribute('aria-modal', 'true');
+    await expect(panel).toHaveAccessibleName(/全局设置/);
+
+    // 打开即聚焦面板内，主界面 #app 变 inert（背景不可聚焦）
+    expect((await settingsFocusState(win)).inside).toBe(true);
+    expect(await win.locator('#app').evaluate((el) => el.inert)).toBe(true);
+
+    // Escape 关闭 → 恢复 #app 可交互并归还焦点给打开者
+    await win.keyboard.press('Escape');
+    await expect(overlay).toBeHidden();
+    expect(await win.locator('#app').evaluate((el) => el.inert)).toBe(false);
+    expect(await win.evaluate(() => document.activeElement && document.activeElement.id)).toBe('btnSettings');
+
+    // 关闭按钮
+    await win.locator('#btnSettings').click();
+    await expect(overlay).toBeVisible();
+    await win.locator('#btnCloseSettings').click();
+    await expect(overlay).toBeHidden();
+    expect(await win.evaluate(() => document.activeElement && document.activeElement.id)).toBe('btnSettings');
+
+    // 点击遮罩（面板左侧空白）
+    await win.locator('#btnSettings').click();
+    await expect(overlay).toBeVisible();
+    await overlay.click({ force: true, position: { x: 5, y: 5 } });
+    await expect(overlay).toBeHidden();
+    expect(await win.evaluate(() => document.activeElement && document.activeElement.id)).toBe('btnSettings');
+
+    // 键盘开关不得改动任何设置值
+    expect(await win.evaluate(() => JSON.stringify(state.settings))).toBe(settingsBefore);
+  } finally {
+    await closeApp(ctx);
+  }
+});
+
+test('UX-14 设置抽屉：Tab/Shift+Tab 在面板内循环，不逃到被遮挡的背景', async () => {
+  const ctx = await openApp();
+  const win = ctx.win;
+  try {
+    await win.locator('#btnSettings').click();
+    await expect(win.locator('#settingsOverlay')).toBeVisible();
+
+    // 初始焦点在面板内（面板容器）
+    expect((await settingsFocusState(win)).inside).toBe(true);
+
+    // 连续正向 Tab：焦点始终留在面板内且不落入 #app 背景
+    for (let i = 0; i < 30; i++) {
+      await win.keyboard.press('Tab');
+      const s = await settingsFocusState(win);
+      expect(s.inside).toBe(true);
+      expect(s.inApp).toBe(false);
+    }
+    // 连续反向 Shift+Tab 同理
+    for (let i = 0; i < 30; i++) {
+      await win.keyboard.press('Shift+Tab');
+      const s = await settingsFocusState(win);
+      expect(s.inside).toBe(true);
+      expect(s.inApp).toBe(false);
+    }
+
+    // 首尾边界：第一个控件 Shift+Tab → 最后一个；最后一个控件 Tab → 第一个
+    const count = (await settingsFocusState(win)).count;
+    expect(count).toBeGreaterThan(2);
+    await win.evaluate(() => {
+      const panel = document.getElementById('settingsPanel');
+      const list = Array.from(panel.querySelectorAll('a[href], button, input, select, textarea, [tabindex]:not([tabindex="-1"])'))
+        .filter((el) => !el.disabled && el.tabIndex !== -1 && el.offsetParent !== null);
+      list[0].focus();
+    });
+    await win.keyboard.press('Shift+Tab');
+    expect((await settingsFocusState(win)).idx).toBe(count - 1);
+
+    await win.evaluate(() => {
+      const panel = document.getElementById('settingsPanel');
+      const list = Array.from(panel.querySelectorAll('a[href], button, input, select, textarea, [tabindex]:not([tabindex="-1"])'))
+        .filter((el) => !el.disabled && el.tabIndex !== -1 && el.offsetParent !== null);
+      list[list.length - 1].focus();
+    });
+    await win.keyboard.press('Tab');
+    expect((await settingsFocusState(win)).idx).toBe(0);
+  } finally {
+    await closeApp(ctx);
+  }
+});
+
+test('UX-14 设置抽屉：更上层确认框默认聚焦安全取消项，Escape 不关闭下层设置，回车取消后焦点归还', async () => {
+  const ctx = await openApp();
+  const win = ctx.win;
+  try {
+    await win.locator('#btnSettings').click();
+    await expect(win.locator('#settingsOverlay')).toBeVisible();
+    await win.locator('.sp-nav-item[data-tab="trash"]').click();
+    await win.locator('#btnEmptyTrash').click();
+
+    const modal = win.locator('body > [data-modal-overlay]');
+    await expect(modal).toBeVisible();
+
+    // 危险确认框打开时应聚焦安全项「取消」，而不是停留在下层触发按钮
+    await expect(win.locator('#cmCancel')).toBeFocused();
+    // Escape 不入确认框语义，不得关闭下层设置，确认框也仍在
+    await win.keyboard.press('Escape');
+    await expect(win.locator('#settingsOverlay')).toBeVisible();
+    await expect(modal).toBeVisible();
+
+    // 键盘取消：回车（不强制鼠标点击）→ 确认框关闭、焦点回到触发按钮、设置仍开；此时 Escape 才关闭设置
+    await win.keyboard.press('Enter');
+    await expect(modal).toHaveCount(0);
+    expect(await win.evaluate(() => document.activeElement && document.activeElement.id)).toBe('btnEmptyTrash');
+    await expect(win.locator('#settingsOverlay')).toBeVisible();
+    await win.keyboard.press('Escape');
+    await expect(win.locator('#settingsOverlay')).toBeHidden();
+  } finally {
+    await closeApp(ctx);
+  }
+});
+
+test('UX-14 设置抽屉：关于页更新说明嵌套打开/关闭，焦点归还且不误关设置', async () => {
+  const ctx = await openApp();
+  const win = ctx.win;
+  try {
+    await win.locator('#btnSettings').click();
+    await win.locator('.sp-nav-item[data-tab="about"]').click();
+    await win.locator('#btnChangelog').click();
+    await expect(win.locator('#changelogOverlay')).toBeVisible();
+    expect(await win.evaluate(() => document.activeElement && document.activeElement.id)).toBe('btnChangelogClose');
+
+    // 更新说明在设置之上：Escape 不得关闭下层设置
+    await win.keyboard.press('Escape');
+    await expect(win.locator('#settingsOverlay')).toBeVisible();
+    await expect(win.locator('#changelogOverlay')).toBeVisible();
+
+    // 关闭更新说明 → 焦点回到设置内的按钮，设置保持打开
+    await win.locator('#btnChangelogClose').click();
+    await expect(win.locator('#changelogOverlay')).toBeHidden();
+    await expect(win.locator('#settingsOverlay')).toBeVisible();
+    expect(await win.evaluate(() => document.activeElement && document.activeElement.id)).toBe('btnChangelog');
+  } finally {
+    await closeApp(ctx);
+  }
+});
+
+test('UX-14 设置抽屉：640/1080 宽度与亮/暗主题下 Escape/Tab 行为不变', async () => {
+  const ctx = await openApp();
+  const win = ctx.win;
+  const overlay = win.locator('#settingsOverlay');
+  try {
+    for (const combo of [{ w: 640, mode: 'light' }, { w: 1080, mode: 'dark' }]) {
+      await win.locator('#btnSettings').click();
+      await expect(overlay).toBeVisible();
+      await ctx.electronApp.evaluate(({ BrowserWindow }, width) => BrowserWindow.getAllWindows()[0].setSize(width, 700), combo.w);
+      await win.locator('#modeSeg [data-mode="' + combo.mode + '"]').click({ force: true });
+      await expect(overlay).toBeVisible();
+
+      expect((await settingsFocusState(win)).inside).toBe(true);
+      expect(await win.locator('#app').evaluate((el) => el.inert)).toBe(true);
+      await win.keyboard.press('Tab');
+      const s = await settingsFocusState(win);
+      expect(s.inside).toBe(true);
+      expect(s.inApp).toBe(false);
+
+      await win.keyboard.press('Escape');
+      await expect(overlay).toBeHidden();
+      expect(await win.locator('#app').evaluate((el) => el.inert)).toBe(false);
+      expect(await win.evaluate(() => document.activeElement && document.activeElement.id)).toBe('btnSettings');
+    }
+  } finally {
+    await closeApp(ctx);
+  }
+});
+
+test('UX-14 设置抽屉：打开前已有的 inert 状态在关闭后保留', async () => {
+  const ctx = await openApp();
+  const win = ctx.win;
+  try {
+    // 模拟外部逻辑已让 #app inert：用程序化点击打开设置，关闭后不应擅自解除
+    await win.evaluate(() => {
+      document.getElementById('app').inert = true;
+      document.getElementById('btnSettings').click();
+    });
+    await expect(win.locator('#settingsOverlay')).toBeVisible();
+    await win.keyboard.press('Escape');
+    await expect(win.locator('#settingsOverlay')).toBeHidden();
+    expect(await win.locator('#app').evaluate((el) => el.inert)).toBe(true);
+    await win.evaluate(() => { document.getElementById('app').inert = false; });
+  } finally {
+    await closeApp(ctx);
+  }
+});
+
+test('UX-14 设置抽屉：快捷键录制中 Escape 只取消录制，设置保持打开，再次 Escape 才关闭', async () => {
+  const ctx = await openApp();
+  const win = ctx.win;
+  const overlay = win.locator('#settingsOverlay');
+  try {
+    await win.locator('#btnSettings').click();
+    await win.locator('.sp-nav-item[data-tab="shortcuts"]').click();
+
+    const shortcutsBefore = await win.evaluate(() => JSON.stringify(state.settings.shortcuts || {}));
+    const keyBtn = win.locator('.sc-key').first();
+    await keyBtn.click();
+    await expect(keyBtn).toHaveClass(/recording/);
+
+    // 录制中按 Escape：录制器在捕获阶段消费该键，只取消录制；不写快捷键，也不关闭设置
+    await win.keyboard.press('Escape');
+    await expect(keyBtn).not.toHaveClass(/recording/);
+    await expect(overlay).toBeVisible();
+    expect(await win.evaluate(() => JSON.stringify(state.settings.shortcuts || {}))).toBe(shortcutsBefore);
+
+    // 录制已退出，此时 Escape 才关闭设置
+    await win.keyboard.press('Escape');
+    await expect(overlay).toBeHidden();
+  } finally {
+    await closeApp(ctx);
+  }
+});
+
+// ---------- UX-15：纯图标控件的可访问名称与状态 ----------
+
+// 种一张便签并展开便签工具栏（非精简），以便同一用例覆盖主/次按钮
+function ux15Seed(extraSettings) {
+  const now = Date.now();
+  return {
+    version: 2,
+    settings: Object.assign(
+      { viewMode: 'board', sortMode: 'updated', noteToolbarCompact: false, lastSeenVersion: EXPECTED_VERSION },
+      extraSettings || {}
+    ),
+    groups: [], trash: [],
+    notes: [{
+      id: 'a', title: '卡片', content: '', type: 'note', items: [], images: [], files: [], tables: [],
+      color: '#93f1ce', textColor: null, groupId: null, pinned: false, preview: false, desktopPin: false, reminder: null,
+      x: 30, y: 30, positionAll: { x: 30, y: 30 }, w: 240, h: 200, z: 1, createdAt: now, updatedAt: now
+    }]
+  };
+}
+
+test('UX-15 可访问名称：四个视图切换与便签工具在中英文下均为本地化名称', async () => {
+  const ctx = await openApp({ seed: ux15Seed() });
+  const win = ctx.win;
+  try {
+    // 中文：视图切换 + 顶部工具栏纯图标按钮 + 便签工具
+    await expect(win.locator('#viewBoard')).toHaveAccessibleName('便签视图');
+    await expect(win.locator('#viewMemo')).toHaveAccessibleName('备忘录视图');
+    await expect(win.locator('#viewTodo')).toHaveAccessibleName('待办区');
+    await expect(win.locator('#viewDoc')).toHaveAccessibleName('文档模式');
+    await expect(win.locator('#btnSettings')).toHaveAccessibleName('全局设置');
+    await expect(win.locator('#btnUndo')).toHaveAccessibleName('撤销');
+    await expect(win.locator('#btnRedo')).toHaveAccessibleName('重做');
+
+    const card = win.locator('#board .note[data-id="a"]');
+    await expect(card.locator('.t-desktop').first()).toHaveAccessibleName('钉在桌面');
+    await expect(card.locator('.t-pin')).toHaveAccessibleName('置顶');
+    await expect(card.locator('.t-todo')).toHaveAccessibleName('待办模式');
+    await expect(card.locator('.t-preview')).toHaveAccessibleName('预览');
+    await expect(card.locator('.t-color')).toHaveAccessibleName('颜色');
+    await expect(card.locator('.t-del')).toHaveAccessibleName('删除');
+    await expect(card.locator('.t-image')).toHaveAccessibleName('插入图片');
+
+    // 切到英文：既有控件无需重启即刷新名称
+    await stableClick(win.locator('#btnSettings'));
+    await stableClick(win.locator('.sp-nav-item[data-tab="data"]'));
+    await win.locator('#languageSelect').selectOption('en');
+    await stableClick(win.locator('#btnCloseSettings'));
+
+    await expect(win.locator('#viewBoard')).toHaveAccessibleName('Board view');
+    await expect(win.locator('#viewMemo')).toHaveAccessibleName('List view');
+    await expect(win.locator('#viewTodo')).toHaveAccessibleName('Todo view');
+    await expect(win.locator('#viewDoc')).toHaveAccessibleName('Document view');
+    await expect(win.locator('#btnSettings')).toHaveAccessibleName('Global Settings');
+    await expect(win.locator('#btnUndo')).toHaveAccessibleName('Undo');
+
+    const cardEn = win.locator('#board .note[data-id="a"]');
+    await expect(cardEn.locator('.t-desktop').first()).toHaveAccessibleName('Pin to desktop');
+    await expect(cardEn.locator('.t-pin')).toHaveAccessibleName('Pin');
+    await expect(cardEn.locator('.t-todo')).toHaveAccessibleName('Todo mode');
+    await expect(cardEn.locator('.t-preview')).toHaveAccessibleName('Preview');
+    await expect(cardEn.locator('.t-del')).toHaveAccessibleName('Delete');
+  } finally {
+    await closeApp(ctx);
+  }
+});
+
+test('UX-15 精简便签工具：默认「更多」与备忘录共享工具栏在中英文下均为本地化名称', async () => {
+  const ctx = await openApp({ seed: ux15Seed({ viewMode: 'memo', noteToolbarCompact: true }) });
+  const win = ctx.win;
+  const row = () => win.locator('#memoList .memo-row[data-id="a"]');
+  try {
+    // 精简模式默认出现「⋯ 更多」，此前只有符号、无可访问名称
+    await expect(row().locator('.t-more')).toHaveAccessibleName('更多');
+    // 备忘录行复用同一共享工具栏（既有 UX-15 用例只覆盖画布卡片）
+    await expect(row().locator('.t-desktop').first()).toHaveAccessibleName('钉在桌面');
+    await expect(row().locator('.t-pin')).toHaveAccessibleName('置顶');
+    await expect(row().locator('.t-del')).toHaveAccessibleName('删除');
+
+    // 切英文：共享工具栏与「更多」即时刷新为英文名称
+    await stableClick(win.locator('#btnSettings'));
+    await stableClick(win.locator('.sp-nav-item[data-tab="data"]'));
+    await win.locator('#languageSelect').selectOption('en');
+    await stableClick(win.locator('#btnCloseSettings'));
+
+    await expect(row().locator('.t-more')).toHaveAccessibleName('More');
+    await expect(row().locator('.t-desktop').first()).toHaveAccessibleName('Pin to desktop');
+    await expect(row().locator('.t-pin')).toHaveAccessibleName('Pin');
+    await expect(row().locator('.t-del')).toHaveAccessibleName('Delete');
+  } finally {
+    await closeApp(ctx);
+  }
+});
+
+// 结束 Electron 进程但保留 userData，用于「重开读取持久化视图」场景
+async function quitKeepData(app) {
+  let pid = null;
+  try { pid = app.process() ? app.process().pid : null; } catch (_) {}
+  await app.close().catch(() => {});
+  if (pid) { try { execFileSync('taskkill', ['/PID', String(pid), '/T', '/F'], { stdio: 'ignore' }); } catch (_) {} }
+}
+
+test('UX-15 视图选中态：初始持久化视图、点击切换与重开后恰好一个 pressed', async () => {
+  const userDataDir = await fs.mkdtemp(path.join(os.tmpdir(), 'mynotes-ux15-'));
+  await fs.writeFile(path.join(userDataDir, 'notes-data.json'), JSON.stringify(ux15Seed({ viewMode: 'doc' })));
+  let ctx = await openApp({ userDataDir });
+  const pressed = () => ctx.win.evaluate(() => {
+    const o = {};
+    ['viewBoard', 'viewMemo', 'viewTodo', 'viewDoc'].forEach((id) => { o[id] = document.getElementById(id).getAttribute('aria-pressed'); });
+    return o;
+  });
+  try {
+    // 初始即为持久化的文档视图
+    expect(await pressed()).toEqual({ viewBoard: 'false', viewMemo: 'false', viewTodo: 'false', viewDoc: 'true' });
+
+    // 真实点击切换 → 恰好一个按下，且视觉 active 与 aria 同源
+    await stableClick(ctx.win.locator('#viewMemo'));
+    const afterClick = await pressed();
+    expect(afterClick).toEqual({ viewBoard: 'false', viewMemo: 'true', viewTodo: 'false', viewDoc: 'false' });
+    expect(await ctx.win.locator('#viewMemo').getAttribute('class')).toContain('active');
+    expect(await ctx.win.locator('#memoList').isVisible()).toBe(true);
+
+    // 落盘后退出，复用同一 userData 重开：读取已持久化的视图
+    await ctx.win.evaluate(() => saveNow());
+    await quitKeepData(ctx.electronApp);
+    ctx = await openApp({ userDataDir });
+    expect(await pressed()).toEqual({ viewBoard: 'false', viewMemo: 'true', viewTodo: 'false', viewDoc: 'false' });
+  } finally {
+    await closeApp(ctx);
+  }
+});
+
+test('UX-15 便签工具状态：置顶/预览/待办按真实切换更新 aria-pressed，动作按钮不伪装开关', async () => {
+  const ctx = await openApp({ seed: ux15Seed() });
+  const win = ctx.win;
+  const card = () => win.locator('#board .note[data-id="a"]');
+  try {
+    // 动作类按钮不得带 aria-pressed（避免被读成开关）
+    for (const sel of ['.t-image', '.t-del', '.t-color', '.t-desktop', '.t-group', '.t-table', '.t-remind']) {
+      expect(await card().locator(sel).first().getAttribute('aria-pressed')).toBeNull();
+    }
+    await expect(card().locator('.t-pin')).toHaveAttribute('aria-pressed', 'false');
+    await expect(card().locator('.t-preview')).toHaveAttribute('aria-pressed', 'false');
+    await expect(card().locator('.t-todo')).toHaveAttribute('aria-pressed', 'false');
+
+    await stableClick(card().locator('.t-pin'));
+    await expect(card().locator('.t-pin')).toHaveAttribute('aria-pressed', 'true');
+    await expect(card().locator('.t-pin')).toHaveAccessibleName('置顶');
+
+    await stableClick(card().locator('.t-preview'));
+    await expect(card().locator('.t-preview')).toHaveAttribute('aria-pressed', 'true');
+    // 预览态下按钮名反映「退出预览」动作
+    await expect(card().locator('.t-preview')).toHaveAccessibleName('退出预览');
+
+    await stableClick(card().locator('.t-todo'));
+    await expect(card().locator('.t-todo')).toHaveAttribute('aria-pressed', 'true');
+    // 转待办后预览按钮不再出现（沿用既有行为）
+    await expect(card().locator('.t-preview')).toHaveCount(0);
+  } finally {
+    await closeApp(ctx);
+  }
+});
+
+test('UX-15 键盘：Tab 聚焦视图切换有可见焦点指示，Enter 激活对应视图', async () => {
+  const ctx = await openApp({ seed: ux15Seed() });
+  const win = ctx.win;
+  try {
+    const tabTo = async (id) => {
+      for (let i = 0; i < 60; i++) {
+        await win.keyboard.press('Tab');
+        if (await win.evaluate((x) => document.activeElement && document.activeElement.id === x, id)) return true;
+      }
+      return false;
+    };
+    expect(await tabTo('viewMemo')).toBe(true);
+
+    const focus = await win.evaluate(() => {
+      const el = document.activeElement;
+      const cs = getComputedStyle(el);
+      return { fv: el.matches(':focus-visible'), style: cs.outlineStyle, width: parseFloat(cs.outlineWidth) || 0 };
+    });
+    expect(focus.fv).toBe(true);
+    expect(focus.style).not.toBe('none');
+    expect(focus.width).toBeGreaterThan(0);
+
+    await win.keyboard.press('Enter');
+    await expect(win.locator('#viewMemo')).toHaveAttribute('aria-pressed', 'true');
+    await expect(win.locator('#memoList')).toBeVisible();
+    await expect(win.locator('#board')).toBeHidden();
+  } finally {
+    await closeApp(ctx);
+  }
+});
+
+test('UX-15 键盘：共享便签工具栏按钮聚焦仍有可见焦点指示', async () => {
+  const ctx = await openApp({ seed: ux15Seed() });
+  const win = ctx.win;
+  try {
+    const tabTo = async (sel) => {
+      for (let i = 0; i < 120; i++) {
+        await win.keyboard.press('Tab');
+        if (await win.evaluate((s) => document.activeElement && document.activeElement.matches(s), sel)) return true;
+      }
+      return false;
+    };
+    expect(await tabTo('#board .note[data-id="a"] .note-tools .t-del')).toBe(true);
+
+    const focus = await win.evaluate(() => {
+      const el = document.activeElement;
+      const cs = getComputedStyle(el);
+      return { fv: el.matches(':focus-visible'), style: cs.outlineStyle, width: parseFloat(cs.outlineWidth) || 0 };
+    });
+    expect(focus.fv).toBe(true);
+    expect(focus.style).not.toBe('none');
+    expect(focus.width).toBeGreaterThan(0);
   } finally {
     await closeApp(ctx);
   }
