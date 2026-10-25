@@ -6,6 +6,7 @@ const logic = require('./renderer/logic.js');
 const Shortcuts = require('./renderer/shortcuts.js');
 const DataIO = require('./data-io.js');
 const MediaProtocol = require('./media-protocol.js');
+const DesktopSnap = require('./desktop-snap.js');
 const { autoUpdater } = require('electron-updater');
 
 const isDev = !app.isPackaged;
@@ -36,6 +37,8 @@ let isQuitting = false;
 let reminderTimer = null;
 const recentlyFired = new Set();
 const detachedWindows = new Map();
+let desktopSnap = null;
+let desktopSnapAppearance = {};
 // 被导入替换作废的旧 WebContents；弱引用不阻止回收，同 ID 新窗口不会解除禁写状态。
 const supersededDetached = new WeakSet();
 
@@ -503,6 +506,24 @@ function createDetachedWindow(noteId) {
     const desktopMica = data && data.settings && data.settings.desktopMica;
     try { win.setBackgroundMaterial(desktopMica ? 'acrylic' : 'none'); } catch (e) { /* ignore */ }
   }
+  if (!desktopSnap) desktopSnap = DesktopSnap.createDesktopSnap({ BrowserWindow, screen });
+  const snapSettings = (readData() || {}).settings || {};
+  desktopSnap.setEnabled(desktopSnapAppearance.enabled ?? (snapSettings.desktopSnap !== false));
+  desktopSnap.setAppearance({ ...desktopSnapAppearance, radius: (desktopSnapAppearance.radius ?? snapSettings.noteRadius) === 0 ? 0 : 8 });
+  desktopSnap.attach(win);
+  win.noteCornerRadius = desktopSnapAppearance.radius ?? snapSettings.noteRadius;
+  win.updateNoteShape = () => {
+    if (process.platform !== 'win32' || win.isDestroyed()) return;
+    try { require('./desktop-snap-native.js')().applyRoundedCorners(win, win.noteCornerRadius); }
+    catch (error) { console.warn('[note-shape] Could not update rounded window:', error); }
+  };
+  let shapeUpdateQueued = false;
+  win.on('resize', () => {
+    if (shapeUpdateQueued) return;
+    shapeUpdateQueued = true;
+    setImmediate(() => { shapeUpdateQueued = false; win.updateNoteShape(); });
+  });
+  win.updateNoteShape();
   win.on('focus', () => win.setAlwaysOnTop(true, 'screen-saver'));
   win.on('show', () => win.setAlwaysOnTop(true, 'screen-saver'));
   win.on('blur', () => win.setAlwaysOnTop(true, 'screen-saver'));
@@ -1439,12 +1460,19 @@ function setupIpc() {
   guardedOn('window:set-effects', (e, fx) => {
     const srcWin = BrowserWindow.fromWebContents(e.sender);
     if (srcWin === mainWindow) {
+      desktopSnapAppearance = { dark: fx?.snapDark, radius: fx?.noteRadius, enabled: typeof fx?.desktopSnap === 'boolean' ? fx.desktopSnap : desktopSnapAppearance.enabled };
+      if (desktopSnap) {
+        if (typeof fx?.desktopSnap === 'boolean') desktopSnap.setEnabled(fx.desktopSnap);
+        desktopSnap.setAppearance({ dark: fx?.snapDark, radius: fx?.noteRadius === 0 ? 0 : 8 });
+      }
       detachedWindows.forEach((w) => {
         if (w && !w.isDestroyed()) {
           w.webContents.send('window:effects', fx);
+          if (Number.isFinite(fx?.noteRadius)) w.noteCornerRadius = Math.max(0, Math.min(28, fx.noteRadius));
           if (typeof w.setBackgroundMaterial === 'function') {
             try {
               w.setBackgroundMaterial(fx && fx.desktopMica ? 'acrylic' : 'none');
+              if (w.updateNoteShape) w.updateNoteShape();
             } catch (err) { /* ignore */ }
           }
         }
@@ -1577,6 +1605,7 @@ if (!gotLock) {
 
   app.on('before-quit', () => {
     isQuitting = true;
+    if (desktopSnap) desktopSnap.dispose();
     globalShortcut.unregisterAll();
   });
 }

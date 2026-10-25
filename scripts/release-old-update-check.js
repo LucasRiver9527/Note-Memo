@@ -6,10 +6,10 @@
  *   node scripts/release-old-update-check.js <旧版拷贝 exe 绝对路径> <新版构建目录绝对路径> <拷贝根目录绝对路径>
  *   node scripts/release-old-update-check.js --github-check <旧版拷贝 exe 绝对路径> <拷贝根目录绝对路径>
  *
- * 目的：在正式版发布前或发布后均可运行，用「当前已安装旧版（1.2.5 或 1.2.6）的一份拷贝」验证它能否 detect 到
- * 目标稳定版（默认取 ../package.json 的 version，当前候选为 1.2.7，latest 通道）。
+ * 目的：在正式版发布前或发布后均可运行，用「当前已安装旧版（1.2.5、1.2.6 或 1.2.7）的一份拷贝」验证它能否 detect 到
+ * 目标稳定版（默认取 ../package.json 的 version，当前候选为 1.2.8，latest 通道）。
  * 旧版与目标版本可用环境变量指定：
- *   MYNOTES_EXPECT_OLD_VERSION  旧拷贝应是的版本，默认 1.2.5；只接受 1.2.5 或 1.2.6。
+ *   MYNOTES_EXPECT_OLD_VERSION  旧拷贝应是的版本，默认 1.2.5；只接受 1.2.5、1.2.6 或 1.2.7。
  *   MYNOTES_EXPECT_NEW_VERSION  目标稳定版版本，默认读取 ../package.json 的 version；须为合法无后缀版本且高于旧版。
  * 默认离线模式：起本地 feed，验证 detect +（可确认关闭 autoInstallOnAppQuit 时）下载安装包字节。
  * `--github-check`：不建本地 feed、不注入 MYNOTES_UPDATE_URL，走旧拷贝内置的 GitHub provider 联网
@@ -65,7 +65,7 @@ function validateArgs() {
   const usage = LIVE_MODE
     ? '用法: node scripts/release-old-update-check.js --github-check <旧版拷贝 exe 绝对路径> <拷贝根目录绝对路径>'
     : '用法: node scripts/release-old-update-check.js <旧版拷贝 exe 绝对路径> <新版构建目录绝对路径> <拷贝根目录绝对路径>（拷贝根目录也可用环境变量 MYNOTES_OLD_COPY_ROOT 提供）';
-  const versionHint = '；旧版版本用 MYNOTES_EXPECT_OLD_VERSION（默认 1.2.5，只接受 1.2.5/1.2.6），目标版本用 MYNOTES_EXPECT_NEW_VERSION（默认读 package.json）指定';
+  const versionHint = '；旧版版本用 MYNOTES_EXPECT_OLD_VERSION（默认 1.2.5，只接受 1.2.5/1.2.6/1.2.7），目标版本用 MYNOTES_EXPECT_NEW_VERSION（默认读 package.json）指定';
   if (!OLD_EXE) return `${usage}（缺少旧版 exe）${versionHint}`;
   if (!LIVE_MODE && !NEW_DIR) return `${usage}（缺少新版构建目录）${versionHint}`;
   if (!COPY_ROOT) return `${usage}（缺少拷贝根目录）${versionHint}`;
@@ -118,12 +118,12 @@ function compareVersions(a, b) {
   return 0;
 }
 
-/** 只接受 1.2.5 / 1.2.6 作为旧拷贝版本；默认 1.2.5。 */
+/** 只接受 1.2.5 / 1.2.6 / 1.2.7 作为旧拷贝版本；默认 1.2.5。 */
 function resolveExpectedOldVersion(raw) {
   const v = (raw == null ? '' : String(raw)).trim();
   if (v === '') return { ok: true, version: '1.2.5', source: 'default' };
-  if (v === '1.2.5' || v === '1.2.6') return { ok: true, version: v, source: 'env' };
-  return { ok: false, error: `MYNOTES_EXPECT_OLD_VERSION 只接受 1.2.5 或 1.2.6，实得：${JSON.stringify(v)}` };
+  if (v === '1.2.5' || v === '1.2.6' || v === '1.2.7') return { ok: true, version: v, source: 'env' };
+  return { ok: false, error: `MYNOTES_EXPECT_OLD_VERSION 只接受 1.2.5、1.2.6 或 1.2.7，实得：${JSON.stringify(v)}` };
 }
 
 /**

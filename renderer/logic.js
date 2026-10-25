@@ -437,7 +437,7 @@
       html += '</tr>';
     }
     const bw = (tbl.borderWidth == null || tbl.borderWidth === '') ? 3 : clampNum(tbl.borderWidth, 3, TABLE_BORDER_MIN, TABLE_BORDER_MAX);
-    const bc = sanitizeCss(tbl.borderColor) || 'rgba(0,0,0,0.7)';
+    const bc = sanitizeCss(tbl.borderColor) || 'color-mix(in srgb, currentColor 55%, transparent)';
     let ts = '';
     if (tbl.textColor) ts += 'color:' + sanitizeCss(tbl.textColor) + ';';
     if (isCssNumber(tbl.fontSize)) ts += 'font-size:' + clampNum(tbl.fontSize, 0, 0, 999) + 'px;';
@@ -497,5 +497,185 @@
   }
 
 
-  return { hexToRgba, luminance, contrastRatio, isDarkColor, autoTextColor, noteShadowCss, escapeHtml, refIdsOf, cleanupRefs, sortNotes, tableToMarkdown, noteToMarkdown, referencedMedia, parseNullSeparated, hdropString, setRenderLocale, formatInlineText, inlineImgHtml, fileLinkHtml, tableBlockHtml, renderRichContent, sanitizeCss, clampInt, clampNum, isCssNumber };
+  /* ================= 搜索匹配 / 片段（V128-01A，纯文本阶段） =================
+     说明（明确范围，避免误用）：
+     - 本阶段只在「原始纯文本字段」上做大小写不敏感的字面量匹配，与当前 visibleNotes 的
+       String.toLowerCase().includes() 语义保持一致（不做正则、不做 Unicode 规范化）。
+     - 不解析 Markdown / 富文本标记 / 媒体（[[img:...]]、[[table:...]] 等）的「渲染后文本」，
+       也不做 DOM caret 定位；后续 UI 步骤可基于这里的结构化结果自行处理。
+     - 所有返回值均为纯数据；snippet 的片段是**纯文本**（matched 仅布尔标记），
+       调用方必须用 textContent 或 escapeHtml 自行渲染，模块内部绝不生成 HTML、也不对原始文本做 HTML 转义
+       （在片段层转义会造成二次转义）。 */
+
+  // 构造「小写化 + 原始 UTF-16 偏移映射」：lower 中每个 UTF-16 码元对应 original 中的起始偏移。
+  // 处理变长小写映射（如 U+0130 'İ' -> 'i\u0307'）与全角等，使后续命中能准确映射回原文偏移。
+  function lowerWithMap(s) {
+    const src = String(s);
+    const lower = src.toLowerCase();
+    const map = new Array(lower.length);
+    let si = 0; // 源码元游标
+    let li = 0; // lower 码元游标
+    while (si < src.length) {
+      const cp = src.codePointAt(si);
+      const ch = String.fromCodePoint(cp);
+      const srcLen = ch.length; // UTF-16 长度（astral 为 2）
+      const lowCh = ch.toLowerCase();
+      for (let k = 0; k < lowCh.length; k++) map[li + k] = si;
+      li += lowCh.length;
+      si += srcLen;
+    }
+    return { lower, map };
+  }
+
+  // 在字段文本中找 query 的第一个「字面量大小写不敏感」命中；返回 {start,end}（原文 UTF-16 偏移，end 独占）或 null。
+  function firstLiteralHit(text, query) {
+    const src = String(text == null ? '' : text);
+    const q = String(query);
+    if (!q) return null;
+    const { lower, map } = lowerWithMap(src);
+    const qLower = q.toLowerCase();
+    const idx = lower.indexOf(qLower);
+    if (idx < 0) return null;
+    const start = map[idx];
+    // end 用「映射到原文的结束位置」：lower 命中末码元 + 1 个 lower 码元对应的原文区间末尾；
+    // 若命中跨多个来源码元（如变长映射），取最后一个 lower 码元映射到的源码元末尾。
+    const lastLower = idx + qLower.length - 1;
+    const lastSrcStart = map[lastLower];
+    const lastCp = src.codePointAt(lastSrcStart);
+    const end = lastSrcStart + String.fromCodePoint(lastCp).length;
+    return { start, end };
+  }
+
+  /**
+   * findNoteSearchMatches(note, groupName, query)
+   * 对 title / content / 每个 todo item.text / groupName 逐字段做「首个命中」匹配，
+   * 返回按固定顺序（title, content, 每个 todo 项, groupName）排列的命中数组。
+   * query 去首尾空白；空/纯空白 -> []。缺失/null 字段安全忽略。绝不修改输入、不把 query 当正则。
+   * 每条命中形状：{ field, text, start, end, itemId?, itemIndex? }
+   *   - field:   'title' | 'content' | 'todo' | 'group'
+   *   - text:    该字段的原始文本（未转义、未截断）
+   *   - start/end: text 内命中的原始 UTF-16 起始/结束（end 独占）
+   *   - itemId/itemIndex: 仅 todo 命中时给出（it.id / 其索引）
+   */
+  function findNoteSearchMatches(note, groupName, query) {
+    const q = String(query == null ? '' : query).trim();
+    if (!q) return [];
+    const n = note || {};
+    const out = [];
+    const push = (field, text, extras) => {
+      if (text == null) return;
+      const hit = firstLiteralHit(text, q);
+      if (!hit) return;
+      out.push(Object.assign({ field, text: String(text), start: hit.start, end: hit.end }, extras || {}));
+    };
+    push('title', n.title);
+    push('content', n.content);
+    const items = Array.isArray(n.items) ? n.items : [];
+    items.forEach((it, index) => {
+      if (!it) return;
+      push('todo', it.text, { itemId: it.id, itemIndex: index });
+    });
+    push('group', groupName);
+    return out;
+  }
+
+  // 将「可能切在代理对中间」的位置对齐到完整码点边界（不产生未配对代理）。
+  // isHigh/isLow 判断某个 UTF-16 码元是否分别为高位/低位代理。
+  // 仅当 p 恰好落在某个代理对中间（p 指向低位代理、且其前一位是高位代理）时才调整：
+  //   alignDown：退到该码点起点（p-1），使切片不包含该码点的后半；
+  //   alignUp：  进到该码点之后（p+1），使切片包含完整码点。
+  // 其余位置（含恰好指向高位代理起点、或指向代理对之后）保持不变。
+  function isHigh(c) { return c >= 0xd800 && c <= 0xdbff; }
+  function isLow(c) { return c >= 0xdc00 && c <= 0xdfff; }
+  function alignDown(s, p) {
+    if (p <= 0) return 0;
+    if (p >= s.length) return s.length;
+    if (isLow(s.charCodeAt(p)) && isHigh(s.charCodeAt(p - 1))) return p - 1;
+    return p;
+  }
+  function alignUp(s, p) {
+    if (p <= 0) return 0;
+    if (p >= s.length) return s.length;
+    if (isLow(s.charCodeAt(p)) && isHigh(s.charCodeAt(p - 1))) return p + 1;
+    return p;
+  }
+
+  /**
+   * buildSearchSnippet(text, start, end, maxChars = 120)
+   * 围绕给定的首个命中区间 [start,end) 生成「纯文本」片段：
+   * 返回 { parts: [{text, matched}], truncatedBefore, truncatedAfter }。
+   * 契约：
+   * - 预算：仅接受「有限且 >= 1」的 maxChars 并向下取整；非有限/<=0/NaN/缺省 -> 120。
+   *   绝不把奇数预算向上取整或强制为偶数。窗口严格 <= budget（UTF-16 码元数）。
+   * - 空命中区间（start === end，含反向/无效被归一化后的空区间）绝不被扩展成命中：
+   *   不产生任何 matched 段（即使 start/end 落在代理对中间）。空区间端点可一起移动到安全边界。
+   * - 正长度命中区间先规范化为「完整码点」范围后夹取到文本内；窗口在不超预算前提下尽量包含命中并居中。
+   *   命中放不下时，窗口从命中起点（对齐后）开始、长度 <= budget；匹配段被截断但良构。
+   *   注意：budget 很小（如 1）且命中是 2 单元的 astral 码点时，窗口可能容不下该码点，此时可返回无 matched 段。
+   * - 所有返回的 part 对良构原文都是良构的：绝不在匹配端点或窗口边界处切出未配对代理。
+   * - 即使片段被裁剪，命中记录里的 start/end 保持原样（本函数只影响展示）。
+   * - 各部分为纯文本，matched 仅布尔；本函数不生成 HTML、不转义（调用方用 textContent/escapeHtml）。
+   */
+  function buildSearchSnippet(text, start, end, maxChars) {
+    const s = String(text == null ? '' : text);
+    const budget = (Number.isFinite(maxChars) && maxChars >= 1) ? Math.floor(maxChars) : 120;
+
+    // 规范化命中区间：夹取到文本内
+    let st = Number.isInteger(start) ? start : 0;
+    let en = Number.isInteger(end) ? end : 0;
+    if (st < 0) st = 0;
+    if (st > s.length) st = s.length;
+    if (en < st) en = st;
+    if (en > s.length) en = s.length;
+    // 原始是否为空区间：必须在任何码点扩展之前判定，避免把「空」扩展成「命中」
+    const isEmpty = en <= st;
+    if (isEmpty) {
+      // 空区间：端点一起移到安全边界（不扩大为命中）
+      st = alignDown(s, st);
+      en = st;
+    } else {
+      // 正长度命中：端点各向外扩展到完整码点，纳入命中所在码点
+      st = alignDown(s, st);
+      en = alignUp(s, en);
+    }
+    const hitLen = en - st;
+
+    // 期望窗口：以命中居中；先按预算定长，再夹取到文本范围
+    let winStart = st - Math.floor((budget - Math.min(hitLen, budget)) / 2);
+    let winEnd = winStart + budget;
+    if (winEnd > s.length) { winEnd = s.length; winStart = Math.max(0, winEnd - budget); }
+    if (winStart < 0) { winStart = 0; winEnd = Math.min(s.length, budget); }
+    // 命中在预算内必须被窗口包含
+    if (hitLen <= budget) {
+      if (st < winStart) { winStart = st; winEnd = Math.min(s.length, winStart + budget); }
+      if (en > winEnd) { winEnd = en; winStart = Math.max(0, winEnd - budget); }
+    } else {
+      // 命中超预算：窗口从命中起点开始（命中段被截断；极端 budget=1 + astral 时可能无 matched 段）
+      winStart = st;
+      winEnd = Math.min(s.length, st + budget);
+    }
+    // 窗口边界向内对齐到完整码点：严格不超预算、不切代理对
+    let ws = alignUp(s, winStart);
+    let we = alignDown(s, winEnd);
+    if (we - ws > budget) we = ws + budget; // 兜底：码点对齐后仍超预算（极少见）时严格收紧
+    if (we < ws) we = ws;
+
+    // 匹配段夹取到窗口内（并保持码点完整）
+    let mStart = alignUp(s, Math.max(ws, Math.min(st, we)));
+    let mEnd = alignDown(s, Math.max(mStart, Math.min(en, we)));
+    if (mEnd < mStart) mEnd = mStart;
+
+    const before = ws > 0;
+    const after = we < s.length;
+
+    const parts = [];
+    if (mStart > ws) parts.push({ text: s.slice(ws, mStart), matched: false });
+    if (mEnd > mStart) parts.push({ text: s.slice(mStart, mEnd), matched: true });
+    if (we > mEnd) parts.push({ text: s.slice(mEnd, we), matched: false });
+    if (!parts.length) parts.push({ text: '', matched: false });
+
+    return { parts, truncatedBefore: before, truncatedAfter: after };
+  }
+
+  return { hexToRgba, luminance, contrastRatio, isDarkColor, autoTextColor, noteShadowCss, escapeHtml, refIdsOf, cleanupRefs, sortNotes, tableToMarkdown, noteToMarkdown, referencedMedia, parseNullSeparated, hdropString, setRenderLocale, formatInlineText, inlineImgHtml, fileLinkHtml, tableBlockHtml, renderRichContent, sanitizeCss, clampInt, clampNum, isCssNumber, findNoteSearchMatches, buildSearchSnippet };
 });

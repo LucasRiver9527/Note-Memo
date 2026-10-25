@@ -50,7 +50,7 @@ function applyTheme() {
   // 便签外观自定义：圆角 / 阴影 / 边框 / 字距 / 背景图案（单一来源，实时作用于所有便签卡片）
   applyNoteAppearance(s);
   document.body.classList.toggle('glass', !!s.glass);
-  window.api.setEffects({ glass: !!s.glass, highlightColor: hl, desktopMica: !!s.desktopMica });
+  window.api.setEffects({ glass: !!s.glass, highlightColor: hl, desktopMica: !!s.desktopMica, desktopSnap: s.desktopSnap !== false, snapDark: !light, noteRadius: s.noteRadius });
   root.style.setProperty('--font-size', s.fontSize + 'px');
   root.style.setProperty('--font-family', resolveFontCss(s.fontFamily));
   root.style.setProperty('--titlebar-bg', bg);
@@ -155,6 +155,8 @@ function applyBackground() {
   const brightByColor = !!s.canvasColor && luminance(s.canvasColor) > 0.65;
   document.body.classList.toggle('bright-bg', s.backgroundReadability !== false && (brightByImage || brightByColor));
   applyWindowControls();
+  // V128-01E3B：背景图/透明度/可读性变化后，仅刷新已存在的文档选择区前景与边缘保护（不重建列表；启动早于文档加载时安全跳过）。
+  if (typeof refreshDocPickerForeground === 'function') refreshDocPickerForeground();
 }
 
 // 自定义背景图/明暗变化时同步原生窗口控制按钮(─ □ ✕)符号颜色，保证始终清晰可辨
@@ -349,6 +351,7 @@ function syncSettingsInputs() {
   $('#todoRemindOpacity').value = state.settings.todoRemindOpacity != null ? state.settings.todoRemindOpacity : 100;
   const gl = $('#glassToggle'); if (gl) gl.checked = !!state.settings.glass;
   const dm = $('#desktopMicaToggle'); if (dm) dm.checked = !!state.settings.desktopMica;
+  const ds = $('#desktopSnapToggle'); if (ds) ds.checked = state.settings.desktopSnap !== false;
   const md = $('#markdownToggle'); if (md) md.checked = state.settings.markdown !== false;
   const hc = $('#highlightColorInput'); if (hc) hc.value = state.settings.highlightColor || '#fff59d';
   // 菜单外观（原在右键菜单底部，已归位到设置页）

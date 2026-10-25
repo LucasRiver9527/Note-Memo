@@ -271,6 +271,9 @@ body.topbar-acrylic .icon-btn:hover { color: var(--accent); }
 }
 #board {
   position: relative; width: 2600px; height: 1800px;
+  /* 板内便签 z-index 限定在 #board 的层叠上下文内：临时抬升的便签绝不覆盖
+     画布工具栏（#canvasToolbar）、批量栏/全局弹层等更高层 UI。 */
+  isolation: isolate;
 }
 
 /* 画布右下角缩放/平移工具栏（仅画布视图显示；固定于视口右下角）。
@@ -351,7 +354,8 @@ body.panning #canvas { cursor: grabbing; user-select: none; }
   transition: box-shadow 0.18s;
 }
 .note:hover { box-shadow: var(--note-shadow-hover, 0 10px 30px rgba(0, 0, 0, 0.3)); }
-.note.dragging { box-shadow: 0 18px 50px rgba(0,0,0,0.4); opacity: 0.92; cursor: grabbing; z-index: 1000; transition: none; will-change: transform; }
+/* 拖动中：视觉统一由 class 提供；层级由 startDrag 的临时 inline z 决定（不再写死 z-index，否则会输给各卡 inline z）。 */
+.note.dragging { box-shadow: 0 18px 50px rgba(0,0,0,0.4); opacity: 0.92; cursor: grabbing; transition: none; will-change: transform; }
 .note.pinned { box-shadow: 0 10px 30px rgba(0,0,0,0.34); }
 
 /* 归档置灰：整卡降饱和 + 半透明，弱化视觉、提示已归档 */
@@ -388,7 +392,8 @@ body.multi-select .note .note-head { cursor: pointer; }
   left: 50%;
   bottom: 24px;
   transform: translateX(-50%);
-  display: flex; align-items: center; gap: 8px;
+  display: flex; align-items: center; justify-content: center; flex-wrap: wrap; gap: 8px;
+  width: max-content; max-width: calc(100% - 24px);
   padding: 10px 16px;
   background: var(--titlebar-bg, rgba(28,30,34,0.92));
   color: var(--fg, #fff);
@@ -401,13 +406,19 @@ body.topbar-acrylic #batchBar {
   backdrop-filter: blur(18px) saturate(1.4);
 }
 #batchBar.hidden { display: none; }
+@media (max-width: 700px) {
+  /* Leave the corner canvas controls accessible below the wrapped batch actions. */
+  #batchBar { bottom: 72px; }
+}
 .batch-count { font-size: 13px; font-weight: 600; margin-right: 8px; white-space: nowrap; }
 .batch-btn {
   padding: 8px 13px; border-radius: 8px; border: none; cursor: pointer;
+  flex: 0 0 auto; white-space: nowrap;
   font-size: 12.5px; font-family: inherit; background: var(--bg-soft, rgba(255,255,255,0.14)); color: var(--fg, #fff);
   transition: background 0.12s;
 }
-.batch-btn:hover { background: var(--accent-soft, rgba(255,255,255,0.28)); }
+.batch-btn:hover:not(:disabled) { background: var(--accent-soft, rgba(255,255,255,0.28)); }
+.batch-btn:disabled { opacity: 0.45; cursor: default; }
 .batch-btn.danger { background: rgba(231,76,60,0.85); color: #fff; }
 .batch-btn.danger:hover { background: #e5484d; }
 
@@ -415,10 +426,11 @@ body.topbar-acrylic #batchBar {
 body.note-dragging .note {
   transition: none !important;
 }
-body.note-dragging .note:not(.dragging) {
+body.note-dragging .note:not(.dragging):not(.drag-raised) {
   pointer-events: none;
 }
-body.note-dragging .note.dragging {
+body.note-dragging .note.dragging,
+body.note-dragging .note.drag-raised {
   will-change: transform;
 }
 
@@ -534,15 +546,15 @@ body.note-dragging .note.dragging {
 .note-foot .date { margin-left: auto; white-space: nowrap; }
 
 .resize-handle {
-  position: absolute; right: 0; bottom: 0; width: 18px; height: 18px;
+  position: absolute; right: 0; bottom: 0; width: calc(22px + var(--note-radius, 12px) * 0.25); height: calc(22px + var(--note-radius, 12px) * 0.25);
   cursor: nwse-resize; border-bottom-right-radius: var(--note-radius, 12px);
 }
 .resize-handle::after {
   content: ""; position: absolute;
-  right: calc(var(--note-radius, 12px) * 0.33);
-  bottom: calc(var(--note-radius, 12px) * 0.33);
+  right: max(3px, calc(var(--note-radius, 12px) * 0.33));
+  bottom: max(3px, calc(var(--note-radius, 12px) * 0.33));
   width: 7px; height: 7px;
-  border-right: 2px solid rgba(0,0,0,0.28); border-bottom: 2px solid rgba(0,0,0,0.28);
+  border-right: 2px solid currentColor; border-bottom: 2px solid currentColor; opacity: 0.48;
 }
 
 /* ---------- 便签内图片 ---------- */
@@ -898,7 +910,7 @@ body.maximized #changelogOverlay { border-radius: 0; }
 
 /* ---------- Toast ---------- */
 #toast {
-  position: fixed; bottom: 24px; left: 50%; transform: translateX(-50%);
+  position: fixed; bottom: var(--toast-bottom, 24px); left: 50%; transform: translateX(-50%);
   background: var(--bg); color: var(--fg); border: 1px solid var(--border);
   padding: 10px 18px; border-radius: 999px; box-shadow: var(--shadow);
   font-size: 13px; z-index: 5000; animation: fadeIn 0.2s ease;
@@ -1042,7 +1054,9 @@ body.data-readonly #board { pointer-events: none; }
   border: 2px solid var(--fg-dim); border-radius: 5px; cursor: pointer; position: relative;
 }
 .todo-line input[type="checkbox"]:checked { background: var(--accent); border-color: var(--accent); }
+.todo-line input[type="checkbox"]:checked::after {
   content: "✓"; position: absolute; left: 1px; top: -3px; color: #fff; font-size: 11px; font-weight: 700;
+}
 .todo-line .tl-body { flex: 1; min-width: 0; }
 .todo-line .tl-text { word-break: break-word; }
 .todo-line.done .tl-text { text-decoration: line-through; opacity: 0.5; }
@@ -1055,7 +1069,7 @@ body.data-readonly #board { pointer-events: none; }
 .todo-line .tl-del { background: transparent; border: none; cursor: pointer; color: var(--fg-dim); font-size: 13px; opacity: 0.55; }
 .todo-line:hover .tl-del { opacity: 1; }
 .todo-line .tl-del:hover { color: #e5484d; opacity: 1; }
-.todo-empty { text-align: center; color: var(--fg-dim); font-size: 13px; padding: 26px 0; }
+.todo-empty { text-align: center; color: color-mix(in srgb, var(--fg-dim) 70%, var(--fg)); font-size: 13px; padding: 26px 0; }
 
 /* 主题编辑器弹窗 */
 .theme-editor-modal {
@@ -1399,23 +1413,23 @@ body.maximized #alarmOverlay { border-radius: 0; }
   color: inherit;
 }
 .note-table td {
-  border: var(--tbl-border-width, 3px) solid var(--tbl-border-color, rgba(0,0,0,0.7));
+  border: var(--tbl-border-width, 3px) solid var(--tbl-border-color, color-mix(in srgb, currentColor 55%, transparent));
   padding: 6px 8px;
-  min-width: 40px;
+  min-width: 6em; /* Keep a readable column before falling back to local scrolling. */
   height: 28px;
   vertical-align: middle;
   text-align: center;
   position: relative;
-  word-break: break-word;
+  overflow-wrap: anywhere; word-break: normal;
   outline: none;
   background: transparent;
 }
 .note-table td.cell-selected { background: var(--accent-soft); }
 .note-table td.box-selected { background: var(--accent-soft); }
 .note-table td.cell-editing { background: rgba(127,127,127,0.14); }
-.note-table td.diag { min-width: 64px; height: 40px; }
+.note-table td.diag { min-width: 10em; height: 40px; }
 .note-table td.diag .diag-line { position: absolute; inset: 0; width: 100%; height: 100%; pointer-events: none; z-index: 0; }
-.note-table td.diag .diag-line line { stroke: var(--tbl-border-color, rgba(0,0,0,0.7)); stroke-width: var(--tbl-border-width, 3px); vector-effect: non-scaling-stroke; }
+.note-table td.diag .diag-line line { stroke: var(--tbl-border-color, color-mix(in srgb, currentColor 55%, transparent)); stroke-width: var(--tbl-border-width, 3px); vector-effect: non-scaling-stroke; }
 /* 对角标签：2×2 等分 intrinsic 网格；两行等高、两列等宽，标签置于对角象限，长文本换行不越界。 */
 .note-table td.diag .diag-box {
   position: relative; z-index: 1; display: grid;
@@ -1581,3 +1595,60 @@ body.topbar-acrylic .filter-status {
   border-radius: 999px; padding: 2px 10px; cursor: pointer; font-family: inherit; font-size: 12px;
 }
 .fs-clear:hover { border-color: var(--accent); color: var(--accent); }
+
+/* Search-only memo strip inherits the card material and custom text color. */
+.memo-search { display:flex; align-items:center; gap:8px; flex-wrap:wrap; margin:6px 0 8px; padding:7px 9px; border:1px solid color-mix(in srgb, currentColor 15%, transparent); border-radius:8px; font-size:calc(var(--font-size) - 2px); color:inherit; }
+.memo-search-source { opacity:0.7; flex:0 0 auto; }
+.memo-search-snippet { flex:1 1 160px; min-width:0; overflow-wrap:anywhere; line-height:1.5; }
+.memo-search mark { color:inherit; background:color-mix(in srgb, currentColor 16%, transparent); border-radius:3px; padding:0 1px; }
+.memo-search-locate { flex:0 0 auto; margin-left:auto; border:1px solid color-mix(in srgb, currentColor 22%, transparent); background:transparent; color:inherit; font:inherit; padding:4px 8px; border-radius:6px; cursor:pointer; }
+.memo-search-locate:hover { background:color-mix(in srgb, currentColor 10%, transparent); }
+.memo-search-locate:focus-visible, .memo-row:focus-visible, .memo-row .group-tag:focus-visible { outline:2px solid var(--accent); outline-offset:2px; }
+
+/* Search-only canvas strip: inherit card material and preserve fixed card geometry. */
+.note > .memo-search { flex:0 0 auto; flex-wrap:nowrap; gap:5px; margin:2px 8px 3px; padding:3px 5px; min-width:0; font-size:11px; }
+.note > .memo-search .memo-search-snippet { flex:1 1 0; overflow:hidden; white-space:nowrap; text-overflow:ellipsis; line-height:1.4; }
+.note > .memo-search .memo-search-source { max-width:28%; overflow:hidden; white-space:nowrap; text-overflow:ellipsis; }
+.note > .memo-search .memo-search-locate { padding:2px 4px; white-space:nowrap; }
+
+/* V128-01D2：待办视图搜索解释（紧凑融入 .tl-meta，复用主题变量、低对比、无独立大块底） */
+.todo-line .tl-text mark { color: inherit; background: color-mix(in srgb, currentColor 16%, transparent); border-radius: 3px; padding: 0 1px; }
+.todo-search { display: inline-flex; align-items: baseline; gap: 6px; flex-wrap: wrap; max-width: 100%; min-width: 0; }
+.todo-search-source { opacity: 0.7; flex: 0 0 auto; }
+.todo-search-snippet { flex: 1 1 auto; min-width: 0; overflow-wrap: anywhere; line-height: 1.4; }
+.todo-search-snippet:empty { display: none; }
+.todo-search mark { color: inherit; background: color-mix(in srgb, currentColor 16%, transparent); border-radius: 3px; padding: 0 1px; }
+.todo-search-locate { flex: 0 0 auto; border: 1px solid color-mix(in srgb, currentColor 22%, transparent); background: transparent; color: inherit; font: inherit; padding: 2px 7px; border-radius: 6px; cursor: pointer; }
+.todo-search-locate:hover { background: color-mix(in srgb, currentColor 10%, transparent); }
+.todo-search-locate:focus-visible, .todo-line .group-tag:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
+.note:focus-visible, .note .group-tag:focus-visible { outline:2px solid var(--accent); outline-offset:2px; }
+
+/* V128-01D3：文档视图搜索解释（拾取项 + 打开文档；紧凑，继承卡片材质/文字色，无独立大底） */
+.doc-pick-item .dp-info .doc-search { margin-top: 4px; font-size: 12px; }
+.doc-search { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; margin: 6px 0; padding: 6px 8px; border: 1px solid color-mix(in srgb, currentColor 15%, transparent); border-radius: 8px; font-size: calc(var(--font-size) - 2px); color: inherit; }
+.doc-search-source { opacity: 0.7; flex: 0 0 auto; }
+.doc-search-snippet { flex: 1 1 160px; min-width: 0; overflow-wrap: anywhere; line-height: 1.5; }
+.doc-search-snippet:empty { display: none; }
+.doc-search mark { color: inherit; background: color-mix(in srgb, currentColor 16%, transparent); border-radius: 3px; padding: 0 1px; }
+.doc-search-locate { flex: 0 0 auto; margin-left: auto; border: 1px solid color-mix(in srgb, currentColor 22%, transparent); background: transparent; color: inherit; font: inherit; padding: 4px 8px; border-radius: 6px; cursor: pointer; }
+.doc-search-locate:hover { background: color-mix(in srgb, currentColor 10%, transparent); }
+.doc-search-locate:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
+
+/* V128-01D3：只读文档 TODO 文本允许原生选择（继承的 user-select:none 会阻止原生 Range 选中） */
+.doc-editor .todo-list .todo-item > span:last-child { user-select: text; }
+
+/* V128-01E3B：背景图可读性——选择区卡片文字边缘保护（仅壁纸模式由 JS 写入 --doc-protect；显式颜色不附加） */
+#docList .doc-pick-item,
+#docList .doc-search-locate { text-shadow: var(--doc-protect, none); }
+
+/* V128-01E3B2：自动壁纸卡片提升元信息/高亮可读性（仅 scoped 自动类；显式颜色/无图不生效） */
+#docList .doc-pick-item.doc-auto-wallpaper .dp-sub,
+#docList .doc-pick-item.doc-auto-wallpaper .doc-search-source,
+#docList .doc-pick-item.doc-auto-wallpaper .dp-arrow { opacity: 1; }
+#docList .doc-pick-item.doc-auto-wallpaper .doc-search mark {
+  color: inherit;
+  background: transparent;
+  text-decoration: underline;
+  text-decoration-thickness: 1.5px;
+  text-underline-offset: 2px;
+}

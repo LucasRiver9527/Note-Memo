@@ -139,6 +139,7 @@ interface AppSettings {
   collapseSnapshot?: Record<string, any>;
   glass?: boolean;
   desktopMica?: boolean;
+  desktopSnap?: boolean;
   markdown?: boolean;
   highlightColor?: string | null;
   reminderSound?: boolean;

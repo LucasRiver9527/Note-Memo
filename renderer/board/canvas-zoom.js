@@ -246,8 +246,10 @@ function visibleNotes() {
     }
     if (query) {
       const g = state.groups.find((x) => x.id === n.groupId);
-      const hay = ((n.title || '') + ' ' + noteText(n) + ' ' + (g ? g.name : '')).toLowerCase();
-      if (!hay.includes(query)) return false;
+      // V128-01E1/E2：title/group 各自独立匹配；正文用可见渲染文本助手（按单元匹配，避免隐藏/跨单元假命中）。
+      const titleMatch = (n.title || '').toLowerCase().includes(query);
+      const groupMatch = g ? g.name.toLowerCase().includes(query) : false;
+      if (!titleMatch && !groupMatch && !noteSearchContentMatches(n, query)) return false;
     }
     return true;
   });

@@ -47,10 +47,18 @@ Object.assign(global, {
 const CanvasZoom = require('../renderer/board/canvas-zoom.js');
 const NoteCard = require('../renderer/board/note-card.js');
 const UndoHistory = require('../renderer/core/undo-history.js');
-// syncUndoButtons 会查 #btnUndo/#btnRedo；Node 无 document，提供最小 stub（看护真实栈行为）
-globalThis.document = globalThis.document || { querySelector: () => null };
+// The search selector now parses actual rendered content; use a real inert DOM and renderer.
+// Cache behavior is covered separately; this fixture only bypasses the render cache.
+const { JSDOM } = require('jsdom');
+const Logic = require('../renderer/logic.js');
+const testDom = new JSDOM();
+globalThis.document = testDom.window.document;
+globalThis.Node = testDom.window.Node;
 Object.assign(global, {
   noteText: NoteCard.noteText,
+  noteSearchContentMatches: NoteCard.noteSearchContentMatches,
+  renderRichCached: (n) => Logic.renderRichContent(n.content || '', n),
+  $$: (selector, root = document) => Array.from(root.querySelectorAll(selector)),
   visibleNotes: CanvasZoom.visibleNotes,
   isGroupCollapsed: CanvasZoom.isGroupCollapsed,
   UndoHistory,
@@ -482,7 +490,7 @@ test('UX-30A 归档读写一致：保存后显示顺序=全局 noteOrder（非�
 
 test('UX-30A 真实 noteText：表格单元格/待办文本命中查询', () => {
   state.notes = [
-    mkNote('tbl', { groupId: null, content: 'x', tables: [{ id: 'T', rows: 1, cols: 1, cells: [['表格词']], merges: [], diagonals: [] }] }),
+    mkNote('tbl', { groupId: null, content: '[[table:T]]', tables: [{ id: 'T', rows: 1, cols: 1, cells: [['表格词']], merges: [], diagonals: [] }] }),
     mkNote('todo', { groupId: null, type: 'todo', items: [{ text: '任务词', done: false }] }),
     mkNote('other', { groupId: null, content: '无关' })
   ];
@@ -565,7 +573,7 @@ test('UX-30B 显式恢复：忽略当前排序模式，仅还原有效匹配可�
 
 test('UX-30B 恢复：缺失/畸形快照、全被过滤时 false 且无副作用；all/group 作用域互相独立', () => {
   state.notes = [mkNote('n1', { groupId: 'g1', x: 1, y: 1 })];
-  state.groups = [{ id: 'g1' }];
+  state.groups = [{ id: 'g1', name: 'G1' }];
   // 无快照
   state.settings.orderLayouts = {};
   global.filter = { group: 'g1', query: '' };
@@ -828,4 +836,131 @@ test('UX-30D restoreSavedLayout：有可恢复项→一个历史项；无目标/
   assert.strictEqual(A.restoreSavedLayout(), false);
   assert.strictEqual(UndoHistory.stacks().undoStack.length, u, '无目标 restore 入栈');
   assert.strictEqual(calls.save, 0); assert.strictEqual(calls.renderAll, 0); assert.strictEqual(calls.toast.length, 0);
+});
+
+// V128-06: selected-only layout uses real selectors, packing, scope and undo dependencies above.
+const v128SelectedNote = (id, extra = {}) => mkNote(id, {
+  content: 'hit', items: [], images: [], files: [], tables: [], reminder: null,
+  groupId: null, archived: false, desktopPin: false, w: 220, h: 180,
+  x: 900, y: 400, positionAll: { x: 900, y: 400 }, ...extra
+});
+
+test('V128-06 selected arrange moves only visible selected notes, keeps ordering metadata, and avoids fixed notes', () => {
+  global.$ = (s) => s === '#canvas' ? { clientWidth: 1300 } : null;
+  state.notes = [
+    v128SelectedNote('a'), v128SelectedNote('b', { x: 500, positionAll: { x: 500, y: 400 } }),
+    v128SelectedNote('fixed', { x: 20, y: 20, positionAll: { x: 20, y: 20 } }),
+    v128SelectedNote('hidden', { title: 'hidden', content: 'not matched', positionAll: { x: 258, y: 20 } }),
+    v128SelectedNote('folded', { groupId: 'fold', positionAll: { x: 496, y: 20 } }),
+    v128SelectedNote('archived', { archived: true, positionAll: { x: 20, y: 20 } }),
+    v128SelectedNote('pin', { desktopPin: true, positionAll: { x: 20, y: 20 } })
+  ];
+  state.groups = [{ id: 'fold', name: 'Fold' }];
+  state.settings.sortMode = 'custom';
+  state.settings.noteOrder = ['ghost', 'b', 'a']; // Do not normalize unrelated order metadata.
+  state.settings.orderLayouts = { _all: { a: { x: 100, y: 100 } } };
+  state.settings.collapsedGroups = { fold: true };
+  filter.query = 'hit';
+  global.selectedNotes = new Set(['a', 'b', 'hidden', 'folded', 'archived', 'pin', 'missing']);
+  const before = structuredClone(state);
+  assert.strictEqual(A.arrangeSelectedNotes(), true);
+  const moving = state.notes.filter((n) => n.id === 'a' || n.id === 'b');
+  const fixed = before.notes.filter((n) => ['fixed', 'hidden', 'folded'].includes(n.id)).map((n) => ({ ...n.positionAll, w: n.w, h: n.h }));
+  for (const n of moving) {
+    assert.notDeepStrictEqual(n.positionAll, before.notes.find((x) => x.id === n.id).positionAll);
+    assert.strictEqual(BoardLayout.overlapsAny(n.positionAll.x, n.positionAll.y, n.w, n.h, fixed), false);
+  }
+  assert.ok(state.notes[1].positionAll.x < state.notes[0].positionAll.x, 'Selected order follows custom b,a, not click order');
+  const expected = structuredClone(before);
+  for (const n of moving) expected.notes.find((x) => x.id === n.id).positionAll = { ...n.positionAll };
+  assert.deepStrictEqual(state, expected); // All other fields, snapshots, orders and notes unchanged.
+  assert.strictEqual(calls.save, 1);
+  assert.strictEqual(UndoHistory.stacks().undoStack.length, 1);
+  global.$ = () => null;
+});
+
+test('V128-06 empty, stale or nonboard selection is a true no-op and preserves redo', () => {
+  state.notes = [v128SelectedNote('a'), v128SelectedNote('hidden', { archived: true })];
+  state.settings.noteOrder = ['ghost'];
+  const before = structuredClone(state);
+  UndoHistory.stacks().redoStack.push(UndoHistory.snapshotState(state));
+  for (const ids of [[], ['missing'], ['hidden']]) {
+    global.selectedNotes = new Set(ids);
+    assert.strictEqual(A.arrangeSelectedNotes(), false);
+    assert.deepStrictEqual(state, before);
+  }
+  state.settings.viewMode = 'memo';
+  global.selectedNotes = new Set(['a']);
+  assert.strictEqual(A.arrangeSelectedNotes(), false);
+  assert.deepStrictEqual(calls, { save: 0, renderAll: 0, renderSortPanel: 0, toast: [] });
+  assert.strictEqual(UndoHistory.stacks().undoStack.length, 0);
+  assert.strictEqual(UndoHistory.stacks().redoStack.length, 1);
+});
+
+test('V128-06 group, ungrouped and cross-group archive selections keep coordinate scopes independent', () => {
+  for (const mode of ['g1', 'ungrouped', 'archive']) {
+    const archived = mode === 'archive';
+    const groupId = mode === 'ungrouped' ? null : 'g1';
+    global.filter = { group: mode === 'ungrouped' ? mode : 'g1', query: '', archive: archived };
+    global.$ = (s) => s === '#canvas' ? { clientWidth: 800 } : null;
+    state.notes = [
+      v128SelectedNote('a', { groupId, archived }),
+      v128SelectedNote('b', { groupId: archived ? 'g2' : groupId, archived }),
+      v128SelectedNote('fixed', { groupId, archived, x: 20, y: 20 }),
+      v128SelectedNote('other', { groupId: 'g2', archived: false, x: 258, y: 20 })
+    ];
+    state.groups = [{ id: 'g1', name: 'G1' }, { id: 'g2', name: 'G2' }];
+    state.settings.sortMode = 'custom';
+    state.settings.noteOrder = ['b', 'a', 'fixed', 'other'];
+    state.settings.groupOrders = { g1: ['b', 'a', 'fixed'] };
+    global.selectedNotes = new Set(['a', 'b', 'other']);
+    const before = structuredClone(state);
+    assert.strictEqual(A.arrangeSelectedNotes(), true, mode);
+    const expected = structuredClone(before);
+    for (const id of ['a', 'b']) {
+      const n = state.notes.find((x) => x.id === id);
+      const original = before.notes.find((x) => x.id === id);
+      assert.notDeepStrictEqual({ x: n.x, y: n.y }, { x: original.x, y: original.y }, mode);
+      Object.assign(expected.notes.find((x) => x.id === id), { x: n.x, y: n.y });
+      assert.strictEqual(BoardLayout.overlapsAny(n.x, n.y, n.w, n.h, [{ x: 20, y: 20, w: 220, h: 180 }]), false, mode);
+    }
+    assert.deepStrictEqual(state, expected, mode);
+  }
+  global.$ = () => null;
+});
+
+test('V128-06 selected oversized notes keep size and go below fixed obstacles and normal targets', () => {
+  global.$ = (s) => s === '#canvas' ? { clientWidth: 400 } : null;
+  state.notes = [v128SelectedNote('big', { w: 520 }), v128SelectedNote('normal'), v128SelectedNote('fixed', { positionAll: { x: 20, y: 20 } })];
+  global.selectedNotes = new Set(['big', 'normal']);
+  const fixed = structuredClone(state.notes[2]);
+  assert.strictEqual(A.arrangeSelectedNotes(), true);
+  const [big, normal] = state.notes;
+  assert.strictEqual(big.w, 520);
+  assert.ok(normal.positionAll.y >= fixed.positionAll.y + fixed.h + LAYOUT.gap);
+  assert.ok(big.positionAll.y >= normal.positionAll.y + normal.h + LAYOUT.gap);
+  assert.deepStrictEqual(state.notes[2], fixed);
+  global.$ = () => null;
+});
+
+test('V128-06 one selected arrange is one reversible history step; unchanged re-arrange keeps redo', () => {
+  state.notes = [v128SelectedNote('a'), v128SelectedNote('b')];
+  global.selectedNotes = new Set(['a', 'b']);
+  UndoHistory.setApplier((snap) => {
+    state.notes = snap.notes; state.trash = snap.trash; state.groups = snap.groups;
+    Object.assign(state.settings, snap.orders);
+  });
+  const before = UndoHistory.snapshotState(state);
+  assert.strictEqual(A.arrangeSelectedNotes(), true);
+  const after = UndoHistory.snapshotState(state);
+  assert.strictEqual(UndoHistory.stacks().undoStack.length, 1);
+  UndoHistory.undo(state);
+  assert.deepStrictEqual(UndoHistory.snapshotState(state), before);
+  UndoHistory.redo(state);
+  assert.deepStrictEqual(UndoHistory.snapshotState(state), after);
+  UndoHistory.stacks().redoStack.push(before);
+  const historySize = UndoHistory.stacks().undoStack.length;
+  assert.strictEqual(A.arrangeSelectedNotes(), true);
+  assert.strictEqual(UndoHistory.stacks().undoStack.length, historySize);
+  assert.strictEqual(UndoHistory.stacks().redoStack.length, 1);
 });

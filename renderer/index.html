@@ -33,7 +33,7 @@
         </div>
         <button class="icon-btn" id="btnUndo" data-i18n-title="undo" title="撤销 (Ctrl+Z)" data-i18n-aria-label="undo" aria-label="撤销" disabled>↩</button>
         <button class="icon-btn" id="btnRedo" data-i18n-title="redo" title="重做 (Ctrl+Shift+Z)" data-i18n-aria-label="redo" aria-label="重做" disabled>↪</button>
-        <button class="icon-btn" id="btnSettings" data-i18n-title="global_settings" title="全局设置" data-i18n-aria-label="global_settings" aria-label="全局设置">⚙</button>
+        <button class="icon-btn" id="btnSettings" aria-controls="settingsPanel" aria-expanded="false" data-i18n-title="global_settings" title="全局设置" data-i18n-aria-label="global_settings" aria-label="全局设置">⚙</button>
         <span class="tb-divider"></span>
         <button class="icon-btn win-btn" id="btnPin" data-i18n-title="always_on_top" title="窗口置顶" data-i18n-aria-label="always_on_top" aria-label="窗口置顶">📌</button>
       </div>
@@ -76,6 +76,7 @@
       <span id="batchCount" class="batch-count"></span>
       <button class="batch-btn" id="btnBatchSelectAll" data-i18n="batch_select_all">全选</button>
       <button class="batch-btn" id="btnBatchClear" data-i18n="batch_clear_sel">取消选择</button>
+      <button type="button" class="batch-btn" id="btnBatchArrange" data-i18n="batch_arrange" data-i18n-title="batch_arrange_hint" title="按当前排序整理选中便签，其他便签保持原位" disabled>⚡ 整理选中</button>
       <button class="batch-btn" id="btnBatchMove" data-i18n="batch_move">🏷 移动到分组</button>
       <button class="batch-btn danger" id="btnBatchDelete" data-i18n="batch_delete">🗑 批量删除</button>
       <button class="batch-btn" id="btnBatchExit" data-i18n="batch_exit">✕ 退出批量</button>
@@ -278,7 +279,13 @@
                 <span data-i18n="desktop_mica">桌面便签玻璃拟态</span>
                 <input type="checkbox" id="desktopMicaToggle" />
               </label>
-              <p class="sp-hint" data-i18n="desktop_mica_hint">钉在桌面的便签使用与应用内一致的半透明磨砂玻璃效果。</p>
+              <p class="sp-hint" data-i18n="desktop_mica_hint">钉在桌面的便签使用半透明磨砂玻璃与系统圆角（圆角设为 0 时保持直角）；应用内卡片仍支持自定义圆角。</p>
+
+              <label class="field">
+                <span data-i18n="desktop_snap">桌面便签贴边吸附</span>
+                <input type="checkbox" id="desktopSnapToggle" />
+              </label>
+              <p class="sp-hint" data-i18n="desktop_snap_hint">拖近屏幕边缘显示落点轮廓，松手贴边，Esc 取消。关闭后保持自由拖动。</p>
 
               <h4 data-i18n="note_toolbar">便签工具栏</h4>
               <label class="field">
@@ -428,6 +435,7 @@
               <button class="sp-btn ghost" id="btnImport" data-i18n="import">导入备份…</button>
               <button class="sp-btn ghost" id="btnCleanupMedia" data-i18n="cleanup_media">🧹 清理未引用媒体</button>
             </div>
+            <p class="sp-hint" data-i18n="backup_restore_hint">恢复请使用 JSON 备份，TXT 仅供阅读。导入会替换当前便签、分组、回收站与设置，请先导出当前数据。</p>
           </section>
 
           <!-- 回收站 -->
@@ -482,7 +490,7 @@
             <div class="about-card">
               <div class="about-logo">▣</div>
               <div class="about-name" data-i18n="app_name">便签</div>
-              <div class="about-ver">v<span id="aboutVersion">1.2.6</span></div>
+              <div class="about-ver">v<span id="aboutVersion">1.2.8</span></div>
               <div class="about-desc" data-i18n="about_desc">美观可定制的 Windows 桌面便签。</div>
             </div>
             <h4 data-i18n="about_info">软件信息</h4>
@@ -561,7 +569,7 @@
     <div id="changelogModal">
       <header>
         <span data-i18n="changelog_title">更新说明</span>
-        <span class="cl-ver" id="clVersion">v1.2.6</span>
+        <span class="cl-ver" id="clVersion">v1.2.8</span>
       </header>
       <div class="cl-body">
         <ul id="changelogList"></ul>

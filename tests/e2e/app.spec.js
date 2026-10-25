@@ -31,7 +31,13 @@ async function openApp(opts) {
     cwd: ROOT,
     env: { ...process.env, MYNOTES_USER_DATA: userDataDir }
   });
-  const win = await electronApp.firstWindow();
+  // Restored desktop notes may finish opening before the main window. Select
+  // the main page by URL instead of relying on BrowserWindow creation order.
+  let win;
+  await expect.poll(async () => {
+    win = electronApp.windows().find(page => /\/renderer\/index\.html(?:[?#]|$)/.test(page.url()));
+    return !!win;
+  }).toBe(true);
   await win.waitForLoadState('domcontentloaded');
   // 消除冷启动动画/过渡引起的「element is not stable」竞态：测试窗口内关闭全部动画与过渡，
   // 使元素边界瞬时稳定（Playwright 稳定检查要求 2 帧不变）。仅影响测试，不影响应用逻辑。
@@ -5681,7 +5687,7 @@ function settingsFocusState(win) {
   });
 }
 
-test('UX-14 设置抽屉：dialog 语义、打开聚焦、背景 inert、三种关闭方式均恢复打开者焦点', async () => {
+test('UX-14 设置抽屉：dialog 语义、打开聚焦、背景 inert、四种关闭方式均恢复打开者焦点', async () => {
   const ctx = await openApp();
   const win = ctx.win;
   const overlay = win.locator('#settingsOverlay');
@@ -5699,15 +5705,26 @@ test('UX-14 设置抽屉：dialog 语义、打开聚焦、背景 inert、三种�
     await expect(panel).toHaveAttribute('aria-modal', 'true');
     await expect(panel).toHaveAccessibleName(/全局设置/);
 
-    // 打开即聚焦面板内，主界面 #app 变 inert（背景不可聚焦）
+    // 打开即聚焦面板内，设置入口之外的背景分支 inert（背景不可聚焦）
     expect((await settingsFocusState(win)).inside).toBe(true);
-    expect(await win.locator('#app').evaluate((el) => el.inert)).toBe(true);
+    expect(await win.locator('#searchInput').evaluate((el) => !!el.closest('[inert]'))).toBe(true);
 
     // Escape 关闭 → 恢复 #app 可交互并归还焦点给打开者
     await win.keyboard.press('Escape');
     await expect(overlay).toBeHidden();
     expect(await win.locator('#app').evaluate((el) => el.inert)).toBe(false);
     expect(await win.evaluate(() => document.activeElement && document.activeElement.id)).toBe('btnSettings');
+
+    // The same real toolbar button remains clickable while the background is inert.
+    await win.locator('#btnSettings').click();
+    await expect(overlay).toBeVisible();
+    await expect(win.locator('#btnSettings')).toHaveAttribute('aria-expanded', 'true');
+    expect(await win.locator('#btnAdd').evaluate(el => !!el.closest('[inert]'))).toBe(true);
+    expect(await win.locator('#btnSettings').evaluate(el => !!el.closest('[inert]'))).toBe(false);
+    await win.locator('#btnSettings').click();
+    await expect(overlay).toBeHidden();
+    await expect(win.locator('#btnSettings')).toHaveAttribute('aria-expanded', 'false');
+    expect(await win.evaluate(() => document.activeElement.id)).toBe('btnSettings');
 
     // 关闭按钮
     await win.locator('#btnSettings').click();
@@ -5836,7 +5853,7 @@ test('UX-14 设置抽屉：关于页更新说明嵌套打开/关闭，焦点归�
   }
 });
 
-test('UX-14 设置抽屉：640/1080 宽度与亮/暗主题下 Escape/Tab 行为不变', async () => {
+test('UX-14 设置抽屉：640/1080 宽度与亮/暗主题下顶栏开关/Tab 行为不变', async () => {
   const ctx = await openApp();
   const win = ctx.win;
   const overlay = win.locator('#settingsOverlay');
@@ -5849,13 +5866,13 @@ test('UX-14 设置抽屉：640/1080 宽度与亮/暗主题下 Escape/Tab 行为�
       await expect(overlay).toBeVisible();
 
       expect((await settingsFocusState(win)).inside).toBe(true);
-      expect(await win.locator('#app').evaluate((el) => el.inert)).toBe(true);
+      expect(await win.locator('#searchInput').evaluate((el) => !!el.closest('[inert]'))).toBe(true);
       await win.keyboard.press('Tab');
       const s = await settingsFocusState(win);
       expect(s.inside).toBe(true);
       expect(s.inApp).toBe(false);
 
-      await win.keyboard.press('Escape');
+      await win.locator('#btnSettings').click();
       await expect(overlay).toBeHidden();
       expect(await win.locator('#app').evaluate((el) => el.inert)).toBe(false);
       expect(await win.evaluate(() => document.activeElement && document.activeElement.id)).toBe('btnSettings');
@@ -6128,4 +6145,2004 @@ test('UX-15 键盘：共享便签工具栏按钮聚焦仍有可见焦点指示',
   } finally {
     await closeApp(ctx);
   }
+});
+
+// —— V128-11：拖动抬升（active drag 遮挡修复）——
+// 真实鼠标路径：卡片 head 的 pointerdown（含 setPointerCapture + preventDefault，抑制兼容 mousedown）→ move → up。
+// 用真实鼠标坐标驱动真实拖拽入口（不 force、不直接调 startDrag、不用 pointer-events:none 捷径）。
+
+function v128Note(id, x, y, z, pinned) {
+  const now = Date.now();
+  return {
+    id, title: id.toUpperCase(), content: "c" + id, type: "note", items: [], images: [], files: [], tables: [],
+    color: "#ffef9c", textColor: null, groupId: null, archived: false, pinned: !!pinned, desktopPin: false, reminder: null,
+    x, y, positionAll: { x, y }, w: 240, h: 200, z, createdAt: now, updatedAt: now
+  };
+}
+
+// 真实可拖拽起点：head 空白左侧（x+8, y+12），避开 .note-tools 按钮与 input。
+async function v128GrabPoint(win, id) {
+  return win.evaluate((nid) => {
+    const el = document.querySelector(".note[data-id=\"" + nid + "\"]");
+    const head = el.querySelector(".note-head");
+    const r = head.getBoundingClientRect();
+    return { x: r.left + 8, y: r.top + 12 };
+  }, id);
+}
+
+// 诊断命中：临时恢复 board/.note 的 pointer-events（含优先级）后用 elementsFromPoint 判定最上层 .note。
+async function v128TopNoteAt(win, x, y) {
+  return win.evaluate(({ x, y }) => {
+    const board = document.getElementById("board");
+    const bPrev = board.getAttribute("style");
+    const saved = [];
+    document.querySelectorAll(".note").forEach((n) => { saved.push([n, n.getAttribute("style")]); n.style.setProperty("pointer-events", "auto", "important"); });
+    board.style.setProperty("pointer-events", "auto", "important");
+    const els = document.elementsFromPoint(x, y);
+    if (bPrev === null) board.removeAttribute("style"); else board.setAttribute("style", bPrev);
+    saved.forEach(([n, st]) => { if (st === null) n.removeAttribute("style"); else n.setAttribute("style", st); });
+    const hit = els.find((e) => e.classList && e.classList.contains("note"));
+    return hit ? hit.dataset.id : null;
+  }, { x, y });
+}
+
+// 诊断：某点「第一个」命中元素是否属于工具栏；并返回最上层元素信息。
+async function v128TopElAt(win, x, y) {
+  return win.evaluate(({ x, y }) => {
+    const els = document.elementsFromPoint(x, y);
+    const first = els[0];
+    return {
+      firstTag: first ? first.tagName : null,
+      firstInToolbar: !!(first && first.closest && first.closest("#canvasToolbar")),
+      stack: els.slice(0, 5).map((e) => (e.id ? "#" + e.id : (e.className || e.tagName)))
+    };
+  }, { x, y });
+}
+
+// 卡片矩形是否包含某点（用于证明拖动后的卡确实盖住工具栏中心）。
+async function v128RectContains(win, id, x, y) {
+  return win.evaluate(({ id, x, y }) => {
+    const r = document.querySelector(".note[data-id=\"" + id + "\"]").getBoundingClientRect();
+    return x >= r.left && x <= r.right && y >= r.top && y <= r.bottom;
+  }, { id, x, y });
+}
+
+test("V128-11 单卡拖动：低层便签拖到高层（pinned）便签之上时抬升，松手后精确还原（含 !important 优先级）", async ({}, testInfo) => {
+  // a 低 z（内联 1 !important）在上、b 高 z（5000）在下；起点互不遮挡，a 的 head 左侧可真实按下
+  const seed = { version: 2, settings: { viewMode: "board", lastSeenVersion: EXPECTED_VERSION }, groups: [], trash: [],
+    notes: [v128Note("a", 120, 120, 1, false), v128Note("b", 120, 380, 5000, true)] };
+  const ctx = await openApp({ seed });
+  const win = ctx.win;
+  try {
+    await expect(win.locator("#board .note")).toHaveCount(2);
+    // 关键边界：为 a 的 inline z-index 预先设置 !important，拖动抬升期间不得丢失优先级，松手后须原样还原
+    await win.evaluate(() => { document.querySelector(".note[data-id=\"a\"]").style.setProperty("z-index", "1", "important"); });
+    const beforeA = await win.evaluate(() => { const el = document.querySelector(".note[data-id=\"a\"]"); return { inlineZ: el.style.getPropertyValue("z-index"), priority: el.style.getPropertyPriority("z-index"), z: state.notes.find((n) => n.id === "a").z }; });
+    expect(beforeA.inlineZ).toBe("1");
+    expect(beforeA.priority).toBe("important");
+    const grabA = await v128GrabPoint(win, "a");
+    const grabB = await v128GrabPoint(win, "b");
+    expect(await v128TopNoteAt(win, grabB.x, grabB.y)).toBe("b");
+    expect(await v128TopNoteAt(win, grabA.x, grabA.y)).toBe("a");
+
+    // 真实拖拽：按下 a 的 head 空白 → 移动到 b 的 head 位置
+    await win.mouse.move(grabA.x, grabA.y);
+    await win.mouse.down();
+    await expect.poll(() => win.evaluate(() => document.body.classList.contains("note-dragging"))).toBe(true);
+    await win.mouse.move(grabB.x, grabB.y, { steps: 5 });
+    // 位移到位（按实际 transform 轮询，而非等 3 秒）
+    await expect.poll(() => win.evaluate(() => { const el = document.querySelector(".note[data-id=\"a\"]"); const m = /translate3d\(([-\d.]+)px,\s*([-\d.]+)px/.exec(el.style.transform || ""); return m ? Number(m[2]) : 0; })).toBeGreaterThan(100);
+    await expect.poll(() => win.evaluate(() => { const el = document.querySelector(".note[data-id=\"a\"]"); return el.classList.contains("dragging") && el.classList.contains("drag-raised"); })).toBe(true);
+    // a 的 head 现在位于原 b 处：抬升后最上层应为 a（低于 b z 也赢）
+    expect(await v128TopNoteAt(win, grabB.x, grabB.y)).toBe("a");
+    // 抓一张「整卡与 b 重叠」的截图（testInfo.outputPath：可移植，落在测试输出目录）
+    await win.screenshot({ path: testInfo.outputPath("v128-11-overlap.png") });
+
+    // 把 a 真实拖到工具栏中心，使其矩形覆盖该点；断言该点第一命中仍属于工具栏（#board isolation 生效）
+    const tb = await win.evaluate(() => { const t = document.getElementById("canvasToolbar"); const r = t.getBoundingClientRect(); return { x: r.left + r.width / 2, y: r.top + r.height / 2, visible: !t.classList.contains("hidden") }; });
+    expect(tb.visible).toBe(true);
+    await win.mouse.move(tb.x, tb.y, { steps: 6 });
+    await expect.poll(() => v128RectContains(win, "a", tb.x, tb.y)).toBe(true);
+    const overlay = await v128TopElAt(win, tb.x, tb.y);
+    expect(overlay.firstInToolbar).toBe(true);
+
+    // 拖动中再抓一张隔离截图（合成便签，无私有数据），落在测试输出目录供目视
+    await win.screenshot({ path: testInfo.outputPath("v128-11-drag.png") });
+
+    await win.mouse.up();
+    // 精确还原：inline z 值 + 优先级原样、类/transform 清理、body 类移除
+    const afterA = await win.evaluate(() => { const el = document.querySelector(".note[data-id=\"a\"]"); return { inlineZ: el.style.getPropertyValue("z-index"), priority: el.style.getPropertyPriority("z-index"), z: state.notes.find((n) => n.id === "a").z, dragging: el.classList.contains("dragging"), raised: el.classList.contains("drag-raised"), transform: el.style.transform, bodyDragging: document.body.classList.contains("note-dragging") }; });
+    expect(afterA.inlineZ).toBe(beforeA.inlineZ);
+    expect(afterA.priority).toBe("important");
+    expect(afterA.z).toBe(beforeA.z);
+    expect(afterA.dragging).toBe(false);
+    expect(afterA.raised).toBe(false);
+    expect(afterA.transform).toBe("");
+    expect(afterA.bodyDragging).toBe(false);
+    expect(await win.evaluate(() => document.querySelector(".note[data-id=\"b\"]").style.zIndex)).toBe("5000");
+
+    // 落盘：真实 saveNow 必须返回 true；读盘（计时路径外）按「实际最终位置」断言
+    const savedOk = await win.evaluate(async () => await saveNow());
+    expect(savedOk).toBe(true);
+    const finalPos = await win.evaluate(() => { const n = state.notes.find((x) => x.id === "a"); return { x: n.positionAll.x, y: n.positionAll.y }; });
+    const disk = JSON.parse(await fs.readFile(path.join(ctx.userDataDir, "notes-data.json"), "utf8"));
+    const da = disk.notes.find((n) => n.id === "a");
+    const db = disk.notes.find((n) => n.id === "b");
+    expect(da.positionAll.x).toBe(finalPos.x);
+    expect(da.positionAll.y).toBe(finalPos.y);
+    expect(da.z).toBe(beforeA.z);
+    expect(db.positionAll.x).toBe(120);
+    expect(db.positionAll.y).toBe(380);
+    expect(db.z).toBe(5000);
+
+    // 一次撤销：恢复 a 的原位置与持久 z，且无抬升残留
+    await win.evaluate(() => undo());
+    const undone = await win.evaluate(() => { const n = state.notes.find((x) => x.id === "a"); const el = document.querySelector(".note[data-id=\"a\"]"); return { x: n.positionAll.x, y: n.positionAll.y, z: n.z, raised: el.classList.contains("drag-raised"), dragging: el.classList.contains("dragging") }; });
+    expect(undone.x).toBe(120);
+    expect(undone.y).toBe(120);
+    expect(undone.z).toBe(beforeA.z);
+    expect(undone.raised).toBe(false);
+    expect(undone.dragging).toBe(false);
+  } finally { await closeApp(ctx); }
+});
+
+test("V128-11 批量拖动：先选高 z 后选低 z（DOM 顺序与 z 相反）时按有效 z 保持相对层序，取消后清理", async () => {
+  // DOM 顺序：[high(选中 z=9000), low(选中 z=1000), other(未选 z=12000)]
+  // 若实现只用 DOM 顺序排序，会错误地把 high 排在 low 之下；正确实现应按有效 z 升序 → low 在下、high 在上。
+  const seed = { version: 2, settings: { viewMode: "board", lastSeenVersion: EXPECTED_VERSION }, groups: [], trash: [],
+    notes: [v128Note("high", 100, 100, 9000, false), v128Note("low", 100, 340, 1000, false), v128Note("other", 380, 100, 12000, false)] };
+  const ctx = await openApp({ seed });
+  const win = ctx.win;
+  try {
+    await expect(win.locator("#board .note")).toHaveCount(3);
+    const domOrder = await win.evaluate(() => Array.from(document.querySelectorAll("#board .note")).map((n) => n.dataset.id));
+    expect(domOrder).toEqual(["high", "low", "other"]);
+    await stableClick(win.locator("#btnBatchToggle"));
+    await win.evaluate(() => { toggleSelectNote("high"); toggleSelectNote("low"); });
+    await expect(win.locator(".note[data-id=\"high\"]")).toHaveClass(/selected/);
+    await expect(win.locator(".note[data-id=\"low\"]")).toHaveClass(/selected/);
+    const zBefore = await win.evaluate(() => ({
+      high: document.querySelector(".note[data-id=\"high\"]").style.zIndex,
+      low: document.querySelector(".note[data-id=\"low\"]").style.zIndex,
+      other: document.querySelector(".note[data-id=\"other\"]").style.zIndex
+    }));
+
+    const grab = await v128GrabPoint(win, "high");
+    // 在按下前安装捕获阶段监听，记录真实 pointerId（供稍后 pointercancel 使用，不硬编码）
+    await win.evaluate(() => {
+      window.__v128pid = null;
+      const el = document.querySelector(".note[data-id=\"high\"]");
+      const head = el.querySelector(".note-head");
+      head.addEventListener("pointerdown", (e) => { window.__v128pid = e.pointerId; }, { capture: true, once: true });
+    });
+    await win.mouse.move(grab.x, grab.y);
+    await win.mouse.down();
+    await expect.poll(() => win.evaluate(() => document.body.classList.contains("note-dragging"))).toBe(true);
+    await win.mouse.move(grab.x + 12, grab.y + 12, { steps: 3 });
+    await expect.poll(() => win.evaluate(() => document.querySelector(".note[data-id=\"high\"]").classList.contains("drag-raised") && document.querySelector(".note[data-id=\"low\"]").classList.contains("drag-raised"))).toBe(true);
+    const raisedOther = await win.evaluate(() => document.querySelector(".note[data-id=\"other\"]").classList.contains("drag-raised"));
+    expect(raisedOther).toBe(false);
+    const zRaised = await win.evaluate(() => ({
+      high: parseInt(document.querySelector(".note[data-id=\"high\"]").style.zIndex, 10),
+      low: parseInt(document.querySelector(".note[data-id=\"low\"]").style.zIndex, 10),
+      other: parseInt(document.querySelector(".note[data-id=\"other\"]").style.zIndex, 10)
+    }));
+    expect(zRaised.high).toBeGreaterThan(zRaised.other);
+    expect(zRaised.low).toBeGreaterThan(zRaised.other);
+    expect(zRaised.high).toBeGreaterThan(zRaised.low);
+
+    // 真实捕获的 pointerId 派发 pointercancel 触发清理（不硬编码 pointerId）
+    const pid = await win.evaluate(() => window.__v128pid);
+    expect(pid === null).toBe(false);
+    await win.evaluate((capturedId) => {
+      const el = document.querySelector(".note[data-id=\"high\"]");
+      const head = el.querySelector(".note-head");
+      head.dispatchEvent(new PointerEvent("pointercancel", { bubbles: true, cancelable: true, pointerId: capturedId, pointerType: "mouse", isPrimary: true }));
+    }, pid);
+    const after = await win.evaluate(() => ({
+      high: document.querySelector(".note[data-id=\"high\"]").style.zIndex,
+      low: document.querySelector(".note[data-id=\"low\"]").style.zIndex,
+      other: document.querySelector(".note[data-id=\"other\"]").style.zIndex,
+      raisedAny: !!document.querySelector(".note.drag-raised"),
+      draggingAny: !!document.querySelector(".note.dragging"),
+      bodyDragging: document.body.classList.contains("note-dragging")
+    }));
+    expect(after.high).toBe(zBefore.high);
+    expect(after.low).toBe(zBefore.low);
+    expect(after.other).toBe(zBefore.other);
+    expect(after.raisedAny).toBe(false);
+    expect(after.draggingAny).toBe(false);
+    expect(after.bodyDragging).toBe(false);
+    await win.mouse.up().catch(() => {});
+
+    // 无位移按/松：不产生拖拽残留（真实 pointerdown→up，不动）
+    const grab2 = await v128GrabPoint(win, "low");
+    await win.mouse.move(grab2.x, grab2.y);
+    await win.mouse.down();
+    await win.mouse.up();
+    const noMotion = await win.evaluate(() => ({ raisedAny: !!document.querySelector(".note.drag-raised"), draggingAny: !!document.querySelector(".note.dragging"), bodyDragging: document.body.classList.contains("note-dragging"), low: document.querySelector(".note[data-id=\"low\"]").style.zIndex }));
+    expect(noMotion.raisedAny).toBe(false);
+    expect(noMotion.draggingAny).toBe(false);
+    expect(noMotion.bodyDragging).toBe(false);
+    expect(noMotion.low).toBe(zBefore.low);
+  } finally { await closeApp(ctx); }
+});
+
+// V128-01B: memo search summaries are display-only and preserve existing filtering.
+function v128MemoSeed(notes) {
+  return { version: 2, settings: { viewMode: 'memo', lastSeenVersion: EXPECTED_VERSION, sortMode: 'custom', noteOrder: notes.map(n => n.id) }, groups: [{ id: 'g1', name: 'Project', color: '#12bba9' }], trash: [], notes };
+}
+
+test('V128-01B inputs and plain body locate without persisting search markup', async ({}, testInfo) => {
+  const notes = [
+    { ...v128Note('title-hit', 0, 0, 1), title: 'A target title', content: 'ordinary body' },
+    { ...v128Note('body-hit', 0, 0, 2), title: 'Body note', content: 'first line\nliteral <tag> & target after newline' },
+    { ...v128Note('task-hit', 0, 0, 3), title: 'Tasks', type: 'todo', items: [{ id: 'first', text: 'no match', done: false }, { id: 'second', text: 'a target task', done: false }] },
+    { ...v128Note('preview-hit', 0, 0, 4), title: 'Reading', content: 'preview target', preview: true }
+  ];
+  const ctx = await openApp({ seed: v128MemoSeed(notes) });
+  const win = ctx.win;
+  const row = id => win.locator('#memoList .memo-row[data-id="' + id + '"]');
+  try {
+    await expect(win.locator('.memo-search')).toHaveCount(0);
+    const original = await win.evaluate(() => state.notes.map(n => ({ id: n.id, title: n.title, content: n.content, items: n.items, preview: n.preview, x: n.x, y: n.y, positionAll: n.positionAll, z: n.z })));
+    await win.locator('#searchInput').fill('target');
+    await expect(win.locator('#memoList .memo-search')).toHaveCount(4);
+    await expect(win.locator('#searchInput')).toBeFocused();
+    // Editing refreshes only the summary; input node/focus and fresh targeting survive.
+    const editedTitle = row('title-hit').locator('.note-title');
+    await editedTitle.fill('Revised target title');
+    await expect(editedTitle).toBeFocused();
+    await expect(row('title-hit').locator('.memo-search-snippet')).toHaveText('Revised target title');
+    await row('title-hit').locator('.memo-search-locate').click();
+    expect(await editedTitle.evaluate(el => el.selectionStart)).toBe(8);
+    await editedTitle.fill(notes[0].title);
+    await row('title-hit').locator('.memo-search-locate').focus();
+    await win.keyboard.press('Enter');
+    const title = row('title-hit').locator('.note-title');
+    await expect(title).toBeFocused();
+    expect(await title.evaluate(el => el.value.slice(el.selectionStart, el.selectionEnd))).toBe('target');
+    await row('body-hit').locator('.memo-search-locate').click();
+    expect(await win.evaluate(() => window.getSelection().toString())).toBe('target');
+    await expect(row('body-hit').locator('.note-content')).toBeFocused();
+    await row('task-hit').locator('.memo-search-locate').click();
+    const task = row('task-hit').locator('.todo-text').nth(1);
+    await expect(task).toBeFocused();
+    expect(await task.evaluate(el => el.value.slice(el.selectionStart, el.selectionEnd))).toBe('target');
+    await row('preview-hit').locator('.memo-search-locate').click();
+    expect(await win.evaluate(() => window.getSelection().toString())).toBe('target');
+    await expect(row('preview-hit').locator('.note-content')).toHaveAttribute('contenteditable', 'false');
+    await win.locator('#searchInput').fill('<tag> &');
+    await expect(win.locator('#memoList .memo-row')).toHaveCount(1);
+    await expect(row('body-hit').locator('.memo-search mark')).toHaveText('<tag> &');
+    expect(await row('body-hit').locator('.memo-search tag').count()).toBe(0);
+    await row('body-hit').locator('.memo-search-locate').click();
+    expect(await win.evaluate(() => window.getSelection().toString())).toBe('<tag> &');
+    await win.locator('#searchClear').click();
+    expect(await win.evaluate(() => window.getSelection().toString())).toBe('');
+    await expect(win.locator('.memo-search')).toHaveCount(0);
+    await expect(win.locator('#memoList .memo-row')).toHaveCount(4);
+    expect(await win.evaluate(() => state.notes.map(n => ({ id: n.id, title: n.title, content: n.content, items: n.items, preview: n.preview, x: n.x, y: n.y, positionAll: n.positionAll, z: n.z })))).toEqual(original);
+    expect(await win.evaluate(() => saveNow())).toBe(true);
+    const disk = JSON.parse(await fs.readFile(path.join(ctx.userDataDir, 'notes-data.json'), 'utf8'));
+    expect(disk.notes.find(n => n.id === 'body-hit').content).toBe(notes[1].content);
+    // Visual evidence: ordinary summary, card material, wide/light then narrow/dark/glass.
+    await win.locator('#searchInput').fill('target');
+    await win.screenshot({ path: testInfo.outputPath('memo-search-light.png') });
+    await win.setViewportSize({ width: 640, height: 780 });
+    await win.evaluate(() => {
+      state.settings.appearanceMode = 'dark'; state.settings.glass = true; state.settings.noteOpacity = 85;
+      state.settings.backgroundImage = 'data:image/svg+xml,' + encodeURIComponent('<svg xmlns="http://www.w3.org/2000/svg" width="640" height="780"><defs><linearGradient id="g"><stop stop-color="#1a3245"/><stop offset="1" stop-color="#506144"/></linearGradient></defs><rect width="640" height="780" fill="url(#g)"/></svg>');
+      state.notes.forEach(n => { n.color = '#294441'; }); applyTheme(); renderAll();
+    });
+    await expect(win.locator('.memo-search')).toHaveCount(4);
+    expect(await row('body-hit').evaluate(el => el.scrollWidth <= el.clientWidth)).toBe(true);
+    await win.screenshot({ path: testInfo.outputPath('memo-search-dark-narrow.png') });
+  } finally { await closeApp(ctx); }
+});
+
+test('V128-01B unsupported content remains visible; cross-field phrases excluded; group/batch actions preserve scope', async () => {
+  const notes = [
+    { ...v128Note('rich', 0, 0, 1), title: 'Rich', content: '**target**', groupId: 'g1' },
+    { ...v128Note('table', 0, 0, 2), title: 'Table', content: '[[table:t1]]', tables: [{ id: 't1', rows: 1, cols: 1, cells: [['target']], merges: [], diagonals: [] }], groupId: 'g1' },
+    { ...v128Note('cross', 0, 0, 3), title: 'target', content: 'bridge', groupId: 'g1' },
+    { ...v128Note('archived', 0, 0, 4), title: 'target archived', content: 'keep', groupId: 'g1', archived: true }
+  ];
+  const ctx = await openApp({ seed: v128MemoSeed(notes) });
+  const win = ctx.win;
+  const ids = () => win.evaluate(() => Array.from(document.querySelectorAll('#memoList .memo-row')).map(el => el.dataset.id));
+  try {
+    await win.locator('#searchInput').fill('target');
+    expect(await ids()).toEqual(['rich', 'table', 'cross']);
+    for (const id of ['rich', 'table']) {
+      const row = win.locator('.memo-row[data-id="' + id + '"]');
+      await expect(row.locator('.memo-search-locate')).toHaveText(id === 'table' ? '查看表格' : '查看便签');
+      await expect(row.locator('.memo-search-snippet')).not.toContainText('[[table:');
+      await expect(row.locator('.memo-search mark')).toHaveText('target');
+      await row.locator('.memo-search-locate').click();
+      await expect(id === 'table' ? row.locator('.note-table-block') : row).toBeFocused();
+    }
+    await win.locator('#searchInput').fill('target bridge');
+    expect(await ids()).toEqual([]);
+    await expect(win.locator('.memo-search-locate')).toHaveCount(0);
+    await win.locator('#searchInput').fill('Project');
+    expect(await ids()).toEqual(['rich', 'table', 'cross']);
+    await win.locator('#btnBatchToggle').click();
+    const groupButton = win.locator('.memo-row[data-id="rich"] .memo-search-locate');
+    await expect(groupButton).toHaveText('查看分组');
+    await groupButton.click();
+    expect(await win.evaluate(() => Array.from(selectedNotes))).toEqual([]);
+    await expect(win.locator('.memo-row[data-id="rich"] .group-tag')).toBeFocused();
+    expect(await win.evaluate(() => filter.group)).toBe('all');
+    await win.locator('#btnBatchToggle').click();
+    await win.locator('#btnArchiveFilter').click();
+    expect(await ids()).toEqual(['archived']);
+    await win.locator('#searchClear').click();
+    await expect(win.locator('.memo-search')).toHaveCount(0);
+    expect(await ids()).toEqual(['archived']);
+  } finally { await closeApp(ctx); }
+});
+
+test('V128-01C rendered rich, table and attachment summaries use visible text only', async ({}, testInfo) => {
+  const seed = v128MemoSeed([
+    { ...v128Note('rich-visible', 0, 0, 1), title: 'Formatting', content: '[[align:center]]**target** ==bright== [[c:#007755]]colored[[/c]] https://example.invalid/target[[/align]]', preview: true },
+    { ...v128Note('table-visible', 0, 0, 2), title: 'Table', content: '[[table:t1]]', tables: [{ id: 't1', rows: 1, cols: 2, cells: [['hiddenword', '**target** <cell> &']], merges: [], diagonals: [{ r: 0, c: 0, dir: 'tlbr', t1: '**alpha**', t2: '==beta==' }] }] },
+    { ...v128Note('file-visible', 0, 0, 3), title: 'Attachment', content: '[[file:f1]]', files: [{ id: 'f1', path: 'C:/private-folder/target-report.md', isDir: false }], groupId: 'g2' },
+    { ...v128Note('neighbors', 0, 0, 4), title: 'Separate cells', content: '[[table:t2]]', tables: [{ id: 't2', rows: 1, cols: 2, cells: [['left', 'right']], merges: [], diagonals: [] }] }
+  ]);
+  seed.groups.push({ id: 'g2', name: 'target-report', color: '#aa66cc' });
+  const ctx = await openApp({ seed });
+  const win = ctx.win;
+  const row = id => win.locator('.memo-row[data-id="' + id + '"]');
+  try {
+    const original = await win.evaluate(() => state.notes.map(n => ({ id: n.id, content: n.content, tables: n.tables, files: n.files, preview: n.preview, positionAll: n.positionAll })));
+    await win.locator('#searchInput').fill('target');
+    await expect(row('rich-visible').locator('.memo-search-source')).toHaveText('正文');
+    await expect(row('rich-visible').locator('.memo-search-snippet')).not.toContainText('[[align');
+    await expect(row('rich-visible').locator('.memo-search-snippet')).not.toContainText('**');
+    await expect(row('rich-visible').locator('.memo-search-snippet')).not.toContainText('[[c:');
+    await expect(row('rich-visible').locator('.memo-search mark')).toHaveText('target');
+    await expect(row('rich-visible').locator('.memo-search-locate')).toHaveText('查看便签');
+    await row('rich-visible').locator('.memo-search-locate').click();
+    await expect(row('rich-visible')).toBeFocused();
+    await expect(row('rich-visible').locator('.note-content')).toHaveAttribute('contenteditable', 'false');
+    await expect(row('table-visible').locator('.memo-search-source')).toHaveText('表格');
+    await expect(row('table-visible').locator('.memo-search-snippet')).toHaveText('target <cell> &');
+    await row('table-visible').locator('.memo-search-locate').click();
+    await expect(row('table-visible').locator('.note-table-block')).toBeFocused();
+    await expect(row('table-visible').locator('.note-table-block')).toHaveAttribute('tabindex', '0');
+    await win.screenshot({ path: testInfo.outputPath('rich-table-summary.png') });
+    for (const query of ['colored', 'bright', 'https://example.invalid/target']) {
+      await win.locator('#searchInput').fill(query);
+      await expect(row('rich-visible').locator('.memo-search mark')).toHaveText(query);
+    }
+    // Each diagonal half is independent and remains visible text.
+    await win.locator('#searchInput').fill('alpha');
+    await expect(row('table-visible').locator('.memo-search-source')).toHaveText('表格');
+    await expect(row('table-visible').locator('.memo-search-snippet')).toHaveText('alpha');
+    await win.locator('#searchInput').fill('beta');
+    await expect(row('table-visible').locator('.memo-search-snippet')).toHaveText('beta');
+    // V128-01E2: text replaced by a diagonal is not visible, so it no longer matches.
+    await win.locator('#searchInput').fill('hiddenword');
+    await expect(win.locator('#memoList .memo-row')).toHaveCount(0);
+    // V128-01E2: separate cells are independent units; a phrase spanning them no longer matches.
+    await win.locator('#searchInput').fill('left right');
+    await expect(win.locator('#memoList .memo-row')).toHaveCount(0);
+    // V128-01E2: the referenced filename is visible-text indexed (name only, never the path).
+    await win.locator('#searchInput').fill('target-report');
+    await expect(row('file-visible').locator('.memo-search-source')).toHaveText('附件');
+    await expect(row('file-visible').locator('.memo-search-snippet')).not.toContainText('private-folder');
+    await expect(row('file-visible').locator('.memo-search-locate')).toHaveText('查看附件');
+    await win.evaluate(() => {
+      window.__searchOpenedFiles = 0;
+      document.querySelector('.memo-row[data-id="file-visible"] .file-link').addEventListener('click', () => { window.__searchOpenedFiles++; });
+    });
+    await row('file-visible').locator('.memo-search-locate').click();
+    await expect(row('file-visible').locator('.file-link')).toBeFocused();
+    expect(await win.evaluate(() => window.__searchOpenedFiles)).toBe(0);
+    // V128-01E2: filename is indexed, so a visible filename substring matches.
+    await win.locator('#searchInput').fill('.md');
+    await expect(win.locator('#memoList .memo-row')).toHaveCount(1);
+    await expect(row('file-visible')).toBeVisible();
+    await win.locator('#searchInput').fill('target');
+    await win.evaluate(() => { state.settings.markdown = false; renderAll(); });
+    await expect(row('table-visible').locator('.memo-search-snippet')).toHaveText('**target** <cell> &');
+    await win.locator('#searchClear').click();
+    await expect(win.locator('.memo-search')).toHaveCount(0);
+    expect(await win.evaluate(() => state.notes.map(n => ({ id: n.id, content: n.content, tables: n.tables, files: n.files, preview: n.preview, positionAll: n.positionAll })))).toEqual(original);
+    expect(await win.evaluate(() => saveNow())).toBe(true);
+    const disk = JSON.parse(await fs.readFile(path.join(ctx.userDataDir, 'notes-data.json'), 'utf8'));
+    expect(disk.notes.find(n => n.id === 'rich-visible').content).toBe(seed.notes[0].content);
+    expect(disk.notes.find(n => n.id === 'table-visible').tables).toEqual(original.find(n => n.id === 'table-visible').tables);
+  } finally { await closeApp(ctx); }
+});
+
+test('V128-01D canvas search refreshes reused cards and preserves layout and interactions', async ({}, testInfo) => {
+  const notes = [
+    { ...v128Note('canvas-body', 20, 20, 10), title: 'Body', content: 'first target then second <tag> &', w: 240, h: 200 },
+    { ...v128Note('canvas-rich', 290, 20, 11), title: 'Rich', content: '**target** second', preview: true, w: 240, h: 200 }
+  ];
+  const seed = v128MemoSeed(notes); seed.settings.viewMode = 'board';
+  const ctx = await openApp({ seed }); const win = ctx.win;
+  const card = id => win.locator('#board .note[data-id="' + id + '"]');
+  try {
+    await expect(win.locator('#board .memo-search')).toHaveCount(0);
+    const original = await win.evaluate(() => state.notes.map(n => ({ id:n.id, content:n.content, w:n.w, h:n.h, x:n.x, y:n.y, positionAll:n.positionAll, z:n.z })));
+    const bodyHeight = await card('canvas-body').locator('.note-body').evaluate(el => el.clientHeight);
+    await card('canvas-body').evaluate(el => { window.__canvasSearchCard = el; });
+    await win.locator('#searchInput').fill('target');
+    await expect(win.locator('#board .memo-search')).toHaveCount(2);
+    await expect(win.locator('#searchInput')).toBeFocused();
+    await expect(card('canvas-body').locator('mark')).toHaveText('target');
+    await win.locator('#searchInput').fill('second');
+    await expect(card('canvas-body').locator('mark')).toHaveText('second');
+    expect(await card('canvas-body').evaluate(el => el === window.__canvasSearchCard)).toBe(true);
+    await card('canvas-body').locator('.memo-search-locate').click();
+    expect(await win.evaluate(() => window.getSelection().toString())).toBe('second');
+    await expect(card('canvas-body').locator('.note-content')).toBeFocused();
+    // Compact summary consumes at most one small line and never changes stored geometry.
+    expect(await card('canvas-body').locator('.note-body').evaluate(el => el.clientHeight)).toBeGreaterThanOrEqual(bodyHeight - 38);
+    for (const id of ['canvas-body', 'canvas-rich']) {
+      expect(await card(id).evaluate(el => el.scrollWidth <= el.clientWidth)).toBe(true);
+    }
+    await card('canvas-rich').locator('.memo-search-locate').click();
+    await expect(card('canvas-rich')).toBeFocused();
+    await expect(card('canvas-rich').locator('.note-content')).toHaveAttribute('contenteditable', 'false');
+    await win.evaluate(() => { multiSelect = true; selectedNotes.clear(); });
+    await card('canvas-body').locator('.memo-search-locate').click();
+    expect(await win.evaluate(() => selectedNotes.size)).toBe(0);
+    expect(await win.locator('.note.dragging, .note.drag-raised').count()).toBe(0);
+    await win.evaluate(() => { multiSelect = false; });
+    await win.screenshot({ path: testInfo.outputPath('canvas-search-light.png') });
+    await win.setViewportSize({ width:640, height:780 });
+    await win.evaluate(() => { state.settings.appearanceMode='dark'; state.settings.glass=true; state.settings.noteOpacity=75; state.settings.backgroundImage='data:image/svg+xml,'+encodeURIComponent('<svg xmlns="http://www.w3.org/2000/svg" width="640" height="780"><defs><linearGradient id="g"><stop stop-color="#1a3245"/><stop offset="1" stop-color="#506144"/></linearGradient></defs><rect width="640" height="780" fill="url(#g)"/></svg>'); state.notes.forEach(n=>n.color='#294441'); applyTheme(); renderAll(); });
+    await expect(win.locator('#board .memo-search')).toHaveCount(2);
+    await win.screenshot({ path: testInfo.outputPath('canvas-search-dark.png') });
+    await win.locator('#searchClear').click();
+    await expect(win.locator('#board .memo-search')).toHaveCount(0);
+    expect(await card('canvas-body').locator('.note-body').evaluate(el=>el.clientHeight)).toBe(bodyHeight);
+    expect(await win.evaluate(() => state.notes.map(n => ({ id:n.id, content:n.content, w:n.w, h:n.h, x:n.x, y:n.y, positionAll:n.positionAll, z:n.z })))).toEqual(original);
+    expect(await win.evaluate(() => saveNow())).toBe(true);
+    const disk=JSON.parse(await fs.readFile(path.join(ctx.userDataDir,'notes-data.json'),'utf8'));
+    expect(disk.notes.find(n=>n.id==='canvas-body').content).toBe(notes[0].content);
+    // Real header drag remains available while searching, with transient elevation restored.
+    await win.locator('#searchInput').fill('target');
+    const grab=await v128GrabPoint(win,'canvas-body');
+    await win.mouse.move(grab.x,grab.y); await win.mouse.down();
+    await win.mouse.move(grab.x+35,grab.y+25,{steps:5}); await win.mouse.up();
+    expect(await win.evaluate(() => effPos(state.notes.find(n=>n.id==='canvas-body')).x)).not.toBe(original[0].positionAll.x);
+    await expect(win.locator('.note.dragging, .note.drag-raised')).toHaveCount(0);
+  } finally { await closeApp(ctx); }
+});
+
+// V128-01D2: TODO view search explanation and safe locate (display-only, filtering unchanged).
+function v128TodoSeed(notes, groups) {
+  return { version: 2, settings: { viewMode: 'todo', lastSeenVersion: EXPECTED_VERSION, sortMode: 'custom', noteOrder: notes.map(n => n.id) }, groups: groups || [{ id: 'g1', name: 'Project', color: '#12bba9' }], trash: [], notes };
+}
+
+test('V128-01D2 todo view explains own-item/title/group matches, safe locate, literal text, and preserves filtering', async () => {
+  const notes = [
+    { ...v128Note('t1', 0, 0, 1), title: 'Alpha List', groupId: 'g1', type: 'todo', items: [
+      { id: 'i1', text: 'target milk <x> & eggs', done: false },
+      { id: 'i2', text: 'other task', done: false },
+      { id: 'i3', text: 'done target', done: true }
+    ] },
+    { ...v128Note('t2', 0, 0, 2), title: 'target title note', type: 'todo', items: [{ id: 'j1', text: 'nothing here', done: false }] }
+  ];
+  const ctx = await openApp({ seed: v128TodoSeed(notes) });
+  const win = ctx.win;
+  const pageErrors = [];
+  win.on('pageerror', (e) => pageErrors.push(String(e && e.message || e)));
+  const line = (nid, iid) => win.locator('#todoList .todo-line[data-note="' + nid + '"][data-item="' + iid + '"]');
+  try {
+    const snapshot = () => win.evaluate(() => state.notes.map(n => ({ id: n.id, title: n.title, content: n.content, items: n.items, done: (n.items || []).map(i => i.done), x: n.x, y: n.y, positionAll: n.positionAll, z: n.z })));
+    const original = await snapshot();
+    await expect(win.locator('#todoList .todo-search')).toHaveCount(0);
+    await win.locator('#searchInput').fill('target');
+    // Scope/count: t1/i1 (own), t1/i3 (own, completed kept), t2/j1 (title match => all items)
+    await expect(win.locator('#todoList .todo-line')).toHaveCount(3);
+    // Own item: highlighted in existing .tl-text, source 待办, locate button
+    await expect(line('t1', 'i1').locator('.tl-text mark')).toHaveText('target');
+    await expect(line('t1', 'i1').locator('.todo-search-source')).toHaveText('待办');
+    await expect(line('t1', 'i1').locator('.todo-search-locate')).toHaveText('定位');
+    // Completed row retained with done styling and still explained
+    await expect(line('t1', 'i3')).toHaveClass(/done/);
+    await expect(line('t1', 'i3').locator('.tl-text mark')).toHaveText('target');
+    // Title match explains scope with a bounded snippet (mark inside snippet, not the task text)
+    await expect(line('t2', 'j1').locator('.todo-search-source')).toHaveText('标题');
+    await expect(line('t2', 'j1').locator('.todo-search-snippet mark')).toHaveText('target');
+    await expect(line('t2', 'j1').locator('.tl-text mark')).toHaveCount(0);
+    // Own-item click locate: navigates to board, focuses the exact live item input and selects the match
+    await line('t1', 'i1').locator('.todo-search-locate').click();
+    const boardItem0 = win.locator('.note[data-id="t1"] .todo-text').nth(0);
+    await expect(boardItem0).toBeFocused();
+    expect(await boardItem0.evaluate(el => el.value.slice(el.selectionStart, el.selectionEnd))).toBe('target');
+    // Keyboard task locate on the non-first item (i3 => index 2) proves stable id/index mapping
+    await stableClick(win.locator('#viewTodo'));
+    await win.locator('#searchInput').fill('target');
+    await line('t1', 'i3').locator('.todo-search-locate').focus();
+    await win.keyboard.press('Enter');
+    const boardItem2 = win.locator('.note[data-id="t1"] .todo-text').nth(2);
+    await expect(boardItem2).toBeFocused();
+    expect(await boardItem2.evaluate(el => el.value.slice(el.selectionStart, el.selectionEnd))).toBe('target');
+    // Keyboard locate for the title row
+    await stableClick(win.locator('#viewTodo'));
+    await win.locator('#searchInput').fill('target');
+    await line('t2', 'j1').locator('.todo-search-locate').focus();
+    await win.keyboard.press('Enter');
+    const boardTitle = win.locator('.note[data-id="t2"] .note-title');
+    await expect(boardTitle).toBeFocused();
+    expect(await boardTitle.evaluate(el => el.value.slice(el.selectionStart, el.selectionEnd))).toBe('target');
+    // Literal special characters are marked as text, never parsed as HTML
+    await stableClick(win.locator('#viewTodo'));
+    await win.locator('#searchInput').fill('<x> &');
+    await expect(win.locator('#todoList .todo-line')).toHaveCount(1);
+    await expect(line('t1', 'i1').locator('.tl-text mark')).toHaveText('<x> &');
+    expect(await line('t1', 'i1').locator('.tl-text x').count()).toBe(0);
+    // Clear restores fully and search/locate did not mutate data
+    await win.locator('#searchClear').click();
+    await expect(win.locator('#todoList .todo-search')).toHaveCount(0);
+    expect(await snapshot()).toEqual(original);
+    expect(await win.evaluate(() => saveNow())).toBe(true);
+    let disk = JSON.parse(await fs.readFile(path.join(ctx.userDataDir, 'notes-data.json'), 'utf8'));
+    expect(disk.notes.find(n => n.id === 't1').items.map(i => i.text)).toEqual(['target milk <x> & eggs', 'other task', 'done target']);
+    // Existing checkbox toggle works on a VISIBLE row (i1) under an active query
+    await win.locator('#searchInput').fill('target');
+    await expect(win.locator('#todoList .todo-line')).toHaveCount(3);
+    await line('t1', 'i1').locator('input[type=checkbox]').click();
+    expect(await win.evaluate(() => state.notes.find(n => n.id === 't1').items.find(i => i.id === 'i1').done)).toBe(true);
+    await expect(win.locator('#todoList .todo-line')).toHaveCount(3);
+    // Existing delete still works
+    await line('t1', 'i3').locator('.tl-del').click();
+    expect(await win.evaluate(() => state.notes.find(n => n.id === 't1').items.some(i => i.id === 'i3'))).toBe(false);
+    await expect(win.locator('#todoList .todo-line')).toHaveCount(2);
+    expect(await win.evaluate(() => saveNow())).toBe(true);
+    disk = JSON.parse(await fs.readFile(path.join(ctx.userDataDir, 'notes-data.json'), 'utf8'));
+    const savedTexts = disk.notes.find(n => n.id === 't1').items.map(i => i.text);
+    expect(savedTexts).toEqual(['target milk <x> & eggs', 'other task']);
+    expect(savedTexts.join('|')).not.toContain('<mark>');
+    // No page errors during query / re-render / locate
+    expect(pageErrors).toEqual([]);
+  } finally { await closeApp(ctx); }
+});
+
+test('V128-01D2 group match focuses group tag without filter change; raw reminder body gets honest fallback', async ({}, testInfo) => {
+  const future = new Date(Date.now() + 3600000).toISOString();
+  const notes = [
+    { ...v128Note('g1note', 0, 0, 1), title: 'Tasks', groupId: 'g1', type: 'todo', items: [{ id: 'k1', text: 'ordinary', done: false }] },
+    { ...v128Note('rem', 0, 0, 2), title: 'Reminder note', type: 'note', content: '**secret** [[file:f1]]', files: [{ id: 'f1', path: 'C:/private-only/example.md', isDir: false }], reminder: { enabled: true, time: future, fired: false } }
+  ];
+  const ctx = await openApp({ seed: v128TodoSeed(notes) });
+  const win = ctx.win;
+  try {
+    // Group-indexed match: every item row of the grouped note explains via 分组 and can focus the group tag
+    await win.locator('#searchInput').fill('Project');
+    const grow = win.locator('#todoList .todo-line[data-note="g1note"]').first();
+    await expect(grow.locator('.todo-search-source')).toHaveText('分组');
+    await expect(grow.locator('.todo-search-snippet mark')).toHaveText('Project');
+    await expect(grow.locator('.todo-search-locate')).toHaveText('查看分组');
+    await grow.locator('.todo-search-locate').click();
+    await expect(win.locator('.note[data-id="g1note"] .group-tag')).toBeFocused();
+    expect(await win.evaluate(() => filter.group)).toBe('all');
+    // Reminder row legitimately visible because its raw content matches: honest Body fallback, no protocol leakage
+    await stableClick(win.locator('#viewTodo'));
+    await win.locator('#searchInput').fill('secret');
+    const rrow = win.locator('#todoList .todo-line[data-note="rem"]').first();
+    await expect(rrow).toBeVisible();
+    await expect(rrow.locator('.todo-search-source')).toHaveText('正文');
+    await expect(rrow.locator('.todo-search-snippet')).toContainText('在便签内容中找到匹配');
+    await expect(rrow.locator('.todo-search-snippet')).not.toContainText('[[');
+    await expect(rrow.locator('.todo-search-snippet')).not.toContainText('private-only');
+    await expect(rrow.locator('.todo-search-locate')).toHaveText('查看便签');
+    // Fallback locate: opens the note safely, no content/geometry/z change and no file/link launch
+    const before = await win.evaluate(() => { const n = state.notes.find(x => x.id === 'rem'); return { content: n.content, files: n.files, x: n.x, y: n.y, positionAll: n.positionAll, z: n.z }; });
+    await win.evaluate(() => {
+      window.__fileOpened = 0;
+      // 捕获阶段监听 document：跨渲染存活，只有真正点到附件/链接才计数（不等待、不吞异常）。
+      document.addEventListener('click', (e) => {
+        if (e.target && e.target.closest && e.target.closest('.file-link, a.note-link')) window.__fileOpened++;
+      }, true);
+    });
+    await rrow.locator('.todo-search-locate').click();
+    await expect(win.locator('.note[data-id="rem"]')).toBeFocused();
+    expect(await win.evaluate(() => window.__fileOpened)).toBe(0);
+    expect(await win.evaluate(() => { const n = state.notes.find(x => x.id === 'rem'); return { content: n.content, files: n.files, x: n.x, y: n.y, positionAll: n.positionAll, z: n.z }; })).toEqual(before);
+    // Reminder clear still works
+    await stableClick(win.locator('#viewTodo'));
+    await win.locator('#searchInput').fill('secret');
+    await win.locator('#todoList .todo-line[data-note="rem"] .tl-del').click();
+    expect(await win.evaluate(() => state.notes.find(x => x.id === 'rem').reminder)).toBe(null);
+    // Visual evidence: legitimate query shows summaries (never an empty strip state) in light/wide then dark/narrow/glass
+    await win.locator('#searchInput').fill('Project');
+    await expect(win.locator('#todoList .todo-search').first()).toBeVisible();
+    await win.screenshot({ path: testInfo.outputPath('todo-search-light.png') });
+    await win.setViewportSize({ width: 640, height: 780 });
+    await win.evaluate(() => {
+      state.settings.appearanceMode = 'dark'; state.settings.glass = true; state.settings.noteOpacity = 85;
+      state.settings.backgroundImage = 'data:image/svg+xml,' + encodeURIComponent('<svg xmlns="http://www.w3.org/2000/svg" width="640" height="780"><defs><linearGradient id="g"><stop stop-color="#1a3245"/><stop offset="1" stop-color="#506144"/></linearGradient></defs><rect width="640" height="780" fill="url(#g)"/></svg>');
+      applyTheme(); renderAll();
+    });
+    await expect(win.locator('#todoList .todo-search').first()).toBeVisible();
+    expect(await win.locator('#todoList').evaluate(el => el.scrollWidth <= el.clientWidth + 1)).toBe(true);
+    await win.screenshot({ path: testInfo.outputPath('todo-search-dark-narrow.png') });
+  } finally { await closeApp(ctx); }
+});
+
+// V128-01D3: DOCUMENT view search summaries and safe locate (picker + opened document).
+function v128DocSeed(notes, groups) {
+  return { version: 2, settings: { viewMode: 'doc', lastSeenVersion: EXPECTED_VERSION, sortMode: 'custom', noteOrder: notes.map(n => n.id) }, groups: groups || [{ id: 'g2', name: 'Project', color: '#12bba9' }], trash: [], notes };
+}
+
+test('V128-01D3 doc picker explains title/body/todo, locates live targets, keeps sort/order and refreshes summaries without rebuilding inputs', async () => {
+  const notes = [
+    { ...v128Note('dtitle', 0, 0, 1), title: 'Alpha target', content: 'ordinary body' },
+    { ...v128Note('dbody', 0, 0, 2), title: 'Body doc', content: 'plain target text' },
+    { ...v128Note('dtodo', 0, 0, 3), title: 'Tasks', type: 'todo', items: [{ id: 'k1', text: 'no match', done: false }, { id: 'k"2]', text: 'target task', done: false }] },
+    { ...v128Note('dpreview', 0, 0, 4), title: 'Read', content: 'preview target', preview: true }
+  ];
+  const ctx = await openApp({ seed: v128DocSeed(notes) });
+  const win = ctx.win;
+  const pageErrors = [];
+  win.on('pageerror', (e) => pageErrors.push(String(e && e.message || e)));
+  const pick = id => win.locator('#docList .doc-pick-item[data-id="' + id + '"]');
+  try {
+    const snapshot = () => win.evaluate(() => ({
+      notes: state.notes.map(n => ({ id: n.id, title: n.title, content: n.content, items: n.items, x: n.x, y: n.y, positionAll: n.positionAll, z: n.z })),
+      sortMode: state.settings.sortMode, noteOrder: state.settings.noteOrder.slice()
+    }));
+    const original = await snapshot();
+    await expect(win.locator('#docList .doc-search')).toHaveCount(0);
+    // Correction 1: with EMPTY query the picker must not build detached rich content (renderRichCached call count 0).
+    await win.evaluate(() => { window.__rrCalls = 0; window.__origRR = renderRichCached; window.renderRichCached = (...a) => { window.__rrCalls++; return window.__origRR(...a); }; });
+    await win.evaluate(() => renderAll());
+    expect(await win.evaluate(() => window.__rrCalls)).toBe(0);
+    await win.locator('#searchInput').fill('target');
+    expect(await win.evaluate(() => window.__rrCalls)).toBeGreaterThan(0);
+    await win.evaluate(() => { window.renderRichCached = window.__origRR; });
+    await expect(win.locator('#docList .doc-pick-item')).toHaveCount(4);
+    await expect(pick('dtitle').locator('.doc-search-source')).toHaveText('标题');
+    await expect(pick('dtitle').locator('.doc-search-snippet mark')).toHaveText('target');
+    await expect(pick('dtitle').locator('.doc-search-locate')).toHaveText('定位');
+    await expect(pick('dbody').locator('.doc-search-source')).toHaveText('正文');
+    await expect(pick('dbody').locator('.doc-search-locate')).toHaveText('定位');
+    await expect(pick('dtodo').locator('.doc-search-source')).toHaveText('待办');
+    await expect(pick('dtodo').locator('.doc-search-snippet mark')).toHaveText('target');
+    // Correction 6: safe summary hides the raw .dp-sub while searching
+    await expect(pick('dtitle').locator('.dp-sub')).toBeHidden();
+    // Picker button must not mutate sort/order or start a reorder
+    await pick('dtitle').locator('.doc-search-locate').click();
+    await expect(win.locator('#docTitle')).toBeFocused();
+    expect(await win.evaluate(() => { const t = document.querySelector('#docTitle'); return t.value.slice(t.selectionStart, t.selectionEnd); })).toBe('target');
+    const afterLocate = await win.evaluate(() => ({ sortMode: state.settings.sortMode, noteOrder: state.settings.noteOrder.slice(), z: state.notes.find(n => n.id === 'dtitle').z }));
+    expect(afterLocate.sortMode).toBe(original.sortMode);
+    expect(afterLocate.noteOrder).toEqual(original.noteOrder);
+    // Summary refresh while editing the title must NOT rebuild the input node (caret/focus stable)
+    await win.evaluate(() => { document.querySelector('#docTitle').__v128marker = 1; });
+    await win.locator('#docTitle').fill('Revised target title');
+    await expect(win.locator('#docTitle')).toBeFocused();
+    expect(await win.evaluate(() => document.querySelector('#docTitle').__v128marker)).toBe(1);
+    await expect(win.locator('.doc-search-snippet')).toHaveText('Revised target title');
+    await win.locator('#docTitle').fill('Alpha target');
+    await stableClick(win.locator('#btnDocBack'));
+    await expect(win.locator('#docList .doc-pick-item')).toHaveCount(4);
+    await expect(win.locator('#searchInput')).toHaveValue('target');
+    // Correction 2: plain doc — type in content, keep same DOM/caret, then click Locate while still focused (no programmatic blur)
+    await pick('dbody').locator('.doc-search-locate').click();
+    await expect(win.locator('#docContent')).toBeFocused();
+    expect(await win.evaluate(() => window.getSelection().toString())).toBe('target');
+    await expect(win.locator('#docContent')).toHaveAttribute('contenteditable', 'true');
+    await win.evaluate(() => { document.querySelector('#docContent').__v128marker = 1; });
+    await win.locator('#docContent').click();
+    await win.keyboard.type('X');
+    expect(await win.evaluate(() => document.querySelector('#docContent').__v128marker)).toBe(1);
+    await expect(win.locator('#docContent')).toBeFocused();
+    await win.locator('.doc-search-locate').click();
+    expect(await win.evaluate(() => window.getSelection().toString())).toBe('target');
+    // Restore the intentionally-typed content so the final data comparison is meaningful
+    await win.locator('#docContent').fill('plain target text');
+    // Keyboard locate via Enter on a picker button (title)
+    await stableClick(win.locator('#btnDocBack'));
+    await pick('dtitle').locator('.doc-search-locate').focus();
+    await win.keyboard.press('Enter');
+    await expect(win.locator('#docTitle')).toBeFocused();
+    // Correction 4: TODO document readonly — locate by dataset equality (id contains quote/bracket), focus readonly span (show; no editing)
+    await stableClick(win.locator('#btnDocBack'));
+    await pick('dtodo').locator('.doc-search-locate').click();
+    expect(await win.evaluate(() => Array.from(document.querySelectorAll('#docList .todo-item')).map(el => el.dataset.itemId))).toContain('k"2]');
+    await expect(win.locator('#docList .todo-item span:last-child').nth(1)).toBeFocused();
+    expect(await win.evaluate(() => window.getSelection().toString())).toBe('target');
+    expect(await win.locator('#docContent').count()).toBe(0);
+    expect(await win.locator('#docList .todo-item input').count()).toBe(0);
+    // Preview stays read-only with native selection
+    await stableClick(win.locator('#btnDocBack'));
+    await pick('dpreview').locator('.doc-search-locate').click();
+    await expect(win.locator('#docContent')).toHaveAttribute('contenteditable', 'false');
+    expect(await win.evaluate(() => window.getSelection().toString())).toBe('target');
+    // Clear removes temporary UI, restores .dp-sub, and did not mutate data/sort
+    await stableClick(win.locator('#btnDocBack'));
+    await win.locator('#searchClear').click();
+    await expect(win.locator('#docList .doc-search')).toHaveCount(0);
+    await expect(win.locator('#docList .doc-pick-item')).toHaveCount(4);
+    await expect(pick('dtitle').locator('.dp-sub')).toBeVisible();
+    expect(await snapshot()).toEqual(original);
+    expect(await win.evaluate(() => saveNow())).toBe(true);
+    const disk = JSON.parse(await fs.readFile(path.join(ctx.userDataDir, 'notes-data.json'), 'utf8'));
+    expect(disk.notes.find(n => n.id === 'dtitle').title).toBe('Alpha target');
+    expect(JSON.stringify(disk.notes)).not.toContain('<mark>');
+    expect(pageErrors).toEqual([]);
+  } finally { await closeApp(ctx); }
+});
+
+test('V128-01D3 rich/table/file summaries use visible text, honest fallback, no path/protocol leakage or link launch', async ({}, testInfo) => {
+  const groups = [{ id: 'g2', name: 'target-report', color: '#aa66cc' }];
+  const notes = [
+    { ...v128Note('drich', 0, 0, 1), title: 'Rich', content: '[[align:center]]**target** ==bright== [[c:#007755]]colored[[/c]][[/align]]', preview: true },
+    { ...v128Note('dtable', 0, 0, 2), title: 'Table', content: '[[table:t1]]', tables: [{ id: 't1', rows: 1, cols: 2, cells: [['hiddenword', '**target** <cell> &']], merges: [], diagonals: [{ r: 0, c: 0, dir: 'tlbr', t1: '**alpha**', t2: '==beta==' }] }] },
+    { ...v128Note('dfile', 0, 0, 3), title: 'Attachment', groupId: 'g2', content: '[[file:f1]]', files: [{ id: 'f1', path: 'C:/private-only/target-report.md', isDir: false }] },
+    { ...v128Note('dcross', 0, 0, 4), title: 'Raw only', content: '[[table:t2]]', tables: [{ id: 't2', rows: 2, cols: 2, cells: [['visible', 'zzhidden'], ['b', 'c']], merges: [{ r: 0, c: 0, rowspan: 1, colspan: 2 }], diagonals: [] }] },
+    { ...v128Note('dplain', 0, 0, 5), title: 'Plain target note', content: 'plain body' }
+  ];
+  const ctx = await openApp({ seed: v128DocSeed(notes, groups) });
+  const win = ctx.win;
+  const pick = id => win.locator('#docList .doc-pick-item[data-id="' + id + '"]');
+  try {
+    await win.locator('#searchInput').fill('target');
+    await expect(win.locator('#docList .doc-pick-item')).toHaveCount(4);
+    await expect(pick('drich').locator('.doc-search-source')).toHaveText('正文');
+    await expect(pick('drich').locator('.doc-search-snippet')).not.toContainText('[[align');
+    await expect(pick('drich').locator('.doc-search-snippet')).not.toContainText('**');
+    await expect(pick('drich').locator('.doc-search-snippet mark')).toHaveText('target');
+    await expect(pick('drich').locator('.doc-search-locate')).toHaveText('查看便签');
+    await expect(pick('dtable').locator('.doc-search-source')).toHaveText('表格');
+    await expect(pick('dtable').locator('.doc-search-snippet')).toHaveText('target <cell> &');
+    await expect(pick('dtable').locator('.doc-search-locate')).toHaveText('查看表格');
+    await expect(pick('dfile').locator('.doc-search-source')).toHaveText('附件');
+    await expect(pick('dfile').locator('.doc-search-snippet')).not.toContainText('private-only');
+    await expect(pick('dfile').locator('.doc-search-snippet')).toContainText('target-report.md');
+    await expect(pick('dfile').locator('.doc-search-locate')).toHaveText('查看附件');
+    // Correction 3: rich body view fallback focuses the read-only .doc-editor (never editable #docContent)
+    await pick('drich').locator('.doc-search-locate').click();
+    await expect(win.locator('.doc-editor')).toBeFocused();
+    expect(await win.evaluate(() => document.activeElement && document.activeElement.id)).not.toBe('docContent');
+    // Table locate focuses the table block without dispatching a click/edit
+    await stableClick(win.locator('#btnDocBack'));
+    await pick('dtable').locator('.doc-search-locate').click();
+    await expect(win.locator('#docContent .note-table-block')).toBeFocused();
+    // File locate focuses the link but must NOT open the file
+    await stableClick(win.locator('#btnDocBack'));
+    await win.evaluate(() => { window.__fileOpened = 0; document.addEventListener('click', (e) => { if (e.target && e.target.closest && e.target.closest('.file-link, a.note-link')) window.__fileOpened++; }, true); });
+    await pick('dfile').locator('.doc-search-locate').click();
+    await expect(win.locator('#docContent .file-link')).toBeFocused();
+    expect(await win.evaluate(() => window.__fileOpened)).toBe(0);
+    // V128-01E2: text hidden by a covered merged cell is not visible => zero results (no fallback row).
+    await stableClick(win.locator('#btnDocBack'));
+    await win.locator('#searchInput').fill('zzhidden');
+    await expect(win.locator('#docList .doc-pick-item')).toHaveCount(0);
+    // Opened doc filtered out returns to the picker (existing behavior), clear restores
+    await win.locator('#searchClear').click();
+    await expect(win.locator('#docList .doc-pick-item')).toHaveCount(5);
+    await pick('dcross').click();
+    await expect(win.locator('.doc-editor')).toBeVisible();
+    await win.locator('#searchInput').fill('nomatch-zzz');
+    await expect(win.locator('#docTitle')).toHaveCount(0);
+    await win.locator('#searchClear').click();
+    await expect(win.locator('#docList .doc-pick-item')).toHaveCount(5);
+    // Delete opened doc via existing behavior (original card open) returns to picker
+    await pick('dcross').click();
+    await expect(win.locator('.doc-editor')).toBeVisible();
+    await stableClick(win.locator('#btnDocDel'));
+    expect(await win.evaluate(() => state.notes.some(n => n.id === 'dcross'))).toBe(false);
+    // Visual evidence: legitimate query shows summaries (not empty state) in light/wide then dark/narrow/glass
+    await win.locator('#searchInput').fill('target');
+    await expect(win.locator('#docList .doc-search').first()).toBeVisible();
+    await win.screenshot({ path: testInfo.outputPath('doc-search-light.png') });
+    await win.setViewportSize({ width: 640, height: 780 });
+    await win.evaluate(() => {
+      state.settings.appearanceMode = 'dark'; state.settings.glass = true; state.settings.noteOpacity = 85;
+      state.settings.backgroundImage = 'data:image/svg+xml,' + encodeURIComponent('<svg xmlns="http://www.w3.org/2000/svg" width="640" height="780"><defs><linearGradient id="g"><stop stop-color="#1a3245"/><stop offset="1" stop-color="#506144"/></linearGradient></defs><rect width="640" height="780" fill="url(#g)"/></svg>');
+      applyTheme(); renderAll();
+    });
+    await expect(win.locator('#docList .doc-search').first()).toBeVisible();
+    expect(await win.locator('#docList').evaluate(el => el.scrollWidth <= el.clientWidth + 1)).toBe(true);
+    await win.screenshot({ path: testInfo.outputPath('doc-search-dark-narrow.png') });
+  } finally { await closeApp(ctx); }
+});
+
+// V128-01E1: query matching is per-field (no cross-field phrase false matches).
+test('V128-01E1 search matches per field without cross-field phrase false positives across views', async () => {
+  const now = Date.now();
+  const mk = (id, z, extra) => ({ ...v128Note(id, 0, 0, z), createdAt: now + z, updatedAt: now + z, ...extra });
+  const notes = [
+    mk('cross', 1, { title: 'alpha', content: 'beta' }),
+    mk('genuine', 2, { title: 'alpha beta', content: 'x' }),
+    mk('groupcross', 3, { title: 'alpha', content: 'beta', groupId: 'g1' }),
+    mk('groupgenuine', 4, { title: 'x', content: 'y', groupId: 'g3' }),
+    mk('todocross', 5, { title: 'task', type: 'todo', groupId: 'g2', items: [{ id: 't1', text: 'unrelated', done: false }] }),
+    mk('todogenuine', 6, { title: 'other', type: 'todo', items: [{ id: 't2', text: 'task team', done: false }] }),
+    mk('reminder', 7, { title: 'rem', content: 'body', reminder: { enabled: true, time: new Date(now + 3600000).toISOString(), fired: false } }),
+    mk('reminder2', 8, { title: 'z', content: 'rem body', reminder: { enabled: true, time: new Date(now + 3600000).toISOString(), fired: false } }),
+    mk('bodyphrase', 9, { title: 'z2', content: 'rem body' }),
+    mk('desk', 10, { title: 'alpha beta', desktopPin: true }),
+    mk('archivednote', 11, { title: 'archived alpha beta', archived: true })
+  ];
+  const seed = {
+    version: 2,
+    settings: { viewMode: 'board', lastSeenVersion: EXPECTED_VERSION, sortMode: 'custom', noteOrder: notes.map((n) => n.id) },
+    groups: [{ id: 'g1', name: 'gamma', color: '#111111' }, { id: 'g2', name: 'team', color: '#222222' }, { id: 'g3', name: 'alpha gamma', color: '#333333' }],
+    trash: [],
+    notes
+  };
+  const ctx = await openApp({ seed });
+  const win = ctx.win;
+  const pageErrors = [];
+  win.on('pageerror', (e) => pageErrors.push(String((e && e.message) || e)));
+  try {
+    const snapshot = () => win.evaluate(() => ({
+      notes: state.notes.map((n) => ({ id: n.id, title: n.title, content: n.content, items: n.items, groupId: n.groupId, archived: n.archived, desktopPin: n.desktopPin, x: n.x, y: n.y, positionAll: n.positionAll, z: n.z })),
+      noteOrder: state.settings.noteOrder.slice(),
+      sortMode: state.settings.sortMode
+    }));
+    const original = await snapshot();
+    const setQuery = (q) => win.evaluate((v) => { filter.query = v; const si = document.getElementById('searchInput'); if (si) si.value = v; renderAll(); }, q);
+    const boardIds = () => win.evaluate(() => Array.from(document.querySelectorAll('#board .note')).map((el) => el.dataset.id));
+    const visibleIds = () => win.evaluate(() => visibleNotes().map((n) => n.id));
+
+    // No query: all non-archived/non-desktop notes visible (9); desktop/archived excluded as before.
+    await setQuery('');
+    expect((await boardIds()).sort()).toEqual(['bodyphrase', 'cross', 'genuine', 'groupcross', 'groupgenuine', 'reminder', 'reminder2', 'todocross', 'todogenuine'].sort());
+
+    // Board: cross-field 'alpha'+'beta' must NOT match; only the genuine single-field phrase does.
+    await setQuery('alpha beta');
+    expect(await boardIds()).toEqual(['genuine']);
+    // Title+group cross-field must not match; group's own phrase does.
+    await setQuery('alpha gamma');
+    expect(await visibleIds()).toEqual(['groupgenuine']);
+    // Case/whitespace normalization preserved (literal, not regex).
+    await setQuery('  ALPHA BETA  ');
+    expect(await boardIds()).toEqual(['genuine']);
+    // A literal regex-looking query stays literal.
+    await setQuery('alpha bet.');
+    expect(await boardIds()).toEqual([]);
+
+    // Memo view uses the same per-field selector.
+    await win.evaluate(() => setViewMode('memo'));
+    await setQuery('alpha beta');
+    await expect(win.locator('#memoList .memo-row')).toHaveCount(1);
+    await expect(win.locator('#memoList .memo-row[data-id="genuine"]')).toHaveCount(1);
+
+    // Doc picker too.
+    await win.evaluate(() => setViewMode('doc'));
+    await setQuery('alpha beta');
+    await expect(win.locator('#docList .doc-pick-item')).toHaveCount(1);
+    await expect(win.locator('#docList .doc-pick-item[data-id="genuine"]')).toHaveCount(1);
+
+    // TODO view: noteMatch is per title/group; own item phrase still matches; cross-field title+group does not.
+    await win.evaluate(() => setViewMode('todo'));
+    await setQuery('task team');
+    await expect(win.locator('#todoList .todo-section.items .todo-line')).toHaveCount(1);
+    await expect(win.locator('#todoList .todo-line[data-note="todogenuine"]')).toHaveCount(1);
+    await expect(win.locator('#todoList .todo-line[data-note="todocross"]')).toHaveCount(0);
+    // Reminder predicate per title/content/group: cross-field 'rem'+'body' must not match; genuine content does.
+    await setQuery('rem body');
+    await expect(win.locator('#todoList .todo-section.remind .todo-line')).toHaveCount(1);
+    await expect(win.locator('#todoList .todo-section.remind .todo-line[data-note="reminder2"]')).toHaveCount(1);
+    await expect(win.locator('#todoList .todo-section.remind .todo-line[data-note="reminder"]')).toHaveCount(0);
+
+    // Archive scope untouched: archive filter shows only the archived note.
+    await win.evaluate(() => setViewMode('board'));
+    await setQuery('');
+    await win.evaluate(() => { filter.archive = true; renderAll(); });
+    expect(await boardIds()).toEqual(['archivednote']);
+    await win.evaluate(() => { filter.archive = false; renderAll(); });
+
+    // Collapse scope untouched: collapsed group's note is hidden even when its fields would match.
+    await win.evaluate(() => toggleGroupCollapse('g1'));
+    await setQuery('gamma');
+    expect(await visibleIds()).toEqual(['groupgenuine']);
+    await win.evaluate(() => toggleGroupCollapse('g1'));
+    // Query is still 'gamma'; only the group-scoped notes match (groupcross by its group name, groupgenuine by its group phrase).
+    expect((await visibleIds()).sort()).toEqual(['groupcross', 'groupgenuine'].sort());
+
+    // Clear restores full set and nothing was mutated.
+    await setQuery('');
+    expect((await boardIds()).sort()).toEqual(['bodyphrase', 'cross', 'genuine', 'groupcross', 'groupgenuine', 'reminder', 'reminder2', 'todocross', 'todogenuine'].sort());
+    expect(await snapshot()).toEqual(original);
+    expect(await win.evaluate(() => saveNow())).toBe(true);
+    const disk = JSON.parse(await fs.readFile(path.join(ctx.userDataDir, 'notes-data.json'), 'utf8'));
+    expect(disk.notes.find((n) => n.id === 'cross').content).toBe('beta');
+    expect(JSON.stringify(disk.notes)).not.toContain('<mark>');
+    expect(pageErrors).toEqual([]);
+  } finally { await closeApp(ctx); }
+});
+
+// V128-01E2: search index uses visible rendered text (no hidden/cross-unit matches; filename indexed).
+test('V128-01E2 search index uses visible rendered text (no hidden/cross-unit matches, filename indexed)', async () => {
+  const now = Date.now();
+  const mk = (id, z, extra) => ({ ...v128Note(id, 0, 0, z), createdAt: now + z, updatedAt: now + z, ...extra });
+  const notes = [
+    mk('rawpair', 1, { title: 'Tasks A', type: 'todo', items: [{ id: 'r1', text: 'rawalpha', done: false }, { id: 'r2', text: 'rawbeta', done: false }] }),
+    mk('cells', 2, { title: 'Cells', content: '[[table:c1]]', tables: [{ id: 'c1', rows: 1, cols: 2, cells: [['left', 'right']], merges: [], diagonals: [] }] }),
+    mk('diag', 3, { title: 'Diag', content: '[[table:d1]]', tables: [{ id: 'd1', rows: 1, cols: 1, cells: [['oldhidden']], merges: [], diagonals: [{ r: 0, c: 0, dir: 'tlbr', t1: 'diagalpha', t2: 'diagbeta' }] }] }),
+    mk('covered', 4, { title: 'Covered', content: '[[table:cv]]', tables: [{ id: 'cv', rows: 2, cols: 2, cells: [['visible', 'zzhidden'], ['b', 'c']], merges: [{ r: 0, c: 0, rowspan: 1, colspan: 2 }], diagonals: [] }] }),
+    mk('unref', 5, { title: 'Unref', content: 'plain text', tables: [{ id: 'u1', rows: 1, cols: 1, cells: [['orphancell']], merges: [], diagonals: [] }] }),
+    mk('formatted', 6, { title: 'Fmt', content: '**target**' }),
+    mk('fileonly', 7, { title: 'Files', content: '[[file:f1]]', files: [{ id: 'f1', path: 'C:/private-only/report.md', isDir: false }] }),
+    mk('rem', 8, { title: 'Rem', content: '[[table:rt]]', tables: [{ id: 'rt', rows: 1, cols: 1, cells: [['remmatch']], merges: [], diagonals: [] }], reminder: { enabled: true, time: new Date(now + 3600000).toISOString(), fired: false } })
+  ];
+  const seed = { version: 2, settings: { viewMode: 'board', lastSeenVersion: EXPECTED_VERSION, sortMode: 'custom', noteOrder: notes.map((n) => n.id) }, groups: [], trash: [], notes };
+  const ctx = await openApp({ seed });
+  const win = ctx.win;
+  const pageErrors = [];
+  win.on('pageerror', (e) => pageErrors.push(String((e && e.message) || e)));
+  try {
+    const projection = () => win.evaluate(() => state.notes.map((n) => ({ id: n.id, title: n.title, content: n.content, items: n.items, tables: n.tables, files: n.files, x: n.x, y: n.y, positionAll: n.positionAll, z: n.z, w: n.w, h: n.h })));
+    const initial = await projection();
+    const visibleIds = () => win.evaluate(() => visibleNotes().map((n) => n.id));
+    const setQuery = (q) => win.evaluate((v) => { filter.query = v; const si = document.getElementById('searchInput'); if (si) si.value = v; renderAll(); }, q);
+    // Adjacent raw task units must not form a cross-unit phrase.
+    await setQuery('rawalpha rawbeta');
+    expect(await visibleIds()).toEqual([]);
+    // Separate table cells are independent units.
+    await setQuery('left right');
+    expect(await visibleIds()).toEqual([]);
+    // Diagonal replaces the hidden backing cell; the visible halves remain searchable.
+    await setQuery('oldhidden');
+    expect(await visibleIds()).toEqual([]);
+    await setQuery('diagalpha');
+    expect(await visibleIds()).toEqual(['diag']);
+    await setQuery('diagbeta');
+    expect(await visibleIds()).toEqual(['diag']);
+    // Covered merged cell is not rendered.
+    await setQuery('zzhidden');
+    expect(await visibleIds()).toEqual([]);
+    // Unreferenced table is not indexed.
+    await setQuery('orphancell');
+    expect(await visibleIds()).toEqual([]);
+    // Formatted visible text matches; markup symbols do not.
+    await setQuery('target');
+    expect(await visibleIds()).toEqual(['formatted']);
+    await setQuery('**');
+    expect(await visibleIds()).toEqual([]);
+    // Filename (name only) is indexed; protocol id and full path are not.
+    await setQuery('report');
+    expect(await visibleIds()).toEqual(['fileonly']);
+    await setQuery('f1');
+    expect(await visibleIds()).toEqual([]);
+    await setQuery('private-only');
+    expect(await visibleIds()).toEqual([]);
+    // Non-TODO reminder whose rendered table matches is visible and shows a reminder row.
+    await setQuery('remmatch');
+    expect(await visibleIds()).toEqual(['rem']);
+    // All earlier queries were pure search: no mutation of any note metadata yet.
+    expect(await projection()).toEqual(initial);
+    await win.evaluate(() => setViewMode('todo'));
+    await setQuery('remmatch');
+    await expect(win.locator('#todoList .todo-section.remind .todo-line[data-note="rem"]')).toHaveCount(1);
+    // Memo view: honest source/snippet for the filename, and locate never launches the file.
+    await win.evaluate(() => setViewMode('memo'));
+    await setQuery('report');
+    const frow = win.locator('#memoList .memo-row[data-id="fileonly"]');
+    await expect(frow.locator('.memo-search-source')).toHaveText('附件');
+    await expect(frow.locator('.memo-search-snippet')).toContainText('report.md');
+    await expect(frow.locator('.memo-search-snippet')).not.toContainText('private-only');
+    await win.evaluate(() => { window.__opened = 0; document.addEventListener('click', (e) => { if (e.target && e.target.closest && e.target.closest('.file-link, a.note-link')) window.__opened++; }, true); });
+    await frow.locator('.memo-search-locate').click();
+    await expect(frow.locator('.file-link')).toBeFocused();
+    expect(await win.evaluate(() => window.__opened)).toBe(0);
+    // Clear restores all; content/order/layout untouched.
+    await win.evaluate(() => setViewMode('board'));
+    // Drive the real input binding so the clear button is visible (setQuery above used evaluate only).
+    await win.locator('#searchInput').fill('report');
+    await win.locator('#searchClear').click();
+    expect((await visibleIds()).sort()).toEqual(['cells', 'covered', 'diag', 'fileonly', 'formatted', 'rawpair', 'rem', 'unref'].sort());
+    // Existing save()/saveNow() runs cleanupRefs, which drops media metadata not referenced by content.
+    // Only `unref` has an unreferenced table, so only its tables change; every other field is unchanged.
+    const expectedAfterSave = initial.map((n) => (n.id === 'unref' ? { ...n, tables: [] } : n));
+    expect(initial.find((n) => n.id === 'unref').tables.length).toBe(1);
+    expect(expectedAfterSave.find((n) => n.id === 'unref').tables).toEqual([]);
+    expect(await projection()).toEqual(expectedAfterSave);
+    expect(await win.evaluate(() => saveNow())).toBe(true);
+    const disk = JSON.parse(await fs.readFile(path.join(ctx.userDataDir, 'notes-data.json'), 'utf8'));
+    expect(disk.notes.map((n) => ({ id: n.id, title: n.title, content: n.content, items: n.items, tables: n.tables, files: n.files, x: n.x, y: n.y, positionAll: n.positionAll, z: n.z, w: n.w, h: n.h }))).toEqual(expectedAfterSave);
+    expect(pageErrors).toEqual([]);
+  } finally { await closeApp(ctx); }
+});
+
+// V128-01E2: matcher caches by rendered HTML and invalidates on real changes.
+test('V128-01E2 rendered-text matcher caches by rendered HTML and invalidates on change', async () => {
+  const ctx = await openApp({ seed: v128DocSeed([{ ...v128Note('seed', 0, 0, 1), title: 'seed', content: 'seed' }]) });
+  const win = ctx.win;
+  const imgRequests = [];
+  win.on('request', (req) => { if (req.url().includes('v128-index-inert')) imgRequests.push(req.url()); });
+  try {
+    await win.evaluate(() => {
+      window.__tpl = 0;
+      const orig = document.createElement.bind(document);
+      document.createElement = (tag, ...a) => { if (String(tag).toLowerCase() === 'template') window.__tpl++; return orig(tag, ...a); };
+      window.__mk = (extra) => ({ id: 'syn', type: 'note', title: 'syn', content: '', items: [], images: [], files: [], tables: [], color: '#fff', textColor: null, groupId: null, pinned: false, desktopPin: false, archived: false, preview: false, reminder: null, x: 0, y: 0, positionAll: { x: 0, y: 0 }, w: 240, h: 200, z: 1, ...extra });
+    });
+    // Empty query => true with ZERO parsing.
+    expect(await win.evaluate(() => { window.__tpl = 0; window.__n = window.__mk({ content: 'target' }); return noteSearchContentMatches(window.__n, '   '); })).toBe(true);
+    expect(await win.evaluate(() => window.__tpl)).toBe(0);
+    // First real query parses once.
+    expect(await win.evaluate(() => { window.__tpl = 0; return noteSearchContentMatches(window.__n, 'target'); })).toBe(true);
+    expect(await win.evaluate(() => window.__tpl)).toBe(1);
+    // Repeated same rendered HTML => zero additional parses.
+    expect(await win.evaluate(() => { window.__tpl = 0; return noteSearchContentMatches(window.__n, 'target'); })).toBe(true);
+    expect(await win.evaluate(() => window.__tpl)).toBe(0);
+    // Content mutation invalidates and re-parses.
+    expect(await win.evaluate(() => { window.__n.content = 'changed'; window.__tpl = 0; return noteSearchContentMatches(window.__n, 'target'); })).toBe(false);
+    expect(await win.evaluate(() => window.__tpl)).toBe(1);
+    // Table cell mutation.
+    expect(await win.evaluate(() => { window.__n.content = '[[table:t]]'; window.__n.tables = [{ id: 't', rows: 1, cols: 1, cells: [['cellhit']], merges: [], diagonals: [] }]; window.__tpl = 0; return noteSearchContentMatches(window.__n, 'cellhit'); })).toBe(true);
+    expect(await win.evaluate(() => window.__tpl)).toBe(1);
+    // Merge/diagonal mutation: hidden cell drops, diagonal label appears.
+    expect(await win.evaluate(() => { window.__n.tables = [{ id: 't', rows: 1, cols: 1, cells: [['hidden']], merges: [], diagonals: [{ r: 0, c: 0, dir: 'tlbr', t1: 'diaghit', t2: '' }] }]; window.__tpl = 0; return noteSearchContentMatches(window.__n, 'diaghit'); })).toBe(true);
+    expect(await win.evaluate(() => noteSearchContentMatches(window.__n, 'hidden'))).toBe(false);
+    // Real merge change: two visible cells -> merge covering the unique second-cell token.
+    expect(await win.evaluate(() => {
+      window.__n.content = '[[table:m]]';
+      window.__n.tables = [{ id: 'm', rows: 1, cols: 2, cells: [['first', 'secondtoken']], merges: [], diagonals: [] }];
+      const before = noteSearchContentMatches(window.__n, 'secondtoken');
+      window.__n.tables = [{ id: 'm', rows: 1, cols: 2, cells: [['first', 'secondtoken']], merges: [{ r: 0, c: 0, rowspan: 1, colspan: 2 }], diagonals: [] }];
+      const after = noteSearchContentMatches(window.__n, 'secondtoken');
+      return { before, after };
+    })).toEqual({ before: true, after: false });
+    // Filename mutation; path is not indexed.
+    expect(await win.evaluate(() => { window.__n.content = '[[file:f]]'; window.__n.tables = []; window.__n.files = [{ id: 'f', path: 'C:/x/namehit.md', isDir: false }]; window.__tpl = 0; return noteSearchContentMatches(window.__n, 'namehit'); })).toBe(true);
+    expect(await win.evaluate(() => noteSearchContentMatches(window.__n, 'x/namehit'))).toBe(false);
+    // Markdown setting change invalidates rendered HTML.
+    expect(await win.evaluate(() => {
+      window.__n.content = '**mdhit**'; window.__n.files = [];
+      const before = noteSearchContentMatches(window.__n, 'mdhit');
+      const beforeLiteral = noteSearchContentMatches(window.__n, '**');
+      state.settings.markdown = false; renderAll();
+      const after = noteSearchContentMatches(window.__n, 'mdhit');
+      const afterLiteral = noteSearchContentMatches(window.__n, '**');
+      state.settings.markdown = true; renderAll();
+      return { before, beforeLiteral, after, afterLiteral };
+    })).toEqual({ before: true, beforeLiteral: false, after: true, afterLiteral: true });
+    // A new note object with the same id must not reuse stale results.
+    expect(await win.evaluate(() => { const n2 = window.__mk({ id: 'syn', content: 'fresh' }); return { fresh: noteSearchContentMatches(n2, 'fresh'), stale: noteSearchContentMatches(n2, 'mdhit') }; })).toEqual({ fresh: true, stale: false });
+    // Indexed detached markup stays inert: nothing inserted into the live document and no request for the synthetic image URL.
+    expect(await win.evaluate(() => { const before = document.querySelectorAll('.note-content').length; const n = window.__mk({ content: '[[img:i1]] target', images: [{ id: 'i1', src: 'note-img://local/v128-index-inert.png', w: 200 }] }); noteSearchContentMatches(n, 'target'); return document.querySelectorAll('.note-content').length === before; })).toBe(true);
+    await win.evaluate(() => new Promise((r) => requestAnimationFrame(() => r())));
+    expect(imgRequests.filter((u) => u.includes('v128-index-inert'))).toEqual([]);
+    // 100/500 plain-note dev-mode timing (local observation, no threshold) + cache parse counts.
+    for (const size of [100, 500]) {
+      const res = await win.evaluate((n) => {
+        const notes = [];
+        for (let i = 0; i < n; i++) notes.push({ id: 'p' + i, type: 'note', content: 'plain text ' + i + ' target', items: [], images: [], files: [], tables: [] });
+        window.__tpl = 0;
+        const t0 = performance.now();
+        notes.forEach((nt) => noteSearchContentMatches(nt, 'target'));
+        const cold = performance.now() - t0;
+        const coldParses = window.__tpl;
+        window.__tpl = 0;
+        const t1 = performance.now();
+        notes.forEach((nt) => noteSearchContentMatches(nt, 'target'));
+        const warm = performance.now() - t1;
+        const warmParses = window.__tpl;
+        return { cold, warm, coldParses, warmParses, matched: notes.filter((nt) => noteSearchContentMatches(nt, 'target')).length, size: n };
+      }, size);
+      expect(res.matched).toBe(size);
+      expect(res.coldParses).toBe(size);
+      expect(res.warmParses).toBe(0);
+      console.log('V128-01E2 perf size=' + size + ' cold=' + res.cold.toFixed(2) + 'ms warm=' + res.warm.toFixed(2) + 'ms');
+    }
+  } finally { await closeApp(ctx); }
+});
+
+// V128-01E3: document picker automatic foreground adapts to glass/dark; explicit colors keep priority.
+test('V128-01E3 document picker automatic foreground adapts to glass/dark and preserves explicit colors', async ({}, testInfo) => {
+  const seed = v128DocSeed([
+    { ...v128Note('yellow', 0, 0, 1), title: 'target yellow', content: 'body yellow', color: '#f7d65a' },
+    { ...v128Note('custom', 0, 0, 2), title: 'target custom', content: 'body custom', color: '#123456' },
+    { ...v128Note('explicit', 0, 0, 3), title: 'target explicit', content: 'body explicit', color: '#f7d65a', textColor: '#ff00ff' }
+  ]);
+  const ctx = await openApp({ seed });
+  const win = ctx.win;
+  const pageErrors = [];
+  win.on('pageerror', (e) => pageErrors.push(String((e && e.message) || e)));
+  const pick = id => win.locator('#docList .doc-pick-item[data-id="' + id + '"]');
+  const colorOf = id => win.evaluate((i) => getComputedStyle(document.querySelector('.doc-pick-item[data-id="' + i + '"]')).color, id);
+  const bgOf = id => win.evaluate((i) => getComputedStyle(document.querySelector('.doc-pick-item[data-id="' + i + '"]')).backgroundColor, id);
+  try {
+    const projection = () => win.evaluate(() => ({
+      notes: state.notes.map((n) => ({ id: n.id, title: n.title, content: n.content, items: n.items, tables: n.tables, files: n.files, x: n.x, y: n.y, positionAll: n.positionAll, z: n.z, w: n.w, h: n.h })),
+      noteOrder: state.settings.noteOrder.slice()
+    }));
+    const snap = await projection();
+
+    // Non-glass opaque: original autoTextColor behavior preserved.
+    await expect(pick('yellow')).toBeVisible();
+    expect(await colorOf('yellow')).toBe('rgb(45, 47, 56)');
+    expect(await bgOf('yellow')).toBe('rgb(247, 214, 90)');
+
+    // Glass + dark: automatic foreground becomes readable (white); material retained.
+    await win.evaluate(() => { state.settings.glass = true; state.settings.appearanceMode = 'dark'; applyTheme(); renderAll(); });
+    expect(await colorOf('yellow')).toBe('rgb(255, 255, 255)');
+    const mat = await win.evaluate(() => { const cs = getComputedStyle(document.querySelector('.doc-pick-item[data-id="yellow"]')); return { bf: cs.backdropFilter || cs.webkitBackdropFilter, opacity: cs.opacity, bg: cs.backgroundColor }; });
+    expect(mat.bf).toContain('blur');
+    expect(mat.opacity).toBe('1');
+    expect(mat.bg).not.toBe('rgb(247, 214, 90)');
+
+    // Glass + light: still dark text.
+    await win.evaluate(() => { state.settings.appearanceMode = 'light'; applyTheme(); renderAll(); });
+    expect(await colorOf('yellow')).toBe('rgb(45, 47, 56)');
+
+    // Custom dark canvasColor under glass: yellow -> white.
+    await win.evaluate(() => { state.settings.canvasColor = '#101820'; state.settings.appearanceMode = 'auto'; applyTheme(); renderAll(); });
+    expect(await colorOf('yellow')).toBe('rgb(255, 255, 255)');
+
+    // Dark custom note color over a light canvas: assert the higher-contrast (preferred) foreground, not either.
+    await win.evaluate(() => { state.settings.canvasColor = '#f4f5fa'; applyTheme(); renderAll(); });
+    const customCmp = await win.evaluate(() => {
+      const fg = getComputedStyle(document.querySelector('.doc-pick-item[data-id="custom"]')).color;
+      const base = [244, 245, 250], note = [18, 52, 86], tint = 0.46;
+      const bg = base.map((b, i) => tint * note[i] + (1 - tint) * b);
+      const hex = (a) => '#' + a.map((v) => Math.round(v).toString(16).padStart(2, '0')).join('');
+      return { fg, whiteC: contrastRatio('#ffffff', hex(bg)), darkC: contrastRatio('#2d2f38', hex(bg)) };
+    });
+    expect(customCmp.darkC).toBeGreaterThan(customCmp.whiteC);
+    expect(customCmp.fg).toBe('rgb(45, 47, 56)');
+
+    // Explicit colors keep exact priority: per-note textColor wins; then global noteTextColor.
+    expect(await colorOf('explicit')).toBe('rgb(255, 0, 255)');
+    await win.evaluate(() => { state.settings.noteTextColor = '#00ff00'; applyTheme(); renderAll(); });
+    expect(await colorOf('yellow')).toBe('rgb(0, 255, 0)');
+    expect(await colorOf('explicit')).toBe('rgb(255, 0, 255)');
+    await win.evaluate(() => { state.settings.noteTextColor = null; applyTheme(); renderAll(); });
+
+    // Opacity retention.
+    await win.evaluate(() => { state.settings.noteOpacity = 80; applyTheme(); renderAll(); });
+    expect(await win.evaluate(() => getComputedStyle(document.querySelector('.doc-pick-item[data-id="yellow"]')).opacity)).toBe('0.8');
+    await win.evaluate(() => { state.settings.noteOpacity = 100; applyTheme(); renderAll(); });
+
+    // Query + keyboard focus.
+    await win.locator('#searchInput').fill('target');
+    await expect(win.locator('#docList .doc-search')).toHaveCount(3);
+    await win.evaluate(() => { state.settings.canvasColor = null; state.settings.appearanceMode = 'dark'; state.settings.glass = true; applyTheme(); renderAll(); });
+    await win.evaluate(() => { window.__node = document.querySelector('.doc-pick-item[data-id="yellow"]'); });
+    await pick('yellow').locator('.doc-search-locate').focus();
+    await expect(pick('yellow').locator('.doc-search-locate')).toBeFocused();
+
+    // Live refresh: applyTheme ONLY (no renderAll) updates foreground, keeps the same node and focus.
+    await win.evaluate(() => { state.settings.canvasColor = '#101820'; applyTheme(); });
+    expect(await colorOf('yellow')).toBe('rgb(255, 255, 255)');
+    expect(await win.evaluate(() => window.__node === document.querySelector('.doc-pick-item[data-id="yellow"]'))).toBe(true);
+    await expect(pick('yellow').locator('.doc-search-locate')).toBeFocused();
+    await win.evaluate(() => { state.settings.canvasColor = '#f4f5fa'; applyTheme(); });
+    expect(await colorOf('yellow')).toBe('rgb(45, 47, 56)');
+    expect(await win.evaluate(() => window.__node === document.querySelector('.doc-pick-item[data-id="yellow"]'))).toBe(true);
+    await expect(pick('yellow').locator('.doc-search-locate')).toBeFocused();
+    // Locate button inherits the computed picker foreground.
+    expect(await win.evaluate(() => getComputedStyle(document.querySelector('.doc-pick-item[data-id="yellow"] .doc-search-locate')).color)).toBe(await colorOf('yellow'));
+
+    // Actual opacity 0 context is handled safely (no visibility assertion at 0; then restore).
+    await win.evaluate(() => { state.settings.canvasColor = null; state.settings.appearanceMode = 'dark'; state.settings.noteOpacity = 0; applyTheme(); });
+    expect(await colorOf('yellow')).toBe('rgb(255, 255, 255)');
+    await win.evaluate(() => { state.settings.noteOpacity = 100; applyTheme(); });
+
+    // Visual evidence: light/dark x wide/narrow, summaries visible before each shot, no horizontal overflow.
+    await win.evaluate(() => { state.settings.canvasColor = null; state.settings.appearanceMode = 'light'; applyTheme(); renderAll(); });
+    await win.setViewportSize({ width: 1080, height: 780 });
+    await expect(win.locator('#docList .doc-search').first()).toBeVisible();
+    await win.screenshot({ path: testInfo.outputPath('picker-light-wide.png') });
+    await win.evaluate(() => { state.settings.appearanceMode = 'dark'; applyTheme(); renderAll(); });
+    await expect(win.locator('#docList .doc-search').first()).toBeVisible();
+    await win.screenshot({ path: testInfo.outputPath('picker-dark-wide.png') });
+    await win.setViewportSize({ width: 640, height: 780 });
+    await win.evaluate(() => {
+      state.settings.backgroundImage = 'data:image/svg+xml,' + encodeURIComponent('<svg xmlns="http://www.w3.org/2000/svg" width="640" height="780"><defs><linearGradient id="g"><stop stop-color="#1a3245"/><stop offset="1" stop-color="#506144"/></linearGradient></defs><rect width="640" height="780" fill="url(#g)"/></svg>');
+      applyTheme(); renderAll();
+    });
+    await expect(win.locator('#docList .doc-search').first()).toBeVisible();
+    expect(await win.locator('#docList').evaluate(el => el.scrollWidth <= el.clientWidth + 1)).toBe(true);
+    await win.screenshot({ path: testInfo.outputPath('picker-dark-narrow.png') });
+    await win.evaluate(() => { state.settings.appearanceMode = 'light'; applyTheme(); renderAll(); });
+    // E3B: await the async representative-color result via the header (fallback light canvas => dark header; loaded dark gradient => white header).
+    await expect.poll(() => win.evaluate(() => document.querySelector('#docList .doc-picker-head h3').style.color)).toBe('rgb(255, 255, 255)');
+    // The gradient's representative surface leaves best white/#2d2f38 below 4.5, so the intermediate #17191f is chosen for yellow.
+    expect(await colorOf('yellow')).toBe('rgb(23, 25, 31)');
+    await expect(win.locator('#docList .doc-search').first()).toBeVisible();
+    await win.screenshot({ path: testInfo.outputPath('picker-light-narrow.png') });
+    // Light theme + custom wallpaper: the sampled representative color keeps the dark custom card readable (white).
+    expect(await colorOf('custom')).toBe('rgb(255, 255, 255)');
+
+    // Content/layout/order unchanged by appearance-only changes.
+    expect(await projection()).toEqual(snap);
+    expect(pageErrors).toEqual([]);
+  } finally { await closeApp(ctx); }
+});
+
+// V128-01E3B: document picker adapts to wallpaper representative color (header/cards/shadow, note-bg protocol).
+test('V128-01E3B document picker adapts to wallpaper representative color and note-bg protocol', async ({}, testInfo) => {
+  const seed = v128DocSeed([
+    { ...v128Note('yellow', 0, 0, 1), title: 'target yellow', content: 'body yellow', color: '#f7d65a' },
+    { ...v128Note('blue', 0, 0, 2), title: 'target blue', content: 'body blue', color: '#123456' },
+    { ...v128Note('explicit', 0, 0, 3), title: 'target explicit', content: 'body explicit', color: '#f7d65a', textColor: '#ff00ff' }
+  ]);
+  const ctx = await openApp({ seed });
+  const win = ctx.win;
+  const pageErrors = [];
+  win.on('pageerror', (e) => pageErrors.push(String((e && e.message) || e)));
+  const pick = id => win.locator('#docList .doc-pick-item[data-id="' + id + '"]');
+  const colorOf = id => win.evaluate((i) => getComputedStyle(document.querySelector('.doc-pick-item[data-id="' + i + '"]')).color, id);
+  const headerColor = () => win.evaluate(() => getComputedStyle(document.querySelector('#docList .doc-picker-head h3')).color);
+  const shadowOf = id => win.evaluate((i) => getComputedStyle(document.querySelector('.doc-pick-item[data-id="' + i + '"]')).textShadow, id);
+  const setWall = (mode, fill) => win.evaluate(({ mode, fill }) => {
+    state.settings.appearanceMode = mode;
+    state.settings.glass = true;
+    state.settings.noteOpacity = 100;
+    state.settings.backgroundReadability = true;
+    state.settings.backgroundImage = 'data:image/svg+xml,' + encodeURIComponent('<svg xmlns="http://www.w3.org/2000/svg" width="640" height="780"><rect width="640" height="780" fill="' + fill + '"/></svg>');
+    applyTheme(); renderAll();
+  }, { mode, fill });
+  try {
+    const projection = () => win.evaluate(() => ({ notes: state.notes.map((n) => ({ id: n.id, title: n.title, content: n.content, items: n.items, tables: n.tables, files: n.files, x: n.x, y: n.y, positionAll: n.positionAll, z: n.z, w: n.w, h: n.h })), noteOrder: state.settings.noteOrder.slice() }));
+    const snap = await projection();
+    await win.locator('#searchInput').fill('target');
+
+    // light/dark theme x light/dark synthetic data-SVG wallpaper at 1080/640 => 8 screenshots.
+    for (const mode of ['light', 'dark']) {
+      for (const fill of ['#0b1220', '#e8d9b5']) {
+        const dark = fill === '#0b1220';
+        await setWall(mode, fill);
+        await expect.poll(() => colorOf('yellow')).toBe(dark ? 'rgb(255, 255, 255)' : 'rgb(45, 47, 56)');
+        await expect.poll(() => colorOf('blue')).toBe(dark ? 'rgb(255, 255, 255)' : 'rgb(23, 25, 31)');
+        await expect.poll(headerColor).toBe(dark ? 'rgb(255, 255, 255)' : 'rgb(45, 47, 56)');
+        // Explicit colors preserved and never receive an auto shadow.
+        expect(await colorOf('explicit')).toBe('rgb(255, 0, 255)');
+        expect(await shadowOf('explicit')).toBe('none');
+        // Automatic cards get restrained text-edge protection; the locate button inherits the same var.
+        const cardShadow = await shadowOf('yellow');
+        expect(cardShadow).not.toBe('none');
+        expect(await win.evaluate(() => getComputedStyle(document.querySelector('.doc-pick-item[data-id="yellow"] .doc-search-locate')).textShadow)).toBe(cardShadow);
+        expect(await win.evaluate(() => getComputedStyle(document.querySelector('.doc-pick-item[data-id="explicit"] .doc-search-locate')).textShadow)).toBe('none');
+        // Material retained: 46% glass tint + blur + opacity.
+        const mat = await win.evaluate(() => { const cs = getComputedStyle(document.querySelector('.doc-pick-item[data-id="yellow"]')); return { bf: cs.backdropFilter || cs.webkitBackdropFilter, bg: cs.backgroundColor, op: cs.opacity }; });
+        expect(mat.bf).toContain('blur');
+        expect(mat.bg).not.toBe('rgb(247, 214, 90)');
+        expect(mat.op).toBe('1');
+        const tag = mode + '-' + (dark ? 'dark' : 'light');
+        await win.setViewportSize({ width: 1080, height: 780 });
+        await expect(win.locator('#docList .doc-search').first()).toBeVisible();
+        await win.screenshot({ path: testInfo.outputPath('e3b-' + tag + '-wide.png') });
+        await win.setViewportSize({ width: 640, height: 780 });
+        expect(await win.locator('#docList').evaluate(el => el.scrollWidth <= el.clientWidth + 1)).toBe(true);
+        await win.screenshot({ path: testInfo.outputPath('e3b-' + tag + '-narrow.png') });
+      }
+    }
+
+    // Global explicit text color under a LOADED wallpaper: priority + no auto shadow; header cleared (native inheritance).
+    await win.evaluate(() => { state.settings.backgroundImage = 'data:image/svg+xml,' + encodeURIComponent('<svg xmlns="http://www.w3.org/2000/svg" width="640" height="780"><rect width="640" height="780" fill="#0b1220"/></svg>'); state.settings.appearanceMode = 'light'; state.settings.backgroundReadability = true; applyBackground(); });
+    await expect.poll(() => colorOf('yellow')).toBe('rgb(255, 255, 255)');
+    await win.evaluate(() => { state.settings.noteTextColor = '#00ff00'; applyTheme(); });
+    expect(await colorOf('yellow')).toBe('rgb(0, 255, 0)');
+    expect(await colorOf('blue')).toBe('rgb(0, 255, 0)');
+    expect(await colorOf('explicit')).toBe('rgb(255, 0, 255)');
+    expect(await shadowOf('yellow')).toBe('none');
+    expect(await shadowOf('blue')).toBe('none');
+    expect(await win.evaluate(() => { const h = document.querySelector('#docList .doc-picker-head h3'); return { c: h.style.color, s: h.style.textShadow }; })).toEqual({ c: '', s: '' });
+    // Reset global: the image stays cached and the automatic colors return.
+    await win.evaluate(() => { state.settings.noteTextColor = null; applyTheme(); });
+    await expect.poll(() => colorOf('yellow')).toBe('rgb(255, 255, 255)');
+    expect(await shadowOf('yellow')).not.toBe('none');
+
+    // Solid / no wallpaper: E3A behavior unchanged; header overrides cleared.
+    await win.evaluate(() => { state.settings.backgroundImage = null; state.settings.appearanceMode = 'light'; state.settings.glass = true; state.settings.noteOpacity = 100; applyTheme(); renderAll(); });
+    expect(await colorOf('yellow')).toBe('rgb(45, 47, 56)');
+    expect(await win.evaluate(() => document.querySelector('#docList .doc-picker-head h3').style.color)).toBe('');
+    expect(await shadowOf('yellow')).toBe('none');
+
+    // bgOpacity 0 recomputes to canvas WITHOUT reload; same URL => no new Image.
+    await setWall('light', '#0b1220');
+    await expect.poll(() => colorOf('yellow')).toBe('rgb(255, 255, 255)');
+    await win.evaluate(() => { window.__imgCount = 0; window.__origImage = window.Image; const OI = window.Image; window.Image = function (...a) { window.__imgCount++; return new OI(...a); }; });
+    await win.evaluate(() => { state.settings.bgOpacity = 0; applyBackground(); });
+    await expect.poll(() => colorOf('yellow')).toBe('rgb(45, 47, 56)');
+    expect(await win.evaluate(() => window.__imgCount)).toBe(0);
+    await win.evaluate(() => { state.settings.bgOpacity = 100; applyBackground(); });
+    await expect.poll(() => colorOf('yellow')).toBe('rgb(255, 255, 255)');
+    // Same URL theme/query changes must not instantiate a new Image.
+    await win.evaluate(() => { window.__imgCount = 0; state.settings.appearanceMode = 'dark'; applyTheme(); });
+    await win.locator('#searchInput').fill('target');
+    await win.evaluate(() => applyTheme());
+    expect(await win.evaluate(() => window.__imgCount)).toBe(0);
+    await win.evaluate(() => { window.Image = window.__origImage; });
+
+    // Readability off: conservative E3A fallback; header/shadow cleared.
+    await win.evaluate(() => { state.settings.backgroundReadability = false; state.settings.appearanceMode = 'light'; applyBackground(); });
+    await expect.poll(() => colorOf('blue')).toBe('rgb(255, 255, 255)');
+    expect(await shadowOf('blue')).toBe('none');
+    expect(await win.evaluate(() => document.querySelector('#docList .doc-picker-head h3').style.color)).toBe('');
+    await win.evaluate(() => { state.settings.backgroundReadability = true; applyBackground(); });
+
+    // Rapid image change within one evaluate: the final URL wins.
+    await win.evaluate(() => {
+      state.settings.appearanceMode = 'light';
+      const dark = 'data:image/svg+xml,' + encodeURIComponent('<svg xmlns="http://www.w3.org/2000/svg" width="640" height="780"><rect width="640" height="780" fill="#0b1220"/></svg>');
+      const light = 'data:image/svg+xml,' + encodeURIComponent('<svg xmlns="http://www.w3.org/2000/svg" width="640" height="780"><rect width="640" height="780" fill="#e8d9b5"/></svg>');
+      state.settings.backgroundImage = dark; applyBackground();
+      state.settings.backgroundImage = light; applyBackground();
+    });
+    await expect.poll(() => colorOf('yellow')).toBe('rgb(45, 47, 56)');
+    await expect.poll(() => win.evaluate(() => getComputedStyle(document.querySelector('#docList .doc-picker-head h3')).color)).toBe('rgb(45, 47, 56)');
+
+    // Invalid data => the sampler's Image actually errors (prove the failure path), then cached (no retry).
+    await win.evaluate(() => {
+      window.__imgCount = 0; window.__imgErrors = 0;
+      window.__origImage2 = window.Image;
+      const OI = window.Image;
+      window.Image = function (...a) {
+        window.__imgCount++;
+        const im = new OI(...a);
+        im.addEventListener('error', () => { window.__imgErrors++; });
+        return im;
+      };
+    });
+    await win.evaluate(() => { state.settings.appearanceMode = 'light'; state.settings.backgroundImage = 'data:image/png;base64,%%%%invalid'; applyBackground(); });
+    await expect.poll(() => win.evaluate(() => window.__imgErrors)).toBe(1);
+    expect(await colorOf('blue')).toBe('rgb(255, 255, 255)');
+    const failedImgs = await win.evaluate(() => window.__imgCount);
+    // Same (failed) URL: no retry on theme/render/query.
+    await win.evaluate(() => { state.settings.appearanceMode = 'dark'; applyTheme(); });
+    await win.locator('#searchInput').fill('target');
+    await win.evaluate(() => applyTheme());
+    expect(await win.evaluate(() => window.__imgCount)).toBe(failedImgs);
+    await win.evaluate(() => { window.Image = window.__origImage2; });
+    // Canvas read error (SecurityError) => safe fallback, no pageerror.
+    await win.evaluate(() => {
+      window.__readAttempts = 0;
+      window.__origGetImageData = CanvasRenderingContext2D.prototype.getImageData;
+      CanvasRenderingContext2D.prototype.getImageData = function (...a) {
+        if (this.canvas && this.canvas.width === 16 && this.canvas.height === 16) {
+          window.__readAttempts++;
+          throw new DOMException('blocked', 'SecurityError');
+        }
+        return window.__origGetImageData.apply(this, a);
+      };
+    });
+    await win.evaluate(() => { state.settings.appearanceMode = 'light'; state.settings.backgroundImage = 'data:image/svg+xml,' + encodeURIComponent('<svg xmlns="http://www.w3.org/2000/svg" width="640" height="780"><rect width="640" height="780" fill="#0b1220"/></svg>'); applyBackground(); });
+    await expect.poll(() => win.evaluate(() => window.__readAttempts)).toBe(1);
+    await expect.poll(() => colorOf('blue')).toBe('rgb(255, 255, 255)');
+    await win.evaluate(() => { CanvasRenderingContext2D.prototype.getImageData = window.__origGetImageData; });
+
+    // Real note-bg protocol background: async update keeps the same node and focus.
+    const pngB64 = await win.evaluate(() => { const cv = document.createElement('canvas'); cv.width = 8; cv.height = 8; const c = cv.getContext('2d'); c.fillStyle = '#0b1220'; c.fillRect(0, 0, 8, 8); return cv.toDataURL('image/png').split(',')[1]; });
+    const bgDir = path.join(ctx.userDataDir, 'backgrounds');
+    await fs.mkdir(bgDir, { recursive: true });
+    const bgName = 'e3b-probe.png';
+    await fs.writeFile(path.join(bgDir, bgName), Buffer.from(pngB64, 'base64'));
+    await win.evaluate((n) => { state.settings.appearanceMode = 'light'; state.settings.backgroundImage = 'note-bg://local/' + n; applyBackground(); }, bgName);
+    await win.evaluate(() => { window.__node = document.querySelector('.doc-pick-item[data-id="yellow"]'); });
+    await pick('yellow').locator('.doc-search-locate').focus();
+    await expect.poll(() => colorOf('yellow')).toBe('rgb(255, 255, 255)');
+    expect(await win.evaluate(() => window.__node === document.querySelector('.doc-pick-item[data-id="yellow"]'))).toBe(true);
+    await expect(pick('yellow').locator('.doc-search-locate')).toBeFocused();
+    // Clear image via ONLY applyBackground => styles removed.
+    await win.evaluate(() => { state.settings.backgroundImage = null; applyBackground(); });
+    await expect.poll(() => colorOf('yellow')).toBe('rgb(45, 47, 56)');
+    expect(await shadowOf('yellow')).toBe('none');
+    expect(await win.evaluate(() => document.querySelector('#docList .doc-picker-head h3').style.color)).toBe('');
+
+    expect(await projection()).toEqual(snap);
+    expect(pageErrors).toEqual([]);
+  } finally { await closeApp(ctx); }
+});
+
+// V128-01E3B2: intermediate automatic foreground + readable metadata/mark for wallpaper-ready pickers.
+test('V128-01E3B2 document picker intermediate wallpaper keeps automatic summaries readable', async ({}, testInfo) => {
+  const seed = v128DocSeed([
+    { ...v128Note('yellow', 0, 0, 1), title: 'target yellow', content: 'body yellow', color: '#f7d65a' },
+    { ...v128Note('blue', 0, 0, 2), title: 'target blue', content: 'body blue', color: '#123456' },
+    { ...v128Note('explicit', 0, 0, 3), title: 'target explicit', content: 'body explicit', color: '#f7d65a', textColor: '#ff00ff' }
+  ]);
+  const ctx = await openApp({ seed });
+  const win = ctx.win;
+  const pageErrors = [];
+  win.on('pageerror', (e) => pageErrors.push(String((e && e.message) || e)));
+  const pick = id => win.locator('#docList .doc-pick-item[data-id="' + id + '"]');
+  const colorOf = id => win.evaluate((i) => getComputedStyle(document.querySelector('.doc-pick-item[data-id="' + i + '"]')).color, id);
+  const opOf = (id, sel) => win.evaluate(({ id, sel }) => getComputedStyle(document.querySelector('.doc-pick-item[data-id="' + id + '"] ' + sel)).opacity, { id, sel });
+  const hasClass = id => win.evaluate((i) => document.querySelector('.doc-pick-item[data-id="' + i + '"]').classList.contains('doc-auto-wallpaper'), id);
+  const setGradient = () => win.evaluate(() => {
+    state.settings.appearanceMode = 'light';
+    state.settings.glass = true;
+    state.settings.noteOpacity = 100;
+    state.settings.bgOpacity = 100;
+    state.settings.backgroundReadability = true;
+    state.settings.backgroundImage = 'data:image/svg+xml,' + encodeURIComponent('<svg xmlns="http://www.w3.org/2000/svg" width="640" height="780"><defs><linearGradient id="g"><stop stop-color="#1a3245"/><stop offset="1" stop-color="#506144"/></linearGradient></defs><rect width="640" height="780" fill="url(#g)"/></svg>');
+    applyTheme(); renderAll();
+  });
+  try {
+    const projection = () => win.evaluate(() => ({ notes: state.notes.map((n) => ({ id: n.id, title: n.title, content: n.content, items: n.items, tables: n.tables, files: n.files, x: n.x, y: n.y, positionAll: n.positionAll, z: n.z, w: n.w, h: n.h })), noteOrder: state.settings.noteOrder.slice() }));
+    const snap = await projection();
+    await setGradient();
+    await win.locator('#searchInput').fill('target');
+    // Genuine sampler completion via header inline color (fallback light canvas => dark header; loaded dark gradient => white).
+    await expect.poll(() => win.evaluate(() => document.querySelector('#docList .doc-picker-head h3').style.color)).toBe('rgb(255, 255, 255)');
+    expect(await colorOf('yellow')).toBe('rgb(23, 25, 31)');
+    expect(await colorOf('blue')).toBe('rgb(255, 255, 255)');
+    expect(await colorOf('explicit')).toBe('rgb(255, 0, 255)');
+    // Auto metadata readable (opacity 1) incl. hidden nonsearch dp-sub; explicit untouched, no auto class.
+    expect(await opOf('yellow', '.dp-sub')).toBe('1');
+    expect(await opOf('yellow', '.doc-search-source')).toBe('1');
+    expect(await opOf('yellow', '.dp-arrow')).toBe('1');
+    expect(await hasClass('yellow')).toBe(true);
+    expect(await opOf('explicit', '.dp-sub')).toBe('0.65');
+    expect(await opOf('explicit', '.doc-search-source')).toBe('0.7');
+    expect(await hasClass('explicit')).toBe(false);
+    // Locate button inherits the automatic foreground.
+    expect(await win.evaluate(() => getComputedStyle(document.querySelector('.doc-pick-item[data-id="yellow"] .doc-search-locate')).color)).toBe(await colorOf('yellow'));
+    // Mark: auto => transparent + underline; explicit => old fill, no underline.
+    const markAuto = await win.evaluate(() => { const cs = getComputedStyle(document.querySelector('.doc-pick-item[data-id="yellow"] .doc-search mark')); return { bg: cs.backgroundColor, deco: cs.textDecorationLine }; });
+    expect(markAuto.bg).toBe('rgba(0, 0, 0, 0)');
+    expect(markAuto.deco).toBe('underline');
+    const markExp = await win.evaluate(() => { const cs = getComputedStyle(document.querySelector('.doc-pick-item[data-id="explicit"] .doc-search mark')); return { bg: cs.backgroundColor, deco: cs.textDecorationLine }; });
+    expect(markExp.bg).not.toBe('rgba(0, 0, 0, 0)');
+    expect(markExp.deco).toBe('none');
+    // Independent contrast measurement for the yellow fixture (foreground vs known representative surface).
+    const contrast = await win.evaluate(() => {
+      const lin = (c) => { const v = c / 255; return v <= 0.03928 ? v / 12.92 : Math.pow((v + 0.055) / 1.055, 2.4); };
+      const L = (rgb) => 0.2126 * lin(rgb[0]) + 0.7152 * lin(rgb[1]) + 0.0722 * lin(rgb[2]);
+      const ratio = (a, b) => { const la = L(a), lb = L(b); const hi = Math.max(la, lb), lo = Math.min(la, lb); return (hi + 0.05) / (lo + 0.05); };
+      return ratio([23, 25, 31], [142, 138, 78]);
+    });
+    expect(contrast).toBeGreaterThanOrEqual(4.5);
+    // Material retained: 46% glass + blur; no overflow.
+    const mat = await win.evaluate(() => { const cs = getComputedStyle(document.querySelector('.doc-pick-item[data-id="yellow"]')); return { bf: cs.backdropFilter || cs.webkitBackdropFilter, bg: cs.backgroundColor }; });
+    expect(mat.bf).toContain('blur');
+    expect(mat.bg).not.toBe('rgb(247, 214, 90)');
+    // Four states: light/dark x 1080/640.
+    await win.setViewportSize({ width: 1080, height: 780 });
+    await win.screenshot({ path: testInfo.outputPath('b2-light-wide.png') });
+    await win.setViewportSize({ width: 640, height: 780 });
+    expect(await win.locator('#docList').evaluate(el => el.scrollWidth <= el.clientWidth + 1)).toBe(true);
+    await win.screenshot({ path: testInfo.outputPath('b2-light-narrow.png') });
+    await win.evaluate(() => { state.settings.appearanceMode = 'dark'; applyTheme(); renderAll(); });
+    await win.setViewportSize({ width: 1080, height: 780 });
+    await win.screenshot({ path: testInfo.outputPath('b2-dark-wide.png') });
+    await win.setViewportSize({ width: 640, height: 780 });
+    await win.screenshot({ path: testInfo.outputPath('b2-dark-narrow.png') });
+
+    // Clear query with the real input: nonsearch dp-sub stays readable with the same class/color.
+    await win.locator('#searchInput').fill('');
+    await expect(win.locator('#docList .doc-search')).toHaveCount(0);
+    expect(await hasClass('yellow')).toBe(true);
+    expect(await colorOf('yellow')).toBe('rgb(23, 25, 31)');
+    expect(await opOf('yellow', '.dp-sub')).toBe('1');
+    await win.screenshot({ path: testInfo.outputPath('b2-nonsearch.png') });
+
+    // Global explicit color via applyTheme only: class off, source opacity .7; auto green / explicit magenta.
+    await win.evaluate(() => { state.settings.noteTextColor = '#00ff00'; applyTheme(); });
+    expect(await colorOf('yellow')).toBe('rgb(0, 255, 0)');
+    expect(await colorOf('explicit')).toBe('rgb(255, 0, 255)');
+    expect(await hasClass('yellow')).toBe(false);
+    await win.locator('#searchInput').fill('target');
+    expect(await opOf('yellow', '.doc-search-source')).toBe('0.7');
+    // Node + focus retained across applyTheme-only updates.
+    await win.evaluate(() => { window.__node = document.querySelector('.doc-pick-item[data-id="yellow"]'); });
+    await pick('yellow').locator('.doc-search-locate').focus();
+    await win.evaluate(() => { state.settings.noteTextColor = null; applyTheme(); });
+    expect(await colorOf('yellow')).toBe('rgb(23, 25, 31)');
+    expect(await hasClass('yellow')).toBe(true);
+    expect(await win.evaluate(() => window.__node === document.querySelector('.doc-pick-item[data-id="yellow"]'))).toBe(true);
+    await expect(pick('yellow').locator('.doc-search-locate')).toBeFocused();
+
+    // Readability off / clear wallpaper => class removal + original metadata opacities.
+    await win.evaluate(() => { state.settings.backgroundReadability = false; applyTheme(); });
+    expect(await hasClass('yellow')).toBe(false);
+    expect(await opOf('yellow', '.doc-search-source')).toBe('0.7');
+    await win.evaluate(() => { state.settings.backgroundReadability = true; state.settings.backgroundImage = null; applyTheme(); });
+    expect(await hasClass('yellow')).toBe(false);
+
+    // noteOpacity 0 stays 0; restore.
+    await win.evaluate(() => { state.settings.noteOpacity = 0; applyTheme(); });
+    expect(await win.evaluate(() => getComputedStyle(document.querySelector('.doc-pick-item[data-id="yellow"]')).opacity)).toBe('0');
+    await win.evaluate(() => { state.settings.noteOpacity = 100; applyTheme(); });
+
+    expect(await projection()).toEqual(snap);
+    expect(pageErrors).toEqual([]);
+  } finally { await closeApp(ctx); }
+});
+
+// V128-03A: ordinary-cell Tab navigation in the main table editor.
+test('V128-03A main table ordinary-cell Tab navigation commits and skips merged/diagonal cells', async ({}, testInfo) => {
+  const table = { id: 't', rows: 2, cols: 3, cells: [['A0', 'covered', 'A2'], ['B0', 'B1', 'B2']], merges: [{ r: 0, c: 0, rowspan: 1, colspan: 2 }], diagonals: [{ r: 1, c: 1, dir: 'tlbr', t1: 'd1', t2: 'd2' }] };
+  const seed = v128DocSeed([
+    { ...v128Note('tbl', 0, 0, 1), title: 'target table', content: '[[table:t]]', tables: [table] }
+  ]);
+  const ctx = await openApp({ seed });
+  const win = ctx.win;
+  const pageErrors = [];
+  win.on('pageerror', (e) => pageErrors.push(String((e && e.message) || e)));
+  const block = () => win.locator('#docContent .note-table-block');
+  const cell = (r, c) => win.locator('#docContent .note-table-block td[data-r="' + r + '"][data-c="' + c + '"]');
+  const activeRC = () => win.evaluate(() => { const a = document.activeElement; return a && a.dataset && a.dataset.r != null ? a.dataset.r + ',' + a.dataset.c : null; });
+  let second = null;
+  try {
+    await stableClick(win.locator('#viewDoc'));
+    await stableClick(win.locator('#docList .doc-pick-item[data-id="tbl"]'));
+    await expect(block()).toBeVisible();
+    // Rendered ordinary order; covered (0,1) absent; diagonal (1,1) present and skipped.
+    expect(await win.evaluate(() => Array.from(document.querySelectorAll('#docContent .note-table-block td')).map((td) => td.dataset.r + ',' + td.dataset.c + (td.classList.contains('diag') ? ':diag' : '')))).toEqual(['0,0', '0,2', '1,0', '1,1:diag', '1,2']);
+    const original = await win.evaluate(() => { const n = state.notes.find((x) => x.id === 'tbl'); return { content: n.content, x: n.x, y: n.y, z: n.z }; });
+
+    // Tab forward (0,0)->(0,2); Shift+Tab back ->(0,0)
+    await cell(0, 0).dblclick();
+    await expect(cell(0, 0)).toHaveClass(/cell-editing/);
+    await cell(0, 0).dblclick(); // Re-entry must not install a second editing session.
+    await win.keyboard.type('XY');
+    await win.keyboard.press('Tab');
+    await expect(cell(0, 2)).toHaveClass(/cell-editing/);
+    expect(await activeRC()).toBe('0,2');
+    await win.keyboard.type('PQ');
+    await win.keyboard.press('Shift+Tab');
+    await expect(cell(0, 0)).toHaveClass(/cell-editing/);
+    expect(await activeRC()).toBe('0,0');
+    await win.keyboard.press('Tab'); // commit (0,0) -> (0,2)
+    expect(await cell(0, 0).textContent()).toContain('XY');
+    expect(await win.locator('#docContent .note-table-block td[data-r="0"][data-c="1"]').count()).toBe(0);
+    await expect(cell(1, 1)).toHaveClass(/diag/);
+    // Forward through to last ordinary (skips diagonal), then boundary ends editing and focuses the block.
+    await win.keyboard.press('Tab'); // -> (1,0)
+    expect(await activeRC()).toBe('1,0');
+    await win.keyboard.press('Tab'); // -> (1,2)
+    expect(await activeRC()).toBe('1,2');
+    await win.keyboard.press('Tab'); // boundary
+    await expect(win.locator('#docContent .note-table-block .cell-editing')).toHaveCount(0);
+    expect(await win.evaluate(() => document.activeElement && document.activeElement.classList.contains('note-table-block'))).toBe(true);
+    // Shift+Tab at the first ordinary cell ends editing too.
+    await cell(0, 0).dblclick();
+    await win.keyboard.press('Shift+Tab');
+    await expect(win.locator('#docContent .note-table-block .cell-editing')).toHaveCount(0);
+    // Escape cancels only the current edit; previously committed field unchanged.
+    await cell(0, 2).dblclick();
+    await win.keyboard.type('ZZ');
+    await win.keyboard.press('Escape');
+    await expect(cell(0, 2)).not.toHaveClass(/cell-editing/);
+    expect(await cell(0, 2).textContent()).toContain('PQ');
+    expect(await cell(0, 2).textContent()).not.toContain('ZZ');
+    // IME composition owns Tab/Enter/Escape.
+    await cell(1, 0).dblclick();
+    await win.evaluate(() => document.querySelector('#docContent .note-table-block td[data-r="1"][data-c="0"]').dispatchEvent(new CompositionEvent('compositionstart', { bubbles: true })));
+    for (const k of ['Tab', 'Enter', 'Escape']) {
+      await win.evaluate((key) => document.querySelector('#docContent .note-table-block td[data-r="1"][data-c="0"]').dispatchEvent(new KeyboardEvent('keydown', { key, isComposing: true, cancelable: true, bubbles: true })), k);
+    }
+    await expect(cell(1, 0)).toHaveClass(/cell-editing/);
+    await win.evaluate(() => document.querySelector('#docContent .note-table-block td[data-r="1"][data-c="0"]').dispatchEvent(new CompositionEvent('compositionend', { bubbles: true })));
+    await win.keyboard.type('W');
+    await win.keyboard.press('Tab'); // real Tab now navigates
+    await expect(cell(1, 2)).toHaveClass(/cell-editing/);
+    // Enter inserts a line break (multiline retained), then commit.
+    await win.keyboard.type('L1');
+    await win.keyboard.press('Enter');
+    await win.keyboard.type('L2');
+    await win.keyboard.press('Tab');
+    expect(await win.evaluate(() => document.querySelector('#docContent .note-table-block td[data-r="1"][data-c="2"]').innerHTML)).toContain('<br>');
+    // Ctrl+Z in the current cell is native text undo, not a structural delete.
+    await cell(1, 2).dblclick();
+    await win.keyboard.type('AB');
+    await win.keyboard.press('Control+z');
+    expect(await cell(1, 2).textContent()).not.toContain('AB');
+    await expect(block()).toBeVisible();
+    expect(await win.evaluate(() => state.notes.length)).toBe(1);
+    await win.keyboard.press('Escape');
+    // Screenshot of an editing cell.
+    await cell(0, 0).dblclick();
+    await win.screenshot({ path: testInfo.outputPath('main-table-editing.png') });
+    await win.keyboard.press('Escape');
+    // Persistence: real disk + relaunch.
+    expect(await win.evaluate(() => saveNow())).toBe(true);
+    const disk = JSON.parse(await fs.readFile(path.join(ctx.userDataDir, 'notes-data.json'), 'utf8'));
+    const savedNote = disk.notes.find((n) => n.id === 'tbl');
+    const savedTbl = savedNote.tables.find((t) => t.id === 't');
+    expect(savedTbl.cells[0][0]).toContain('XY');
+    expect(savedTbl.cells[0][2]).toContain('PQ');
+    expect(savedTbl.cells[1][1]).toBe('B1');
+    expect(savedTbl.rows).toBe(2);
+    expect(savedTbl.cols).toBe(3);
+    expect(savedTbl.merges).toEqual(table.merges);
+    expect(savedTbl.diagonals).toEqual(table.diagonals);
+    expect(savedTbl.cells[0][1]).toBe('covered');
+    expect(savedNote.content).toBe('[[table:t]]');
+    expect(savedNote.x).toBe(original.x);
+    expect(savedNote.y).toBe(original.y);
+    expect(savedNote.z).toBe(original.z);
+    expect(await win.evaluate(() => state.settings.noteOrder)).toEqual(['tbl']);
+    await ctx.electronApp.evaluate(() => process.exit(0)).catch(() => {});
+    second = await openApp({ userDataDir: ctx.userDataDir });
+    second.win.on('pageerror', (err) => pageErrors.push(String(err.message || err)));
+    await stableClick(second.win.locator('#viewDoc'));
+    await stableClick(second.win.locator('#docList .doc-pick-item[data-id="tbl"]'));
+    await expect(second.win.locator('#docContent .note-table-block')).toContainText('XY');
+    expect(pageErrors).toEqual([]);
+  } finally {
+    if (second) await closeApp(second);
+    else { await ctx.electronApp.close().catch(() => {}); await fs.rm(ctx.userDataDir, { recursive: true, force: true }).catch(() => {}); }
+  }
+});
+
+// V128-03A: ordinary-cell Tab navigation in a detached desktop-note table.
+test('V128-03A detached table ordinary-cell Tab navigation commits and persists', async ({}, testInfo) => {
+  const table = { id: 't', rows: 2, cols: 3, cells: [['A0', 'covered', 'A2'], ['B0', 'B1', 'B2']], merges: [{ r: 0, c: 0, rowspan: 1, colspan: 2 }], diagonals: [{ r: 1, c: 1, dir: 'tlbr', t1: 'd1', t2: 'd2' }] };
+  const seed = { version: 2, settings: { viewMode: 'board', lastSeenVersion: EXPECTED_VERSION, sortMode: 'custom', noteOrder: ['dtbl'] }, groups: [], trash: [], notes: [{ ...v128Note('dtbl', 0, 0, 1), title: 'target detached table', content: '[[table:t]]', tables: [table], desktopPin: true }] };
+  const ctx = await openApp({ seed });
+  const win = ctx.win;
+  const pageErrors = [];
+  win.on('pageerror', (e) => pageErrors.push(String((e && e.message) || e)));
+  let second = null;
+  try {
+    await expect.poll(() => ctx.electronApp.windows().length, { timeout: 20000 }).toBeGreaterThanOrEqual(2);
+    const noteWin = ctx.electronApp.windows().find((w) => w !== ctx.win);
+    noteWin.on('pageerror', (err) => pageErrors.push(String(err.message || err)));
+    await noteWin.waitForLoadState('domcontentloaded');
+    await expect(noteWin.locator('#dnText .note-table-block')).toBeVisible();
+    const cell = (r, c) => noteWin.locator('#dnText .note-table-block td[data-r="' + r + '"][data-c="' + c + '"]');
+    const activeRC = () => noteWin.evaluate(() => { const a = document.activeElement; return a && a.dataset && a.dataset.r != null ? a.dataset.r + ',' + a.dataset.c : null; });
+    // Tab forward/back.
+    await cell(0, 0).dblclick();
+    await cell(0, 0).dblclick(); // Repeated entry retains one editing session.
+    await noteWin.keyboard.type('XY');
+    await noteWin.keyboard.press('Tab');
+    await expect(cell(0, 2)).toHaveClass(/cell-editing/);
+    expect(await activeRC()).toBe('0,2');
+    await noteWin.keyboard.press('Shift+Tab');
+    await expect(cell(0, 0)).toHaveClass(/cell-editing/);
+    expect(await activeRC()).toBe('0,0');
+    // Forward to boundary.
+    await noteWin.keyboard.press('Tab'); // 0,2
+    await noteWin.keyboard.press('Tab'); // 1,0
+    await noteWin.keyboard.press('Tab'); // 1,2
+    await noteWin.keyboard.press('Tab'); // boundary
+    await expect(noteWin.locator('#dnText .note-table-block .cell-editing')).toHaveCount(0);
+    // Escape cancels current edit.
+    await cell(0, 2).dblclick();
+    await noteWin.keyboard.type('ZZ');
+    await noteWin.keyboard.press('Escape');
+    await expect(cell(0, 2)).not.toHaveClass(/cell-editing/);
+    expect(await cell(0, 2).textContent()).not.toContain('ZZ');
+    // IME composition owns the key.
+    await cell(1, 0).dblclick();
+    await noteWin.evaluate(() => document.querySelector('#dnText .note-table-block td[data-r="1"][data-c="0"]').dispatchEvent(new CompositionEvent('compositionstart', { bubbles: true })));
+    await noteWin.evaluate(() => document.querySelector('#dnText .note-table-block td[data-r="1"][data-c="0"]').dispatchEvent(new KeyboardEvent('keydown', { key: 'Tab', isComposing: true, cancelable: true, bubbles: true })));
+    await expect(cell(1, 0)).toHaveClass(/cell-editing/);
+    await noteWin.evaluate(() => document.querySelector('#dnText .note-table-block td[data-r="1"][data-c="0"]').dispatchEvent(new CompositionEvent('compositionend', { bubbles: true })));
+    await noteWin.keyboard.press('Escape');
+    // Screenshot of an editing cell.
+    await cell(0, 0).dblclick();
+    await noteWin.screenshot({ path: testInfo.outputPath('detached-table-editing.png') });
+    await noteWin.keyboard.press('Escape');
+    // Disk synchronization + restart persistence.
+    await expect.poll(async () => {
+      const d = JSON.parse(await fs.readFile(path.join(ctx.userDataDir, 'notes-data.json'), 'utf8'));
+      return d.notes.find((x) => x.id === 'dtbl').tables.find((x) => x.id === 't').cells[0][0];
+    }, { timeout: 15000 }).toContain('XY');
+    const disk = JSON.parse(await fs.readFile(path.join(ctx.userDataDir, 'notes-data.json'), 'utf8'));
+    const savedTbl = disk.notes.find((n) => n.id === 'dtbl').tables.find((t) => t.id === 't');
+    expect(savedTbl.cells[1][1]).toBe('B1');
+    expect(savedTbl.rows).toBe(2);
+    expect(savedTbl.cols).toBe(3);
+    expect(savedTbl.merges).toEqual(table.merges);
+    expect(savedTbl.diagonals).toEqual(table.diagonals);
+    expect(savedTbl.cells[0][1]).toBe('covered');
+    await ctx.electronApp.evaluate(() => process.exit(0)).catch(() => {});
+    second = await openApp({ userDataDir: ctx.userDataDir });
+    await expect.poll(() => second.electronApp.windows().length, { timeout: 20000 }).toBeGreaterThanOrEqual(2);
+    const noteWin2 = second.electronApp.windows().find((w) => w !== second.win);
+    noteWin2.on('pageerror', (err) => pageErrors.push(String(err.message || err)));
+    await noteWin2.waitForLoadState('domcontentloaded');
+    await expect(noteWin2.locator('#dnText .note-table-block')).toContainText('XY');
+    expect(pageErrors).toEqual([]);
+  } finally {
+    if (second) await closeApp(second);
+    else { await ctx.electronApp.close().catch(() => {}); await fs.rm(ctx.userDataDir, { recursive: true, force: true }).catch(() => {}); }
+  }
+});
+
+test('V128-07A table long content stays readable with local scrolling across views and detached notes', async ({}, testInfo) => {
+  const longLink = 'https://example.test/projects/' + 'ContinuousEnglishToken'.repeat(6);
+  const tables = [
+    { id: 'mixed', rows: 4, cols: 3, fontSize: 20,
+      cells: [['项目 / Project', '访问地址 / Link', '状态'], ['合并格 Mixed English 中文 ' + longLink, 'covered', '完成'], ['vertical 中文合并', 'base', longLink], ['covered', '中文换行\n第二行', '普通 English 内容']],
+      merges: [{ r: 1, c: 0, rowspan: 1, colspan: 2 }, { r: 2, c: 0, rowspan: 2, colspan: 1 }],
+      diagonals: [{ r: 2, c: 1, dir: 'tlbr', t1: '分类字段较长中文', t2: 'LONGDIAGONALHEADER', tSize: 20 }] },
+    { id: 'wide', rows: 2, cols: 12, fontSize: 18,
+      cells: [Array.from({ length: 12 }, (_, i) => '栏目' + (i + 1)), Array.from({ length: 12 }, (_, i) => '项目' + (i + 1) + ' content')], merges: [], diagonals: [] },
+    { id: 'compact', rows: 2, cols: 2, fontSize: 14, borderWidth: 1, borderColor: '#9a6432', cells: [['任务', '状态'], ['整理资料', '已完成']], merges: [], diagonals: [] }
+  ];
+  const makeNote = (id, desktopPin) => ({
+    id, title: '表格阅读 · ' + (desktopPin ? '独立便签' : '主窗口'), type: 'note',
+    content: '混排、合并与斜线\n[[table:mixed]]\n宽表格\n[[table:wide]]\n小表格\n[[table:compact]]\n表格结束',
+    items: [], images: [], files: [], tables: JSON.parse(JSON.stringify(tables)), color: '#bdebd7',
+    groupId: null, pinned: false, desktopPin, x: 25, y: 20, positionAll: { x: 25, y: 20 }, w: 300, h: 560, z: 1, createdAt: 1, updatedAt: 1
+  });
+  const ctx = await openApp({ seed: { version: 2, settings: { viewMode: 'board', lastSeenVersion: EXPECTED_VERSION }, groups: [], trash: [], notes: [makeNote('read-main', false), makeNote('read-pin', true)] } });
+  const win = ctx.win;
+  const errors = [];
+  win.on('pageerror', (e) => errors.push(String(e.message || e)));
+  const geometry = (page, root) => page.evaluate((selector) => {
+    const host = document.querySelector(selector);
+    const rgba = (color) => { const canvas = document.createElement('canvas'); canvas.width = canvas.height = 1; const c = canvas.getContext('2d'); c.fillStyle = color; c.fillRect(0, 0, 1, 1); return Array.from(c.getImageData(0, 0, 1, 1).data); };
+    const blocks = Array.from(host.querySelectorAll('.note-table-block')).map((block) => {
+      const table = block.querySelector('table');
+      const td = Array.from(table.querySelectorAll('td'));
+      const escapedText = [];
+      td.forEach((cell) => {
+        const bounds = cell.getBoundingClientRect();
+        const walker = document.createTreeWalker(cell, NodeFilter.SHOW_TEXT);
+        let node;
+        while ((node = walker.nextNode())) {
+          const range = document.createRange(); range.selectNodeContents(node);
+          for (const rect of range.getClientRects()) {
+            if (rect.width && (rect.left < bounds.left - 1 || rect.right > bounds.right + 1 || rect.top < bounds.top - 1 || rect.bottom > bounds.bottom + 1)) escapedText.push(cell.dataset.r + ',' + cell.dataset.c);
+          }
+        }
+      });
+      const header = table.querySelector('tr:first-child td');
+      const range = document.createRange(); range.selectNodeContents(header);
+      return { id: block.dataset.tableId, width: block.clientWidth, scrollWidth: block.scrollWidth,
+        font: getComputedStyle(table).fontSize, escapedText, border: rgba(getComputedStyle(header).borderTopColor),
+        diagonalStroke: table.querySelector('line') ? rgba(getComputedStyle(table.querySelector('line')).stroke) : null,
+        headerLines: new Set(Array.from(range.getClientRects()).filter((r) => r.width > 0).map((r) => Math.round(r.top))).size,
+        merged: td.filter((c) => c.rowSpan > 1 || c.colSpan > 1).map((c) => [c.dataset.r, c.dataset.c, c.rowSpan, c.colSpan]) };
+    });
+    return { outerOverflow: host.scrollWidth - host.clientWidth, blocks };
+  }, root);
+  const check = async (page, root, narrow, dark = false) => {
+    const g = await geometry(page, root);
+    expect(g.outerOverflow).toBeLessThanOrEqual(1);
+    expect(g.blocks.map((b) => b.id)).toEqual(['mixed', 'wide', 'compact']);
+    expect(g.blocks.map((b) => b.font)).toEqual(['20px', '18px', '14px']);
+    for (const b of g.blocks) expect(b.escapedText, b.id).toEqual([]);
+    expect(g.blocks[0].merged).toEqual([['1', '0', 1, 2], ['2', '0', 2, 1]]);
+    // Automatic grid lines remain visible in either palette; explicitly chosen ink stays exact.
+    for (const channel of g.blocks[0].border.slice(0, 3)) {
+      if (dark) expect(channel).toBeGreaterThan(220);
+      else expect(channel).toBeLessThan(110);
+    }
+    expect(g.blocks[0].border[3]).toBeGreaterThan(100);
+    expect(g.blocks[0].diagonalStroke).toEqual(g.blocks[0].border);
+    expect(g.blocks[2].border).toEqual([154, 100, 50, 255]);
+    expect(g.blocks[1].headerLines).toBe(1); // “栏目1” should read horizontally, not one glyph per line.
+    expect(g.blocks[1].scrollWidth).toBeGreaterThan(g.blocks[1].width + 1);
+    expect(g.blocks[2].scrollWidth).toBeLessThanOrEqual(g.blocks[2].width + 1); // Small tables still fit.
+    if (narrow) expect(g.blocks[0].scrollWidth).toBeGreaterThan(g.blocks[0].width + 1);
+    return g;
+  };
+  const scrollToLast = async (page, root) => {
+    const block = page.locator(root + ' .note-table-block[data-table-id="wide"]');
+    await block.scrollIntoViewIfNeeded();
+    await block.hover({ position: { x: 25, y: 20 } });
+    await page.mouse.wheel(480, 0); // Actual native horizontal wheel, not a mocked scroll event.
+    await expect.poll(() => block.evaluate((b) => b.scrollLeft)).toBeGreaterThan(0);
+    const reach = await block.evaluate((b) => {
+      b.scrollLeft = b.scrollWidth;
+      const last = b.querySelector('tr:first-child td:last-child').getBoundingClientRect();
+      const edge = b.getBoundingClientRect();
+      return { inside: last.left >= edge.left - 1 && last.right <= edge.right + 1, pageX: document.scrollingElement.scrollLeft };
+    });
+    expect(reach.inside).toBe(true);
+    expect(reach.pageX).toBe(0);
+  };
+  try {
+    await ctx.electronApp.evaluate(({ BrowserWindow }) => BrowserWindow.getAllWindows().find((w) => w.webContents.getURL().includes('index.html')).setBounds({ width: 960, height: 800 }));
+    const original = await win.evaluate(() => JSON.stringify(state.notes.map((n) => ({ id: n.id, content: n.content, tables: n.tables }))));
+    await check(win, '#board .note-content', true);
+    await win.screenshot({ path: testInfo.outputPath('board-light.png') });
+    await scrollToLast(win, '#board .note-content');
+    await win.screenshot({ path: testInfo.outputPath('board-wide-table-end.png') });
+
+    await expect.poll(() => ctx.electronApp.windows().filter((w) => w.url().includes('note.html')).length).toBe(1);
+    const pin = ctx.electronApp.windows().find((w) => w.url().includes('note.html'));
+    pin.on('pageerror', (e) => errors.push(String(e.message || e)));
+    await ctx.electronApp.evaluate(({ BrowserWindow }) => BrowserWindow.getAllWindows().find((w) => w.webContents.getURL().includes('note.html')).setBounds({ width: 300, height: 680 }));
+    await expect(pin.locator('.dn-content .note-table')).toHaveCount(3);
+    const pinBefore = await pin.evaluate(() => JSON.stringify({ content: note.content, tables: note.tables }));
+    await check(pin, '.dn-content', true);
+    await scrollToLast(pin, '.dn-content');
+    // Editing a distant cell and tabbing must reveal the newly focused live node after refresh.
+    const pinWide = pin.locator('.note-table-block[data-table-id="wide"]');
+    await pinWide.locator('td[data-r="0"][data-c="10"]').dblclick();
+    await pin.keyboard.press('Tab');
+    const lastCell = pinWide.locator('td[data-r="0"][data-c="11"]');
+    await expect(lastCell).toBeFocused();
+    expect(await lastCell.evaluate((td) => { const r = td.getBoundingClientRect(), b = td.closest('.note-table-block').getBoundingClientRect(); return r.left >= b.left - 1 && r.right <= b.right + 1; })).toBe(true);
+    await pin.keyboard.press('Escape');
+    expect(await pin.evaluate(() => JSON.stringify({ content: note.content, tables: note.tables }))).toBe(pinBefore);
+    await pin.screenshot({ path: testInfo.outputPath('detached-light-scroll.png') });
+    await pin.evaluate(() => { note.color = '#24344d'; settings.desktopMica = true; applyNoteStyle(); });
+    await check(pin, '.dn-content', true, true);
+    await pin.screenshot({ path: testInfo.outputPath('detached-dark-glass.png') });
+
+    await stableClick(win.locator('#viewMemo'));
+    await check(win, '#memoList .note-content', false);
+    await scrollToLast(win, '#memoList .note-content');
+    await win.screenshot({ path: testInfo.outputPath('memo-wide-table.png') });
+    await stableClick(win.locator('#viewDoc'));
+    await stableClick(win.locator('#docList .doc-pick-item[data-id="read-main"]'));
+    await check(win, '#docContent', false);
+    await win.screenshot({ path: testInfo.outputPath('document-light.png') });
+    await win.evaluate(() => {
+      state.settings.appearanceMode = 'dark'; state.settings.glass = true;
+      state.settings.backgroundImage = 'data:image/svg+xml,' + encodeURIComponent('<svg xmlns="http://www.w3.org/2000/svg" width="640" height="800"><defs><linearGradient id="g"><stop stop-color="#163746"/><stop offset="1" stop-color="#4e6355"/></linearGradient></defs><rect width="640" height="800" fill="url(#g)"/></svg>');
+      state.notes.find((n) => n.id === 'read-main').color = '#24344d';
+      applyTheme(); renderAll();
+    });
+    await ctx.electronApp.evaluate(({ BrowserWindow }) => BrowserWindow.getAllWindows().find((w) => w.webContents.getURL().includes('index.html')).setBounds({ width: 640, height: 800 }));
+    await check(win, '#docContent', false, true);
+    await win.screenshot({ path: testInfo.outputPath('document-dark-narrow.png') });
+    await scrollToLast(win, '#docContent');
+    expect(await win.evaluate(() => JSON.stringify(state.notes.map((n) => ({ id: n.id, content: n.content, tables: n.tables }))))).toBe(original);
+    expect(await win.evaluate(() => saveNow())).toBe(true);
+    const disk = JSON.parse(await fs.readFile(path.join(ctx.userDataDir, 'notes-data.json'), 'utf8'));
+    expect(disk.notes.find((n) => n.id === 'read-main').tables).toEqual(tables);
+    expect(disk.notes.find((n) => n.id === 'read-pin').tables).toEqual(tables);
+    expect(errors).toEqual([]);
+  } finally { await closeApp(ctx); }
+});
+
+function v128SelectionNote(id, x, y, extra = {}) {
+  return { id, title: 'Hit ' + id, content: 'Selected layout demo ' + id, type: 'note',
+    items: [], images: [], files: [], tables: [], color: '#bdebd7', textColor: null, reminder: null,
+    groupId: null, pinned: false, desktopPin: false, archived: false, x, y, positionAll: { x, y },
+    w: 220, h: 180, z: 1, createdAt: 1, updatedAt: 1, ...extra };
+}
+
+async function v128BatchBarFits(win) {
+  await expect.poll(() => win.locator('#batchBar').evaluate((bar) => {
+    const box = bar.getBoundingClientRect();
+    const rects = Array.from(bar.children).filter((e) => !e.classList.contains('hidden')).map((e) => e.getBoundingClientRect());
+    let overlaps = 0;
+    for (let i = 0; i < rects.length; i++) for (let j = i + 1; j < rects.length; j++) {
+      const a = rects[i], b = rects[j];
+      if (a.left < b.right - 1 && a.right > b.left + 1 && a.top < b.bottom - 1 && a.bottom > b.top + 1) overlaps++;
+    }
+    const feedback = document.querySelector('#toast');
+    const toastClear = feedback.classList.contains('hidden') || feedback.getBoundingClientRect().bottom <= box.top - 6;
+    const controls = document.querySelector('#canvasToolbar');
+    const c = controls.getBoundingClientRect();
+    const canvasClear = controls.classList.contains('hidden') || c.width === 0 || c.height === 0 || box.right <= c.left || box.left >= c.right || box.bottom <= c.top || box.top >= c.bottom;
+    return { inside: box.left >= 0 && box.right <= innerWidth && box.top >= 0 && box.bottom <= innerHeight,
+      childrenInside: rects.every((r) => r.left >= box.left && r.right <= box.right && r.top >= box.top && r.bottom <= box.bottom), overlaps, toastClear, canvasClear };
+  })).toEqual({ inside: true, childrenInside: true, overlaps: 0, toastClear: true, canvasClear: true });
+}
+
+test('V128-06 selected arrange uses real batch UI, preserves fixed and hidden notes, saves and undoes once', async ({}, testInfo) => {
+  const seed = { version: 2,
+    settings: { viewMode: 'board', sortMode: 'custom', lastSeenVersion: EXPECTED_VERSION,
+      noteOrder: ['a', 'b', 'fixed', 'hidden', 'folded', 'archived'], collapsedGroups: { fold: true } },
+    groups: [{ id: 'fold', name: 'Folded', color: '#9b8bed' }], trash: [],
+    notes: [v128SelectionNote('a', 400, 280), v128SelectionNote('b', 740, 280),
+      v128SelectionNote('fixed', 20, 20), v128SelectionNote('hidden', 258, 20, { title: 'Unmatched', content: 'No matching word' }),
+      v128SelectionNote('folded', 496, 20, { groupId: 'fold' }), v128SelectionNote('archived', 20, 20, { archived: true })] };
+  const ctx = await openApp({ seed });
+  const win = ctx.win;
+  const errors = [];
+  win.on('pageerror', (e) => errors.push(String(e.message || e)));
+  const notes = () => win.evaluate(() => JSON.parse(JSON.stringify(state.notes)));
+  const orderState = () => win.evaluate(() => JSON.parse(JSON.stringify({ mode: state.settings.sortMode, order: state.settings.noteOrder, groups: state.settings.groupOrders, layouts: state.settings.orderLayouts })));
+  const history = () => win.evaluate(() => ({ undo: UndoHistory.stacks().undoStack.length, redo: UndoHistory.stacks().redoStack.length }));
+  try {
+    await ctx.electronApp.evaluate(({ BrowserWindow }) => BrowserWindow.getAllWindows().find((w) => w.webContents.getURL().includes('index.html')).setBounds({ width: 1300, height: 900 }));
+    await win.locator('#searchInput').fill('Hit');
+    await expect(win.locator('#board .note')).toHaveCount(3);
+    await win.locator('#btnBatchToggle').click();
+    const arrange = win.locator('#btnBatchArrange');
+    await expect(arrange).toBeVisible();
+    await expect(arrange).toBeDisabled();
+    const before = await notes(), orders = await orderState(), h0 = await history();
+    expect(await win.evaluate(() => arrangeSelectedNotes())).toBe(false);
+    expect(await notes()).toEqual(before);
+    expect(await history()).toEqual(h0);
+    for (const id of ['a', 'b']) await win.locator('#board .note[data-id="' + id + '"] .note-content').click();
+    await expect(win.locator('#batchCount')).toHaveText('已选 2 项');
+    await expect(arrange).toBeEnabled();
+    await expect(arrange).toHaveAccessibleName('⚡ 整理选中');
+    await arrange.click();
+    const after = await notes();
+    const expected = JSON.parse(JSON.stringify(before));
+    for (const id of ['a', 'b']) {
+      const n = after.find((x) => x.id === id);
+      expect(n.positionAll).not.toEqual(before.find((x) => x.id === id).positionAll);
+      expected.find((x) => x.id === id).positionAll = n.positionAll;
+    }
+    expect(after).toEqual(expected);
+    expect(await orderState()).toEqual(orders);
+    expect(await history()).toEqual({ undo: h0.undo + 1, redo: 0 });
+    expect(await win.evaluate(() => Array.from(selectedNotes).sort())).toEqual(['a', 'b']);
+    const packing = await win.evaluate(() => {
+      const moving = state.notes.filter((n) => selectedNotes.has(n.id));
+      const fixed = state.notes.filter((n) => ['fixed', 'hidden', 'folded'].includes(n.id)).map((n) => ({ ...n.positionAll, w: n.w, h: n.h }));
+      return { overlaps: moving.some((n) => BoardLayout.overlapsAny(n.positionAll.x, n.positionAll.y, n.w, n.h, fixed)), order: readOrderFromLayout(moving, 'all') };
+    });
+    expect(packing).toEqual({ overlaps: false, order: ['a', 'b'] });
+    await v128BatchBarFits(win);
+    await win.screenshot({ path: testInfo.outputPath('selected-arrange-light-wide.png') });
+    await win.locator('#btnUndo').click();
+    expect(await notes()).toEqual(before);
+    expect(await history()).toEqual({ undo: h0.undo, redo: 1 });
+    await expect(arrange).toBeDisabled();
+    await win.locator('#btnRedo').click();
+    expect(await notes()).toEqual(after);
+    expect(await history()).toEqual({ undo: h0.undo + 1, redo: 0 });
+    expect(await win.evaluate(() => saveNow())).toBe(true);
+    const disk = JSON.parse(await fs.readFile(path.join(ctx.userDataDir, 'notes-data.json'), 'utf8'));
+    expect(disk.notes).toEqual(after);
+    expect(errors).toEqual([]);
+  } finally { await closeApp(ctx); }
+});
+
+test('V128-06 group selected arrange keeps all-view positions and fits narrow English dark batch bar', async ({}, testInfo) => {
+  const seed = { version: 2,
+    settings: { viewMode: 'board', language: 'en', appearanceMode: 'dark', glass: true, lastSeenVersion: EXPECTED_VERSION,
+      sortMode: 'custom', noteOrder: ['a', 'b', 'fixed', 'other'], groupOrders: { g1: ['b', 'a', 'fixed'] } },
+    groups: [{ id: 'g1', name: 'Group One', color: '#8da6ed' }, { id: 'g2', name: 'Group Two', color: '#edaf8d' }], trash: [],
+    notes: [v128SelectionNote('a', 320, 260, { groupId: 'g1', color: '#24344d', positionAll: { x: 20, y: 20 } }),
+      v128SelectionNote('b', 20, 260, { groupId: 'g1', color: '#24344d', positionAll: { x: 258, y: 20 } }),
+      v128SelectionNote('fixed', 20, 20, { groupId: 'g1', color: '#24344d', positionAll: { x: 496, y: 20 } }),
+      v128SelectionNote('other', 258, 20, { groupId: 'g2', color: '#24344d' })] };
+  const ctx = await openApp({ seed });
+  const win = ctx.win;
+  const errors = [];
+  win.on('pageerror', (e) => errors.push(String(e.message || e)));
+  const notes = () => win.evaluate(() => JSON.parse(JSON.stringify(state.notes)));
+  try {
+    await ctx.electronApp.evaluate(({ BrowserWindow }) => BrowserWindow.getAllWindows().find((w) => w.webContents.getURL().includes('index.html')).setBounds({ width: 640, height: 820 }));
+    await expect.poll(() => win.evaluate(() => innerWidth)).toBe(640);
+    await win.locator('#groupChips .chip', { hasText: 'Group One' }).click();
+    await expect(win.locator('#board .note')).toHaveCount(3);
+    const entryState = await win.evaluate(() => ({ width: innerWidth, compact: matchMedia('(max-width: 1050px)').matches, mode: state.settings.viewMode, moreClass: document.querySelector('#toolbarMoreWrap').className, buttonParent: document.querySelector('#btnBatchToggle').parentElement.id }));
+    await testInfo.attach('batch-entry-state', { body: JSON.stringify(entryState), contentType: 'application/json' });
+    await win.locator('#btnToolbarMore').click();
+    await win.locator('#btnBatchToggle').click();
+    const arrange = win.locator('#btnBatchArrange');
+    await expect(arrange).toHaveAccessibleName('⚡ Arrange selected');
+    await expect(arrange).toBeDisabled();
+    await win.locator('#btnBatchSelectAll').click();
+    await win.locator('#board .note[data-id="fixed"] .note-content').click();
+    await expect(win.locator('#batchCount')).toHaveText('2 selected');
+    const before = await notes();
+    const settingsBefore = await win.evaluate(() => JSON.stringify({ sortMode: state.settings.sortMode, noteOrder: state.settings.noteOrder, groupOrders: state.settings.groupOrders, orderLayouts: state.settings.orderLayouts }));
+    const oldHistory = await win.evaluate(() => UndoHistory.stacks().undoStack.length);
+    await arrange.click();
+    const after = await notes();
+    const expected = JSON.parse(JSON.stringify(before));
+    for (const id of ['a', 'b']) {
+      const n = after.find((x) => x.id === id);
+      expect({ x: n.x, y: n.y }).not.toEqual({ x: before.find((x) => x.id === id).x, y: before.find((x) => x.id === id).y });
+      Object.assign(expected.find((x) => x.id === id), { x: n.x, y: n.y });
+    }
+    expect(after).toEqual(expected);
+    expect(await win.evaluate(() => JSON.stringify({ sortMode: state.settings.sortMode, noteOrder: state.settings.noteOrder, groupOrders: state.settings.groupOrders, orderLayouts: state.settings.orderLayouts }))).toBe(settingsBefore);
+    expect(await win.evaluate(() => readOrderFromLayout(state.notes.filter((n) => selectedNotes.has(n.id)), filter.group))).toEqual(['b', 'a']);
+    expect(await win.evaluate(() => UndoHistory.stacks().undoStack.length)).toBe(oldHistory + 1);
+    await v128BatchBarFits(win);
+    await win.screenshot({ path: testInfo.outputPath('selected-arrange-dark-narrow-en.png') });
+    await win.locator('#btnUndo').click();
+    expect(await notes()).toEqual(before);
+    await win.locator('#btnRedo').click();
+    expect(await notes()).toEqual(after);
+    await win.locator('#btnBatchSelectAll').click();
+    await win.locator('#viewMemo').click();
+    await expect(arrange).toBeHidden();
+    await expect(arrange).toBeDisabled();
+    const memoNotes = await notes();
+    expect(await win.evaluate(() => arrangeSelectedNotes())).toBe(false);
+    expect(await notes()).toEqual(memoNotes);
+    await win.locator('#viewBoard').click();
+    await expect(arrange).toBeVisible();
+    await expect(arrange).toBeEnabled();
+    await win.locator('#btnBatchClear').click();
+    await expect(arrange).toBeDisabled();
+    await expect(win.locator('#batchCount')).toHaveText('0 selected');
+    await win.locator('#btnBatchExit').click();
+    await expect(win.locator('#batchBar')).toBeHidden();
+    await win.evaluate(() => toast('Notice'));
+    await expect.poll(() => win.locator('#toast').evaluate((el) => getComputedStyle(el).bottom)).toBe('24px');
+    expect(await notes()).toEqual(after);
+    expect(errors).toEqual([]);
+  } finally { await closeApp(ctx); }
 });

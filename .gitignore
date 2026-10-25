@@ -35,6 +35,7 @@ release-latest/
 # 注意：.gitignore 对已跟踪文件无效，提交 / 发布前仍须做暂存文件检查
 AGENTS.md
 agent.md
+HANDOFF.md
 优化改进待办.md
 优化改进待办.txt
 docs/release-checklist.md

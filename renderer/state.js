@@ -72,6 +72,7 @@
     collapseSnapshot: {},
     glass: false,
     desktopMica: false,
+    desktopSnap: true,
     markdown: true,
     highlightColor: null,
     reminderSound: false,

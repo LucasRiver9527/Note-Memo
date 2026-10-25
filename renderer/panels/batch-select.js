@@ -58,6 +58,12 @@ function toggleSelectNote(id) {
 function updateBatchCount() {
   const el = $('#batchCount');
   if (el) el.textContent = t('batch_selected_count').replace('{n}', selectedNotes.size);
+  const arrange = $('#btnBatchArrange');
+  if (arrange) {
+    const onBoard = state.settings.viewMode === 'board';
+    arrange.classList.toggle('hidden', !onBoard);
+    arrange.disabled = !onBoard || selectedNotes.size === 0;
+  }
 }
 
 function batchDeleteSelected() {

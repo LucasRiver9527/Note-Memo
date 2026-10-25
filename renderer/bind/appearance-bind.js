@@ -131,6 +131,7 @@ function bindAppearance() {
 
   $('#glassToggle').addEventListener('change', (e) => { state.settings.glass = e.target.checked; applyTheme(); save(); });
   $('#desktopMicaToggle').addEventListener('change', (e) => { state.settings.desktopMica = e.target.checked; applyTheme(); save(); });
+  $('#desktopSnapToggle').addEventListener('change', (e) => { state.settings.desktopSnap = e.target.checked; applyTheme(); save(); });
   $('#markdownToggle').addEventListener('change', (e) => { state.settings.markdown = e.target.checked; renderAll(); save(); });
   // 菜单外观：原挂在每一个右键菜单底部（与本便签无关的全局设置，且易误触）→ 归位到设置页
   $('#menuOpacity').addEventListener('input', (e) => { state.settings.menuOpacity = Number(e.target.value); applyMenuAppearance(); });

@@ -12,6 +12,58 @@
 }(typeof self !== 'undefined' ? self : this, function () {
   'use strict';
 
+// 拖动抬升：把被拖动卡片暂时置于所有「未被拖动」的板内卡片之上，返回可恢复的原 inline z 记录。
+// 不改 n.z / zCounter（不持久化）；批量时保持被拖动集合内部的原有相对层序：
+// 先按各卡片「有效 computed z-index」数值升序，仅当相等时用 DOM 顺序作 tie-break（不能用 style 空值假设 0）。
+function raiseDraggedNotes(draggedEls) {
+  const board = $('#board');
+  if (!board) return [];
+  const draggedSet = new Set(draggedEls);
+  // 有效 computed z（仅用于排序/取最大值；不改动卡片）。
+  const effectiveZ = (x) => {
+    const cz = parseInt(getComputedStyle(x).zIndex, 10);
+    if (Number.isFinite(cz)) return cz;
+    const iz = parseInt(x.style.zIndex, 10);
+    return Number.isFinite(iz) ? iz : 0;
+  };
+  // 未被拖动卡片中的最高有效 z（不假设未设置即 0，取实际 computed）。
+  let maxOther = 0;
+  $$('.note', board).forEach((x) => {
+    if (draggedSet.has(x)) return;
+    const v = effectiveZ(x);
+    if (v > maxOther) maxOther = v;
+  });
+  // 被拖动集合排序：有效 z 升序，tie-break 用 DOM 顺序；据此分配连续抬升 z，保持相对层序。
+  const orderIndex = new Map();
+  $$('.note', board).forEach((x, i) => orderIndex.set(x, i));
+  const orderedDragged = draggedEls.slice().sort((a, b) => {
+    const za = effectiveZ(a);
+    const zb = effectiveZ(b);
+    if (za !== zb) return za - zb;
+    return (orderIndex.get(a) || 0) - (orderIndex.get(b) || 0);
+  });
+  const base = maxOther + 1;
+  const records = [];
+  orderedDragged.forEach((x, i) => {
+    // 记录原 inline z 的「值 + 优先级」，恢复时按 setProperty(value, priority) 原样还原（含 !important）。
+    records.push({ el: x, prev: x.style.zIndex, had: x.style.zIndex !== '', priority: x.style.getPropertyPriority('z-index') });
+    x.style.zIndex = String(base + i);
+    x.classList.add('drag-raised');
+  });
+  return records;
+}
+
+// 原样恢复拖动抬升前的 inline z-index（含「原本没有 inline z」与「原有 !important」的情形）并移除标记类。
+function restoreRaisedNotes(records) {
+  if (!records) return;
+  records.forEach((r) => {
+    if (!r || !r.el) return;
+    if (r.had) r.el.style.setProperty('z-index', r.prev, r.priority || '');
+    else r.el.style.removeProperty('z-index');
+    r.el.classList.remove('drag-raised');
+  });
+}
+
 function startDrag(el, n, e) {
   // 延迟提交：按下时只暂存前置快照；松开时若真的产生位移才入栈（点击不动 → 无历史项）
   beginUndo();
@@ -37,6 +89,15 @@ function startDrag(el, n, e) {
   el.classList.add('dragging');
   document.body.classList.add('note-dragging');
   el.style.transform = 'translate3d(0,0,0)';
+
+  // UX：拖动期间把被拖动的卡片暂时抬到所有「未被拖动」的板内卡片之上。
+  // 仅改 inline z-index（不改 n.z/zCounter，不持久化），并记录原值以便原样恢复。
+  // 批量时所有可见选中卡片一起抬升，保持它们原有的相对层级顺序（含 DOM 顺序 tie-break）。
+  const draggedEls = batch
+    ? $$('.note').filter((x) => selectedNotes.has(x.dataset.id))
+    : [el];
+  if (!draggedEls.includes(el)) draggedEls.unshift(el);
+  const raised = raiseDraggedNotes(draggedEls);
 
   const updateRect = () => { rect = board.getBoundingClientRect(); };
   canvas.addEventListener('scroll', updateRect, { passive: true });
@@ -116,6 +177,8 @@ function startDrag(el, n, e) {
     el.classList.remove('dragging');
     document.body.classList.remove('note-dragging');
     isBatchDragging = false;
+    // 恢复被临时抬升卡片的原始 inline z-index（原样、按原值恢复），并清掉拖拽标记类
+    restoreRaisedNotes(raised);
     n.updatedAt = Date.now();
     save();
     if (batch) renderAll();

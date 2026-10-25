@@ -65,9 +65,19 @@ function bindBatch() {
   document.addEventListener('keydown', (event) => { if (event.key === 'Escape') closeMore(); });
   compactToolbar.addEventListener('change', syncToolbarMore);
   syncToolbarMore();
+  // Keep feedback above the batch actions, including when translated buttons wrap.
+  const batchBar = $('#batchBar');
+  new ResizeObserver(() => {
+    const bounds = batchBar.getBoundingClientRect();
+    const bottom = bounds.height ? window.innerHeight - bounds.top + 12 : 24;
+    document.documentElement.style.setProperty('--toast-bottom', bottom + 'px');
+  }).observe(batchBar);
   $('#btnBatchExit').onclick = () => { if (multiSelect) toggleMultiSelect(); };
   $('#btnBatchSelectAll').onclick = selectAllVisible;
   $('#btnBatchClear').onclick = () => { selectedNotes.clear(); syncSelectedVisual(); };
+  $('#btnBatchArrange').onclick = () => {
+    if (arrangeSelectedNotes()) toast(t('toast_batch_arranged'));
+  };
   $('#btnBatchDelete').onclick = batchDeleteSelected;
   $('#btnBatchMove').onclick = batchMoveSelected;
 

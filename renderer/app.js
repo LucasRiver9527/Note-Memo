@@ -48,20 +48,19 @@ function t(key) {
   return T(key, lang);
 }
 
-// v1.2.7 更新说明：仅列本版本新增/改进，之前版本内容不再列出。
+// v1.2.8 更新说明：仅列相对 1.2.7 已完成的用户可见变化。
 const CHANGELOG = [
-  { zh: '本版聚焦保存一致性、整理逻辑和界面细节：让主窗口保存时不再覆盖独立桌面便签的最新编辑，收紧访问检查，并改进整理、筛选提示与设置抽屉等交互', en: 'This release focuses on save consistency, arranging logic and UI details: the main window no longer overwrites your latest desktop-note edits on save, access checks are tightened, and arranging, filter hints and the settings drawer are improved' },
-  { zh: '主窗保存不覆盖独立便签的最新内容：主窗口保存整份数据时保留独立桌面便签已保存的最新编辑字段，避免主窗旧内容覆盖独立窗的改动', en: 'Main-window saves keep your latest desktop-note edits: when saving the whole dataset, the newest saved fields from desktop notes are preserved so older main-window content does not overwrite them' },
-  { zh: '独立便签保存失败提示与主窗一致：独立桌面便签写入失败时同样给出提示，与主窗口的保存失败处理保持一致', en: 'Desktop-note save failures match the main window: a failed desktop-note write now shows a prompt consistent with the main window’s save-failure handling' },
-  { zh: '备份替换后正确同步：用备份替换数据后独立桌面便签与草稿同步到正确状态，导入失败不会留下被污染的草稿', en: 'Correct sync after backup replace: desktop notes and drafts line up correctly after replacing data from a backup, and a failed import leaves no polluted draft' },
-  { zh: '加强访问检查：IPC 来源、外链、窗口导航与本地媒体访问经过更严格的校验，异常请求被拒绝', en: 'Tighter access checks: IPC origin, external links, in-window navigation and local media access are validated more strictly, and abnormal requests are rejected' },
-  { zh: '整理不再隐式恢复：一键整理始终按当前顺序紧凑排列，恢复保存布局改为显式的「恢复保存布局」，并避让同一布局范围内被筛选隐藏的便签', en: 'Arranging no longer restores implicitly: arrange always packs by the current order, restoring the saved layout is an explicit action, and notes hidden by filters in the same scope are avoided' },
-  { zh: '筛选条件提示：新增筛选条件提示与逐项清除，材质跟顶栏，无可清除条件时自动隐藏', en: 'Filter hints: a condition bar shows active filters with per-item clearing, follows the top bar material, and hides when there is nothing to clear' },
-  { zh: '桌面便签摘要与唤起入口，便于快速回到独立便签', en: 'Desktop-note summary and reveal entry for quickly jumping back to a pinned note' },
-  { zh: '文档工具栏分组并支持窄窗口换行，Markdown 导出入口保持可用', en: 'Doc toolbar groups actions and wraps in narrow windows while keeping the Markdown export entry available' },
-  { zh: '斜线表头长文字自动排布避免穿线，已有斜线可再次编辑，移除改为显式操作；表格工具栏中英命名统一并显示禁用态', en: 'Diagonal headers lay out long text to avoid crossing lines, existing diagonals can be re-edited and removal is explicit; table toolbar labels are unified and show disabled states' },
-  { zh: '设置中心更快地滑入与收回，不再出现右侧短暂留空，连续开关也能保持正常；快速重开正确恢复焦点，并支持「减少动态效果」', en: 'The settings drawer slides in and out faster with no brief gap on the right, and repeated toggling stays smooth; rapid reopen restores focus correctly and reduced-motion is respected' },
-  { zh: '细节修正：便签底部信息换行与配色、待办输入提示对比度、弹窗焦点 / Escape 行为，以及设置与图标可访问名称', en: 'Detail fixes: note footer wrapping and colors, to-do input placeholder contrast, dialog focus/Escape behavior, and accessible names for settings controls and icons' }
+  { zh: "本版聚焦搜索、表格编辑、画布整理和桌面便签体验，修复拖动遮挡与桌面圆角灰影。", en: "This release improves search, table editing, arranging and desktop notes, and fixes dragged notes appearing behind other cards and gray desktop-note corners." },
+  { zh: "搜索结果显示命中摘要与来源，可定位到标题、普通正文或待办项；富文本、表格和附件提供查看入口，不触发其中的链接。", en: "Search results show matching snippets and their source, with navigation to titles, plain text or to-do items. Rich text, tables and attachments offer a view action without opening links." },
+  { zh: "文档选择列表的自动字色适配主题、背景图和透明度，增强摘要与命中词的可读性，并保留手动字色设置。", en: "Automatic text colors in the document picker adapt to themes, background images and opacity for clearer snippets and matches, while respecting custom text colors." },
+  { zh: "画布拖动时，当前便签及批量拖动的便签保持在其他普通便签上方，避免被遮挡。", en: "Dragged canvas notes, including a selected group, stay above other ordinary notes instead of disappearing behind them." },
+  { zh: "批量选择新增“整理选中”：仅排列选中的可见便签，避让同一布局范围内其他便签，支持撤销和重做。", en: "The batch bar adds Arrange selected: arrange only selected visible notes, avoid other notes in the same layout scope, and undo or redo the arrangement." },
+  { zh: "普通表格编辑支持 Tab / Shift+Tab 前后跳格，自动跳过合并覆盖格与斜线专用格；Esc 取消当前格修改。", en: "Use Tab and Shift+Tab to move between ordinary table cells, skipping merged-away and diagonal cells. Escape cancels edits in the current cell." },
+  { zh: "表格列宽随字号合理伸展，改善长链接、连续英文和中文的阅读；宽表可横向滚动，未指定颜色的网格跟随文字颜色。", en: "Table columns scale with font size for more readable links and long text. Wide tables scroll horizontally, and default grid colors follow the text color." },
+  { zh: "桌面便签新增贴边吸附与细线预览，可在设置中关闭；确认落点时保持窗口大小，取消移动时恢复原位。", en: "Desktop notes gain edge snapping with a subtle outline preview and a setting to disable it. Snapping preserves window size, and canceling a move restores the original position." },
+  { zh: "修复桌面便签透明圆角的灰影，保留亚克力模糊与透明度；桌面采用系统圆角，圆角设为 0 时为直角，应用内卡片继续支持自定义圆角。", en: "Fix gray artifacts around transparent desktop-note corners while retaining Acrylic and opacity. Desktop notes use system corners, or square corners when the radius is 0; in-app cards keep custom corner radii." },
+  { zh: "优化空态、批量操作栏与提示的可读性和间距，并明确备份导出及替换导入的范围。", en: "Improve empty-state readability, spacing around batch actions and notifications, and explanations of backup export and replacement import." },
+  { zh: "保存失败后对本次临时文件进行有限清理重试；无法清理时记录残留路径，保存失败仍会如实反馈。", en: "Failed saves retry cleanup of their temporary file a limited number of times. If cleanup still fails, the remaining path is logged and the save failure is still reported." }
 ];
 
 const APP_VERSION = (window.api && window.api.appVersion) || '';

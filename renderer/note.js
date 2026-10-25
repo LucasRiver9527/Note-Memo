@@ -594,14 +594,37 @@ function wireTables() {
   });
 }
 
+// V128-03A：本表格块内「已渲染的普通单元格」（DOM 行序，排除斜线专用格；被合并覆盖的格本就不在 DOM）。
+function ordinaryTableCells(block) {
+  return $$('td', block).filter((td) => !td.classList.contains('diag'));
+}
+function nextOrdinaryTableRC(block, td, shift) {
+  const cells = ordinaryTableCells(block);
+  const idx = cells.indexOf(td);
+  if (idx < 0) return null;
+  const next = shift ? cells[idx - 1] : cells[idx + 1];
+  if (!next) return null;
+  return { r: Number(next.dataset.r), c: Number(next.dataset.c) };
+}
+function findOrdinaryTableCell(block, r, c) {
+  return ordinaryTableCells(block).find((td) => Number(td.dataset.r) === r && Number(td.dataset.c) === c) || null;
+}
+
 function editCell(block, td, tbl, r, c) {
+  if (td.classList.contains('cell-editing')) return; // 已在编辑：重复 dblclick 不再叠加监听器
   td.contentEditable = 'true';
   td.classList.add('cell-editing');
   td.focus();
-  const done = (commit) => {
+  let composing = false;
+  let finished = false;
+  const done = (commit, nav, endFocus) => {
+    if (finished) return; // 幂等：blur 与 mousedown 可能重复触发
+    finished = true;
     document.removeEventListener('mousedown', onDocDown, true);
     td.onblur = null;
     td.onkeydown = null;
+    td.removeEventListener('compositionstart', onCompStart);
+    td.removeEventListener('compositionend', onCompEnd);
     td.contentEditable = 'false';
     td.classList.remove('cell-editing');
     if (commit) {
@@ -612,11 +635,40 @@ function editCell(block, td, tbl, r, c) {
       tmp.innerHTML = tableBlockHtml(tbl);
       block.innerHTML = tmp.firstChild.innerHTML;
     }
+    if (nav) {
+      // 重渲染后按 r/c 重新定位实时节点（绝不复用旧 td）。
+      const target = findOrdinaryTableCell(block, nav.r, nav.c);
+      if (target) {
+        setActiveTable(block, { r: nav.r, c: nav.c });
+        editCell(block, target, tbl, nav.r, nav.c);
+      } else {
+        setActiveTable(block, null);
+        if (typeof block.focus === 'function') block.focus();
+      }
+      return;
+    }
+    if (endFocus || !commit) {
+      // 边界 Tab 结束编辑 / Escape 取消：聚焦「实时」表格块，避免聚焦已脱离文档的 td。
+      setActiveTable(block, null);
+      if (typeof block.focus === 'function') block.focus();
+    }
   };
   const onDocDown = (e) => { if (!td.contains(e.target)) done(true); };
+  const onCompStart = () => { composing = true; };
+  const onCompEnd = () => { composing = false; };
   document.addEventListener('mousedown', onDocDown, true);
+  td.addEventListener('compositionstart', onCompStart);
+  td.addEventListener('compositionend', onCompEnd);
   td.onblur = () => done(true);
   td.onkeydown = (e) => {
+    if (composing || e.isComposing || e.keyCode === 229) return; // IME 组合态：把按键交给输入法
+    if (e.key === 'Tab' && !e.ctrlKey && !e.altKey && !e.metaKey) {
+      e.preventDefault();
+      e.stopPropagation(); // 拥有的普通 Tab 不再冒泡给全局/自定义快捷键
+      const nav = nextOrdinaryTableRC(block, td, e.shiftKey); // 提交前记录目标 r/c
+      done(true, nav, !nav); // 无目标（边界）=> 提交并结束编辑
+      return;
+    }
     if (e.key === 'Enter') { e.preventDefault(); document.execCommand('insertLineBreak'); }
     else if (e.key === 'Escape') { e.preventDefault(); done(false); }
     else if (whichShortcut(e, settings, 'editor') === 'bold') { e.preventDefault(); toggleBold(td); }

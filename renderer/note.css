@@ -123,16 +123,16 @@ body.glass #note {
 .note-table-block.tbl-selected { box-shadow: 0 0 0 2px var(--accent, #6c5ce7); }
 .note-table { border-collapse: collapse; width: 100%; font-size: var(--note-font-size, var(--font-size, 14px)); color: inherit; }
 .note-table td {
-  border: var(--tbl-border-width, 3px) solid var(--tbl-border-color, rgba(0,0,0,0.7));
-  padding: 6px 8px; min-width: 40px; height: 28px;
-  vertical-align: middle; text-align: center; position: relative; word-break: break-word; outline: none; background: transparent;
+  border: var(--tbl-border-width, 3px) solid var(--tbl-border-color, color-mix(in srgb, currentColor 55%, transparent));
+  padding: 6px 8px; min-width: 6em; height: 28px;
+  vertical-align: middle; text-align: center; position: relative; overflow-wrap: anywhere; word-break: normal; outline: none; background: transparent;
 }
 .note-table td.cell-selected { background: rgba(108,92,231,0.25); }
 .note-table td.box-selected { background: rgba(108,92,231,0.25); }
 .note-table td.cell-editing { background: rgba(127,127,127,0.16); }
-.note-table td.diag { min-width: 64px; height: 40px; }
+.note-table td.diag { min-width: 10em; height: 40px; }
 .note-table td.diag .diag-line { position: absolute; inset: 0; width: 100%; height: 100%; pointer-events: none; z-index: 0; }
-.note-table td.diag .diag-line line { stroke: var(--tbl-border-color, rgba(0,0,0,0.7)); stroke-width: var(--tbl-border-width, 3px); vector-effect: non-scaling-stroke; }
+.note-table td.diag .diag-line line { stroke: var(--tbl-border-color, color-mix(in srgb, currentColor 55%, transparent)); stroke-width: var(--tbl-border-width, 3px); vector-effect: non-scaling-stroke; }
 .note-table td.diag .diag-box {
   position: relative; z-index: 1; display: grid;
   grid-template-columns: 1fr 1fr; grid-template-rows: 1fr 1fr;

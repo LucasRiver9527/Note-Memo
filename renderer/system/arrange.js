@@ -157,12 +157,14 @@ function saveCurrentOrder() {
 // 一键整理：ALWAYS 按当前排序策略/顺序紧凑打包当前可见便签；不恢复快照（恢复是显式操作，见 restoreSavedLayout）。
 // 边界与碰撞：可用宽度 = canvasMaxX - 2*margin（左右对称留白）；超出者视为「超大」，单独放左边界下方一行。
 // 为「被查询/折叠隐藏但共享当前坐标作用域」的普通便签保留固定矩形参与避让，清空筛选后不新暴露重叠。
-function arrangeNotes() {
+// selectedIds is optional: the ordinary arrange action still processes the full visible set.
+function arrangeNotes(selectedIds) {
   const maxX = canvasMaxX();
-  const inViewNotes = visibleNotes();
+  const inViewNotes = visibleNotes().filter((n) => !selectedIds || selectedIds.has(n.id));
   if (!inViewNotes.length) return false; // 无可见结果：不改动任何状态、不提示
   beginUndo(); // UX-30D：显式操作前记录，结束时按是否真变化提交
-  ensureOrder();
+  // Selected-only layout must not normalize or rewrite unrelated ordering settings.
+  if (!selectedIds) ensureOrder();
   const sorted = getSortedNotes(inViewNotes);
   if (!sorted.length) { cancelUndo(); return false; } // 起始后提前返回：丢弃挂起快照，避免污染下一次提交
   const margin = LAYOUT.margin;
@@ -174,8 +176,8 @@ function arrangeNotes() {
   );
   const normals = ordered.filter((n) => !oversize(n.w || LAYOUT.defaultW));
   const bigs = ordered.filter((n) => oversize(n.w || LAYOUT.defaultW));
-  // 固定障碍：与当前可见集共享坐标作用域、但被查询/折叠隐藏的普通便签（排除钉桌与相反归档状态）。
-  const fixed = fixedHiddenRects(inViewNotes);
+  // Every non-moving note in this coordinate scope stays fixed, including visible unselected notes.
+  const fixed = fixedLayoutRects(inViewNotes);
   // 只对普通便签做紧凑打包（含固定障碍避让）。
   const payload = normals.map((n) => ({ id: n.id, w: n.w, h: n.h }));
   const placed = BoardLayout.arrangeCompact(payload, maxX, undefined, fixed);
@@ -207,16 +209,22 @@ function arrangeNotes() {
   return true;
 }
 
-// 与当前可见集共享「坐标作用域」、但被查询/折叠隐藏的普通便签的保留矩形。
+// 仅画布提供选中整理；筛选后残留ID也只能命中当前可见集。
+function arrangeSelectedNotes() {
+  if (state.settings.viewMode !== 'board') return false;
+  return arrangeNotes(selectedNotes);
+}
+
+// 同一坐标作用域中不参与本次整理的固定矩形（含未选中、查询/折叠隐藏的普通便签）。
 // - 排除 desktopPin 与相反归档状态；归档视图用同一 effPos 作用域（effPos 仍取 filter.group，归档忽略分组的选择只影响可见集）。
 // - 位置一律用 effPos(n)（不是无条件 positionAll）：all->positionAll，其余->x,y。
-function fixedHiddenRects(visibleList) {
-  const visIds = new Set(visibleList.map((n) => n.id));
+function fixedLayoutRects(movingList) {
+  const movingIds = new Set(movingList.map((n) => n.id));
   const rects = [];
   state.notes.forEach((n) => {
     if (!n || n.desktopPin) return;
     if (!!n.archived !== !!filter.archive) return;
-    if (visIds.has(n.id)) return; // 可见项本身参与排布，不算固定障碍
+    if (movingIds.has(n.id)) return; // 本次移动的便签不算固定障碍
     let inScope;
     if (filter.archive || filter.group === 'all') inScope = true;
     else if (filter.group === 'ungrouped') inScope = !n.groupId;
@@ -300,7 +308,7 @@ function restoreConflict(targets) {
   return {
     effPos, setEffPos, activeGroupId, layoutScopeKey, canvasMaxX, initAllLayout,
     orderRefFor, sortPanelGid, ensureOrder, getSortedNotes,
-    moveSortBy, moveSortItem, memoReorder, memoReorderAfter, saveCurrentOrder, arrangeNotes,
+    moveSortBy, moveSortItem, memoReorder, memoReorderAfter, saveCurrentOrder, arrangeNotes, arrangeSelectedNotes,
     canRestoreSavedLayout, restoreSavedLayout
   };
 }));

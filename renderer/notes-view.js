@@ -122,7 +122,10 @@ function renderAll() {
     getSortedNotes(visible).forEach((n) => {
       const existing = boardEls.get(n.id);
       const snap = noteFingerprint(n);
-      if (existing && existing.__snap === snap) return;
+      if (existing && existing.__snap === snap) {
+        refreshCardSearch(existing, n);
+        return;
+      }
       const el = buildNoteEl(n);
       el.__snap = snap;
       if (existing) existing.replaceWith(el); else board.appendChild(el);

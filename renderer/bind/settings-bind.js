@@ -12,11 +12,24 @@
 }(typeof self !== 'undefined' ? self : this, function () {
   'use strict';
 
-  // UX-14：设置抽屉（#settingsPanel）键盘/焦点。打开时把主界面 #app 设为 inert 并聚焦面板，
+  // UX-14：设置抽屉（#settingsPanel）键盘/焦点。打开时禁用背景，仅保留设置入口可再次点击，并聚焦面板，
   // Tab/Shift+Tab 在面板内循环，Escape/关闭按钮/点击遮罩关闭并把焦点还给打开它的控件。
-  // 只 inert #app，不波及 body 的其他弹窗兄弟节点（更新说明/确认框/闹铃等）。
+  // 只禁用 #app 内设置入口之外的分支，不波及 body 的其他弹窗兄弟节点（更新说明/确认框/闹铃等）。
   let settingsOpener = null;      // 打开设置前的焦点元素，关闭后归还
-  let settingsAppInert = false;   // 打开前 #app 的 inert 状态，关闭时恢复
+  let settingsBackground = [];  // 保留每个背景分支原有的 inert 状态
+
+  function disableSettingsBackground() {
+    const app = document.getElementById('app');
+    const button = document.getElementById('btnSettings');
+    // Keep the existing button in place; inert all sibling branches up to #app.
+    for (let node = button; node && node !== app; node = node.parentElement) {
+      for (const sibling of node.parentElement.children) {
+        if (sibling === node) continue;
+        settingsBackground.push({ element: sibling, inert: sibling.inert });
+        sibling.inert = true;
+      }
+    }
+  }
 
   // 设置面板之上是否还有更高层模态/按键录制：有则设置键让位，不抢 Tab、也不被 Escape 关闭。
   // 动态弹窗（confirm/prompt/主题编辑器）由 dialogs.js / settings-panel.js 打上 data-modal-overlay 标记。
@@ -59,16 +72,15 @@
     // 已打开且并非关闭动画中：无需重置标签页/动画，避免打断正在进行的入场。
     if (wasVisible && !(panel && panel.classList.contains('sp-closing'))) return;
 
-    const app = document.getElementById('app');
     // 仅真正从关闭态（原先 hidden）打开时才记录原始焦点与 inert —— 且必须在修改 hidden/inert 之前完成。
     if (!wasVisible) {
       settingsOpener = document.activeElement;
-      settingsAppInert = !!(app && app.inert);
+      disableSettingsBackground();
     }
     overlay.classList.remove('hidden');  // 关闭途中重开：overlay 本就可见，no-op
     settingsTransitionGen++;             // 取消旧关闭回调/计时器，作废旧 gen
     clearSettingsCloseHandlers(panel);
-    if (app) app.inert = true;
+    $('#btnSettings').setAttribute('aria-expanded', 'true');
     switchTab('appearance');
     const gen = settingsTransitionGen;
     if (panel) {
@@ -108,8 +120,9 @@
       clearSettingsCloseHandlers(panel);
       if (panel) panel.classList.remove('sp-closing', 'sp-enter');
       overlay.classList.add('hidden');
-      const app = document.getElementById('app');
-      if (app) app.inert = settingsAppInert;
+      for (const { element, inert } of settingsBackground) element.inert = inert;
+      settingsBackground = [];
+      $('#btnSettings').setAttribute('aria-expanded', 'false');
       const opener = settingsOpener;
       settingsOpener = null;
       if (opener && opener.isConnected && typeof opener.focus === 'function') opener.focus({ preventScroll: true });
@@ -169,7 +182,13 @@ function bindSettings() {
     save();
   };
 
-  $('#btnSettings').onclick = openSettingsDrawer;
+  $('#btnSettings').onclick = () => {
+    if (modalAboveSettings()) return;
+    const overlay = $('#settingsOverlay');
+    const panel = $('#settingsPanel');
+    if (overlay.classList.contains('hidden') || panel.classList.contains('sp-closing')) openSettingsDrawer();
+    else closeSettingsDrawer();
+  };
   $('#btnCloseSettings').onclick = closeSettingsDrawer;
   $('#settingsOverlay').onclick = (e) => { if (e.target.id === 'settingsOverlay') closeSettingsDrawer(); };
   document.addEventListener('keydown', onSettingsKeydown);

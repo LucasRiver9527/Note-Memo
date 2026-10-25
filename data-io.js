@@ -183,6 +183,30 @@ function safeRead(filePath, fsx, pathx) {
 
 // 原子写入。成功返回 true，失败返回 false（不抛异常，避免调用方漏接）。
 // 步骤：写 tmp → 旧文件校验通过才复制为 .bak → rename 覆盖 → 失败清理 tmp。
+// 清理策略：只尝试 unlink 本次调用创建的、随机命名的 tmp（绝不扫描/删除历史文件、.bak 或原目标）。
+// 临时 Windows 文件锁（EPERM/EACCES/EBUSY）做有界重试（合计最多 3 次 unlink，无 sleep/自旋/异步）；
+// 成功或 ENOENT 直接结束且不告警，未知错误立即停止；耗尽或未处理时输出一条可操作的残留告警（含准确路径与 code/message，无数据内容）。
+const CLEANUP_MAX_UNLINK = 3;
+const CLEANUP_TRANSIENT_CODES = new Set(['EPERM', 'EACCES', 'EBUSY']);
+
+function cleanupTmp(fs, tmp) {
+  for (let attempt = 1; attempt <= CLEANUP_MAX_UNLINK; attempt++) {
+    try {
+      fs.unlinkSync(tmp);
+      return { cleaned: true, attempts: attempt };
+    } catch (e) {
+      const code = e && e.code;
+      if (code === 'ENOENT') return { cleaned: true, attempts: attempt }; // tmp 未创建成功：无需清理、不告警
+      if (CLEANUP_TRANSIENT_CODES.has(code) && attempt < CLEANUP_MAX_UNLINK) {
+        continue; // 有界重试 Windows 临时文件锁
+      }
+      // 未知错误立即停止；瞬时错误也已耗尽次数
+      return { cleaned: false, attempts: attempt, error: e };
+    }
+  }
+  return { cleaned: false, attempts: CLEANUP_MAX_UNLINK };
+}
+
 function atomicWrite(filePath, data, fsx, pathx) {
   const fs = fsOf(fsx);
   const p = pathOf(pathx);
@@ -224,10 +248,10 @@ function atomicWrite(filePath, data, fsx, pathx) {
     return true;
   } catch (e) {
     console.error('[data-io] 原子写入失败，原文件未受影响：', e.message);
-    try {
-      fs.unlinkSync(tmp);
-    } catch (e2) {
-      /* tmp 可能未创建成功，忽略 */
+    const result = cleanupTmp(fs, tmp);
+    if (!result.cleaned) {
+      const detail = result.error ? `${result.error.code || ''} ${result.error.message || result.error}`.trim() : 'unlink 重试已达上限';
+      console.error(`[data-io] 临时文件清理失败（残留需手动处理）：${tmp}（${detail}）`);
     }
     return false;
   }

@@ -287,27 +287,142 @@ test('atomicWrite 成功后不残留 tmp 文件', () => {
   });
 });
 
+// ---- atomicWrite 临时文件清理：故障注入 ----
+
+// 只清理本次调用创建的 tmp：断言目录里没有 .tmp，且不触碰原文件/.bak
+function tmpNames(dir) { return fs.readdirSync(dir).filter((n) => n.endsWith('.tmp')); }
+const GOOD_V2 = { ...GOOD, notes: [{ id: 'n2' }] };
+
+// 通用故障注入 fs 工厂：记录 rename 源路径与每次 unlink 目标；可自定义 rename 与 unlink 行为。
+function injectFs({ onRename, onUnlink }) {
+  const rec = { renameCalls: [], renameSourceExisted: [], unlinkTargets: [] };
+  const fsx = {
+    writeFileSync: fs.writeFileSync,
+    copyFileSync: fs.copyFileSync,
+    readFileSync: fs.readFileSync,
+    renameSync(from, to) {
+      rec.renameCalls.push(from);
+      rec.renameSourceExisted.push(fs.existsSync(from));
+      return onRename(from, to);
+    },
+    unlinkSync(target) {
+      rec.unlinkTargets.push(target);
+      return onUnlink(target);
+    }
+  };
+  return { fsx, rec };
+}
+
+const renameEperm = () => { const e = new Error('EPERM: rename blocked'); e.code = 'EPERM'; throw e; };
+
+// 捕获 console.error 行；fn() 执行完毕后返回捕获到的所有行（try/finally 保证恢复）。
+function withConsoleErrorSpy(fn) {
+  const origErr = console.error;
+  const lines = [];
+  console.error = (...a) => { lines.push(a.join(' ')); };
+  try { fn(); } finally { console.error = origErr; }
+  return lines;
+}
+
 test('atomicWrite 在 rename 失败时保持原文件完好并清理 tmp', () => {
   withTmp((file, dir) => {
     atomicWrite(file, GOOD); // 建立原文件
     const before = fs.readFileSync(file, 'utf-8');
-
-    const failingFs = {
-      writeFileSync: fs.writeFileSync,
-      copyFileSync: fs.copyFileSync,
-      unlinkSync: fs.unlinkSync,
-      readFileSync: fs.readFileSync,
-      renameSync() {
-        const e = new Error('EPERM: rename failed');
-        e.code = 'EPERM';
-        throw e;
-      }
-    };
-    assert.strictEqual(atomicWrite(file, { notes: 'should-not-land' }, failingFs), false);
-    // 原文件未被破坏，这是原子性的核心保证
+    const { fsx, rec } = injectFs({ onRename: renameEperm, onUnlink: (t) => fs.unlinkSync(t) });
+    assert.strictEqual(atomicWrite(file, GOOD_V2, fsx), false);
+    assert.strictEqual(rec.renameCalls.length, 1, 'rename 必须被调用');
+    assert.strictEqual(rec.renameSourceExisted[0], true, 'rename 前本次 tmp 必须已存在');
+    assert.deepStrictEqual([...new Set(rec.unlinkTargets)], [rec.renameCalls[0]], '清理只应针对本次的一个 tmp');
     assert.strictEqual(fs.readFileSync(file, 'utf-8'), before);
-    const tmps = fs.readdirSync(dir).filter((n) => n.endsWith('.tmp'));
-    assert.deepStrictEqual(tmps, [], 'tmp 应被清理');
+    assert.deepStrictEqual(tmpNames(dir), [], 'tmp 应被清理');
+  });
+});
+
+test('atomicWrite 清理：瞬时 unlink 失败后重试成功（EACCES 与 EBUSY 均可恢复，无残留告警）', () => {
+  for (const code of ['EACCES', 'EBUSY']) {
+    withTmp((file, dir) => {
+      atomicWrite(file, GOOD);
+      const before = fs.readFileSync(file, 'utf-8');
+      let n = 0;
+      const { fsx, rec } = injectFs({
+        onRename: renameEperm,
+        onUnlink: (t) => { n++; if (n === 1) { const e = new Error(`${code}: transient`); e.code = code; throw e; } return fs.unlinkSync(t); }
+      });
+      const lines = withConsoleErrorSpy(() => atomicWrite(file, GOOD_V2, fsx));
+      assert.strictEqual(lines.filter((l) => l.includes('临时文件清理失败')).length, 0, `${code} 恢复后不应有残留告警`);
+      assert.strictEqual(rec.renameCalls.length, 1);
+      assert.strictEqual(rec.unlinkTargets.length, 2, '第一次瞬时失败后应重试一次并成功');
+      assert.deepStrictEqual([...new Set(rec.unlinkTargets)], [rec.renameCalls[0]]);
+      assert.strictEqual(fs.readFileSync(file, 'utf-8'), before);
+      assert.deepStrictEqual(tmpNames(dir), [], 'tmp 最终应被清除');
+    });
+  }
+});
+
+test('atomicWrite 清理：持续性瞬时失败达上限（含完整路径与错误、恰一条残留告警、原文件不变、残留存在、返回 false）', () => {
+  withTmp((file, dir) => {
+    atomicWrite(file, GOOD);
+    const before = fs.readFileSync(file, 'utf-8');
+    const sentinel = path.join(dir, 'unrelated-old.tmp');
+    fs.writeFileSync(sentinel, 'sentinel');
+    const { fsx, rec } = injectFs({ onRename: renameEperm, onUnlink: () => { const e = new Error('EPERM: still locked'); e.code = 'EPERM'; throw e; } });
+    const lines = withConsoleErrorSpy(() => atomicWrite(file, GOOD_V2, fsx));
+    assert.strictEqual(rec.unlinkTargets.length, 3, '合计最多 3 次 unlink');
+    assert.deepStrictEqual([...new Set(rec.unlinkTargets)], [rec.renameCalls[0]], '只针对本次的一个 tmp');
+    assert.strictEqual(fs.readFileSync(file, 'utf-8'), before);
+    const leftovers = tmpNames(dir).filter((n) => n !== 'unrelated-old.tmp');
+    assert.strictEqual(leftovers.length, 1, '清理失败时应留下本次的 tmp');
+    assert.strictEqual(fs.readFileSync(sentinel, 'utf-8'), 'sentinel', '无关旧 tmp 不得被触碰');
+    const residual = lines.filter((l) => l.includes('临时文件清理失败'));
+    assert.strictEqual(residual.length, 1, '应恰有一条残留告警');
+    assert.ok(residual[0].includes(leftovers[0]), '告警应含完整 tmp 文件名');
+    assert.ok(residual[0].includes(dir), '告警应含完整路径（目录），而非仅 basename');
+    assert.match(residual[0], /EPERM/);
+    assert.doesNotMatch(residual[0], /n2/, '告警不得含数据内容');
+  });
+});
+
+test('atomicWrite 清理：tmp 真实消失（注入 rename 时删除源）→ unlink 得真实 ENOENT，不告警', () => {
+  withTmp((file, dir) => {
+    atomicWrite(file, GOOD);
+    const before = fs.readFileSync(file, 'utf-8');
+    let deletedSource = null;
+    const { fsx, rec } = injectFs({
+      onRename: (from) => {
+        assert.strictEqual(fs.existsSync(from), true, '注入删除前源 tmp 必须存在');
+        deletedSource = from;
+        fs.unlinkSync(from);
+        const e = new Error('EPERM: rename blocked'); e.code = 'EPERM'; throw e;
+      },
+      onUnlink: (t) => fs.unlinkSync(t)
+    });
+    const lines = withConsoleErrorSpy(() => atomicWrite(file, GOOD_V2, fsx));
+    assert.strictEqual(rec.unlinkTargets.length, 1, 'ENOENT 应立即结束，不重试');
+    assert.strictEqual(rec.unlinkTargets[0], deletedSource, '清理目标应为被删除的源 tmp');
+    assert.strictEqual(fs.readFileSync(file, 'utf-8'), before);
+    assert.deepStrictEqual(tmpNames(dir), [], '无 tmp 残留');
+    assert.strictEqual(lines.filter((l) => l.includes('临时文件清理失败')).length, 0, 'ENOENT 不应告警');
+  });
+});
+
+test('atomicWrite 清理：意外错误立即停止（仅一次 unlink）、含完整路径并告警、原文件不变、残留存在', () => {
+  withTmp((file, dir) => {
+    atomicWrite(file, GOOD);
+    const before = fs.readFileSync(file, 'utf-8');
+    const { fsx, rec } = injectFs({
+      onRename: renameEperm,
+      onUnlink: () => { const e = new Error('EIO: disk error'); e.code = 'EIO'; throw e; }
+    });
+    const lines = withConsoleErrorSpy(() => atomicWrite(file, GOOD_V2, fsx));
+    assert.strictEqual(rec.unlinkTargets.length, 1, '未知错误应立即停止，不重试');
+    assert.deepStrictEqual([...new Set(rec.unlinkTargets)], [rec.renameCalls[0]]);
+    assert.strictEqual(fs.readFileSync(file, 'utf-8'), before);
+    const leftovers = tmpNames(dir);
+    assert.strictEqual(leftovers.length, 1, '未知错误应留下本次 tmp');
+    const residual = lines.filter((l) => l.includes('临时文件清理失败'));
+    assert.strictEqual(residual.length, 1, '应恰有一条残留告警');
+    assert.ok(residual[0].includes(dir), '告警应含完整路径（目录），而非仅 basename');
+    assert.match(residual[0], /EIO/);
   });
 });
 
