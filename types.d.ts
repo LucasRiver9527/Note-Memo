@@ -24,6 +24,7 @@ interface NoteTable {
   rows: number;
   cols: number;
   cells: string[][];
+  columnWidths?: number[];
   merges: TableMerge[];
   diagonals: TableDiagonal[];
   borderWidth?: number;
@@ -126,6 +127,7 @@ interface AppSettings {
   todoRemindColor?: string | null;
   todoRemindOpacity?: number;
   noteColor?: string;
+  noteColorFollowsTheme?: boolean;
   noteRadius?: number;
   noteShadow?: number;
   noteBorderWidth?: number;

@@ -12,25 +12,6 @@
 }(typeof self !== 'undefined' ? self : this, function () {
   'use strict';
 
-  // UX-14：设置抽屉（#settingsPanel）键盘/焦点。打开时禁用背景，仅保留设置入口可再次点击，并聚焦面板，
-  // Tab/Shift+Tab 在面板内循环，Escape/关闭按钮/点击遮罩关闭并把焦点还给打开它的控件。
-  // 只禁用 #app 内设置入口之外的分支，不波及 body 的其他弹窗兄弟节点（更新说明/确认框/闹铃等）。
-  let settingsOpener = null;      // 打开设置前的焦点元素，关闭后归还
-  let settingsBackground = [];  // 保留每个背景分支原有的 inert 状态
-
-  function disableSettingsBackground() {
-    const app = document.getElementById('app');
-    const button = document.getElementById('btnSettings');
-    // Keep the existing button in place; inert all sibling branches up to #app.
-    for (let node = button; node && node !== app; node = node.parentElement) {
-      for (const sibling of node.parentElement.children) {
-        if (sibling === node) continue;
-        settingsBackground.push({ element: sibling, inert: sibling.inert });
-        sibling.inert = true;
-      }
-    }
-  }
-
   // 设置面板之上是否还有更高层模态/按键录制：有则设置键让位，不抢 Tab、也不被 Escape 关闭。
   // 动态弹窗（confirm/prompt/主题编辑器）由 dialogs.js / settings-panel.js 打上 data-modal-overlay 标记。
   function modalAboveSettings() {
@@ -40,139 +21,52 @@
     return !!document.querySelector('body > [data-modal-overlay]');
   }
 
-  // 面板内「可见且可用」的可聚焦控件（隐藏标签页/禁用项/负 tabindex 不计入）
-  function settingsFocusables() {
+
+  let settingsOpener = null;
+  let inertElements = [];
+
+  function openSettingsPage(opener, page = 'settings') {
     const panel = $('#settingsPanel');
-    if (!panel) return [];
-    return $$('a[href], button, input, select, textarea, [tabindex]:not([tabindex="-1"])', panel)
-      .filter((el) => !el.disabled && el.tabIndex !== -1 && el.offsetParent !== null);
+    if (!panel.classList.contains('hidden')) return;
+    settingsOpener = opener;
+    const workspace = $('#workspaceContent');
+    inertElements = [$('#filterbar'), ...Array.from(workspace.children).filter((el) => el !== panel)]
+      .filter((el) => !el.inert);
+    inertElements.forEach((el) => { el.inert = true; });
+    workspace.classList.add('settings-open');
+    panel.classList.remove('hidden');
+    const isSettings = page === 'settings';
+    panel.classList.toggle('workspace-utility-page', !isSettings);
+    const title = $('#settingsTitle');
+    title.dataset.i18n = page === 'trash' ? 'tab_trash' :
+      page === 'sort' ? 'workspace_edit_order' : 'settings_title';
+    title.textContent = t(title.dataset.i18n);
+    $('#btnSettings').setAttribute('aria-expanded', String(isSettings));
+    switchTab(isSettings ? 'appearance' : page);
+    panel.focus({ preventScroll: true });
+    syncZoomToolbar();
   }
 
-  // UX-31：快速纯平移的关闭动画状态。
-  // gen 代次标记：每次打开/关闭自增，旧一轮的 rAF / transitionend / timeout 回调带着旧 gen 抵达时一律作废，
-  // 既不误关重开的面板，也不残留监听器/遮罩。
-  let settingsTransitionGen = 0;
-  let settingsCloseTimer = 0;   // 关闭兜底计时器句柄
-  let settingsEndHandler = null; // 当前挂载的 transitionend 处理器，便于可靠移除
-
-  // 统一清理当前关闭轮次的监听器与超时；与 gen 解耦，任何一轮结束/被取代都要真正清干净。
-  function clearSettingsCloseHandlers(panel) {
-    if (settingsCloseTimer) { clearTimeout(settingsCloseTimer); settingsCloseTimer = 0; }
-    if (settingsEndHandler) {
-      if (panel) panel.removeEventListener('transitionend', settingsEndHandler);
-      settingsEndHandler = null;
+  function closeSettingsPage() {
+    $('#settingsPanel').classList.add('hidden');
+    $('#workspaceContent').classList.remove('settings-open');
+    inertElements.forEach((el) => { el.inert = false; });
+    inertElements = [];
+    const gear = $('#btnSettings');
+    gear.setAttribute('aria-expanded', 'false');
+    if (settingsOpener instanceof HTMLElement && settingsOpener.isConnected && settingsOpener.getClientRects().length) {
+      settingsOpener.focus({ preventScroll: true });
     }
+    if (document.activeElement !== settingsOpener) gear.focus({ preventScroll: true });
+    settingsOpener = null;
+    syncZoomToolbar();
   }
 
-  function openSettingsDrawer() {
-    const overlay = $('#settingsOverlay');
-    if (!overlay) return;
-    const panel = $('#settingsPanel');
-    const wasVisible = !overlay.classList.contains('hidden'); // 依据 overlay 可见性，而非动画状态
-    // 已打开且并非关闭动画中：无需重置标签页/动画，避免打断正在进行的入场。
-    if (wasVisible && !(panel && panel.classList.contains('sp-closing'))) return;
-
-    // 仅真正从关闭态（原先 hidden）打开时才记录原始焦点与 inert —— 且必须在修改 hidden/inert 之前完成。
-    if (!wasVisible) {
-      settingsOpener = document.activeElement;
-      disableSettingsBackground();
-    }
-    overlay.classList.remove('hidden');  // 关闭途中重开：overlay 本就可见，no-op
-    settingsTransitionGen++;             // 取消旧关闭回调/计时器，作废旧 gen
-    clearSettingsCloseHandlers(panel);
-    $('#btnSettings').setAttribute('aria-expanded', 'true');
-    switchTab('appearance');
-    const gen = settingsTransitionGen;
-    if (panel) {
-      const wasClosing = panel.classList.contains('sp-closing');
-      panel.classList.remove('sp-closing');
-      if (wasClosing) {
-        // 关闭途中重开：直接从当前 transform 返回 0，避免先跳到 sp-enter 起点造成跳动。
-        // 同时清掉上一轮可能遗留的 sp-enter（例如刚入场就关），否则面板会永远停在屏幕外。
-        panel.classList.remove('sp-enter');
-        overlay.scrollLeft = 0;
-      } else {
-        // 首次从关闭态打开：置于 sp-enter 起点，下一帧移除 → 触发 transform 过渡。
-        panel.classList.add('sp-enter');
-        overlay.scrollLeft = 0;
-        requestAnimationFrame(() => {
-          if (gen !== settingsTransitionGen) return; // 陈旧 rAF：新一轮已开始，不再干预
-          panel.classList.remove('sp-enter');
-          overlay.scrollLeft = 0; // 防止焦点/布局导致遮罩横向滚动，最终贴右无缝隙
-        });
-      }
-      panel.focus({ preventScroll: true }); // 关键：preventScroll 避免把遮罩横向滚动、抵消滑动
-    }
-    if (typeof syncZoomToolbar === 'function') syncZoomToolbar();
-  }
-
-  function closeSettingsDrawer() {
-    const overlay = $('#settingsOverlay');
-    if (!overlay || overlay.classList.contains('hidden')) return;
-    const panel = $('#settingsPanel');
-    if (panel && panel.classList.contains('sp-closing')) return; // 已在关闭动画中：重复 close 不叠监听器、不清 opener
-    const gen = ++settingsTransitionGen;  // 新一轮关闭：旧回调/计时器随 gen 作废
-    clearSettingsCloseHandlers(panel);
-
-    // 真正关闭完成：同 gen 内统一清理监听器/计时器，移除动画类，隐藏遮罩，再恢复最初 inert 与原始 opener 焦点。
-    const finalize = () => {
-      if (gen !== settingsTransitionGen) return; // 陈旧回调：期间已重开或被新关闭取代
-      clearSettingsCloseHandlers(panel);
-      if (panel) panel.classList.remove('sp-closing', 'sp-enter');
-      overlay.classList.add('hidden');
-      for (const { element, inert } of settingsBackground) element.inert = inert;
-      settingsBackground = [];
-      $('#btnSettings').setAttribute('aria-expanded', 'false');
-      const opener = settingsOpener;
-      settingsOpener = null;
-      if (opener && opener.isConnected && typeof opener.focus === 'function') opener.focus({ preventScroll: true });
-      if (typeof syncZoomToolbar === 'function') syncZoomToolbar();
-    };
-
-    if (panel) {
-      panel.classList.add('sp-closing');
-      settingsEndHandler = (e) => {
-        if (e.target !== panel || e.propertyName !== 'transform') return;
-        finalize();
-      };
-      panel.addEventListener('transitionend', settingsEndHandler);
-      // 兜底：未触发 transitionend 时也能完成（reduced/no-transition 已在下方同步完成，不会走到计时器）。
-      settingsCloseTimer = setTimeout(finalize, 200);
-      // 无可用过渡（prefers-reduced-motion / 无过渡时长）时同步完成，不等待计时器。
-      const reduce = typeof matchMedia === 'function' && matchMedia('(prefers-reduced-motion: reduce)').matches;
-      if (reduce || !settingsHasTransition(panel)) finalize();
-    } else {
-      finalize();
-    }
-  }
-
-  // 面板是否存在 transform 过渡时长（无过渡时不应等待 transitionend/兜底计时器）。
-  function settingsHasTransition(panel) {
-    if (!panel || typeof getComputedStyle !== 'function') return false;
-    const d = getComputedStyle(panel).transitionDuration || '';
-    return d.split(',').some((v) => parseFloat(v) > 0);
-  }
-
-  // 全局捕获：焦点可能因更高层弹窗关闭而落到 body，故监听 document 而非仅面板。
-  // 快捷键录制在捕获阶段 stopPropagation，不会到达这里（录制自己的 Escape 由录制器处理）。
-  function onSettingsKeydown(e) {
-    const overlay = $('#settingsOverlay');
-    if (!overlay || overlay.classList.contains('hidden')) return;
-    if (e.defaultPrevented || modalAboveSettings()) return;
-    if (e.key === 'Escape') {
-      e.preventDefault();
-      closeSettingsDrawer();
-      return;
-    }
-    if (e.key !== 'Tab') return;
-    const focusables = settingsFocusables();
-    if (!focusables.length) return;
-    const idx = focusables.indexOf(document.activeElement);
-    const next = e.shiftKey
-      ? (idx <= 0 ? focusables.length - 1 : idx - 1)
-      : (idx === -1 || idx === focusables.length - 1 ? 0 : idx + 1);
-    e.preventDefault();
-    focusables[next].focus();
+  function onSettingsKeydown(event) {
+    if (event.key !== 'Escape' || event.defaultPrevented || modalAboveSettings() ||
+        $('#settingsPanel').classList.contains('hidden')) return;
+    event.preventDefault();
+    closeSettingsPage();
   }
 
 function bindSettings() {
@@ -184,13 +78,31 @@ function bindSettings() {
 
   $('#btnSettings').onclick = () => {
     if (modalAboveSettings()) return;
-    const overlay = $('#settingsOverlay');
     const panel = $('#settingsPanel');
-    if (overlay.classList.contains('hidden') || panel.classList.contains('sp-closing')) openSettingsDrawer();
-    else closeSettingsDrawer();
+    const gear = $('#btnSettings');
+    if (panel.classList.contains('hidden')) {
+      openSettingsPage(gear);
+    } else if (panel.classList.contains('workspace-utility-page')) {
+      closeSettingsPage();
+      openSettingsPage(gear);
+    } else {
+      closeSettingsPage();
+    }
   };
-  $('#btnCloseSettings').onclick = closeSettingsDrawer;
-  $('#settingsOverlay').onclick = (e) => { if (e.target.id === 'settingsOverlay') closeSettingsDrawer(); };
+  $('#btnWorkspaceTrash').onclick = () => {
+    if (!modalAboveSettings()) openSettingsPage($('#btnWorkspaceTrash'), 'trash');
+  };
+
+  $('#btnWorkspaceSort').onclick = () => {
+    if (modalAboveSettings()) return;
+    const sortMode = $('#sortMode');
+    if (state.settings.sortMode !== 'custom') {
+      sortMode.value = 'custom';
+      sortMode.dispatchEvent(new Event('change'));
+    }
+    openSettingsPage($('#btnToolbarMore'), 'sort');
+  };
+  $('#btnCloseSettings').onclick = closeSettingsPage;
   document.addEventListener('keydown', onSettingsKeydown);
 
   // 关闭确认弹窗按钮

@@ -441,7 +441,13 @@
     let ts = '';
     if (tbl.textColor) ts += 'color:' + sanitizeCss(tbl.textColor) + ';';
     if (isCssNumber(tbl.fontSize)) ts += 'font-size:' + clampNum(tbl.fontSize, 0, 0, 999) + 'px;';
-    return `<div class="note-table-block" contenteditable="false" data-table-id="${escapeHtml(tbl.id)}" tabindex="0"><table class="note-table" style="--tbl-border-width:${bw}px;--tbl-border-color:${bc};${ts}">${html}</table></div>`;
+    const widths = Array.isArray(tbl.columnWidths) && tbl.columnWidths.length === cols &&
+      tbl.columnWidths.every((width) => Number.isInteger(width) && width >= 56 && width <= 1200)
+      ? tbl.columnWidths : null;
+    const columns = Array.from({ length: cols }, (_, c) =>
+      widths ? `<col style="width:${widths[c]}px">` : '<col>').join('');
+    if (widths) ts += `table-layout:fixed;width:${widths.reduce((total, width) => total + width, 0)}px;`;
+    return `<div class="note-table-block" contenteditable="false" data-table-id="${escapeHtml(tbl.id)}" tabindex="0"><table class="note-table" style="--tbl-border-width:${bw}px;--tbl-border-color:${bc};${ts}"><colgroup>${columns}</colgroup>${html}</table></div>`;
   }
 
   function renderRichContent(text, n, opts) {

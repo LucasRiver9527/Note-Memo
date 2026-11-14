@@ -216,6 +216,16 @@ function clearRecovery(kind, id, token, savedData) {
   writeRecovery(next);
 }
 
+const DETACHED_EDIT_FIELDS = ['title', 'content', 'items', 'images', 'files', 'tables', 'color', 'textColor', 'opacity', 'fontSize', 'fontFamily', 'updatedAt'];
+
+function mergeDetachedEdits(baseNote, editedNote) {
+  const merged = { ...baseNote };
+  for (const field of DETACHED_EDIT_FIELDS) {
+    if (field in editedNote) merged[field] = editedNote[field];
+  }
+  return merged;
+}
+
 function recoveryCandidate(base) {
   const current = readRecovery();
   if (!current) return null;
@@ -227,8 +237,8 @@ function recoveryCandidate(base) {
   candidate.notes = candidate.notes || [];
   for (const item of entries) {
     const index = candidate.notes.findIndex((n) => n.id === item.note.id);
-    if (index >= 0) candidate.notes[index] = item.note;
-    else candidate.notes.push(item.note);
+    if (index >= 0) candidate.notes[index] = mergeDetachedEdits(candidate.notes[index], item.note);
+    else if (!(candidate.trash || []).some((entry) => entry.note?.id === item.note.id)) candidate.notes.push(item.note);
   }
   return candidate;
 }
@@ -772,7 +782,7 @@ function setupIpc() {
   // 可能仍是钉桌前的旧值（主窗防抖保存与独立窗编辑交错时），落盘前以磁盘上独立窗口的
   // 最新版本为准；其余字段（如 reminder.fired、分组、位置、desktopPin）仍采用主窗快照，
   // 避免把主窗侧的非编辑变更一起回退。
-  const DETACHED_EDIT_FIELDS = ['title', 'content', 'items', 'images', 'files', 'tables', 'color', 'textColor', 'opacity', 'fontSize', 'fontFamily', 'updatedAt'];
+
   guardedHandle('data:save', async (e, data, opts) => {
     if (!DataIO.isValidDataShape(data)) {
       throw new Error('invalid data shape: 拒绝写入非法数据结构，以保护现有存档');
@@ -790,11 +800,7 @@ function setupIpc() {
           if (!n || !detachedWindows.has(n.id) || n.desktopPin === false) return n;
           const diskNote = diskById.get(n.id);
           if (!diskNote) return n;
-          const merged = { ...n };
-          for (const f of DETACHED_EDIT_FIELDS) {
-            if (f in diskNote) merged[f] = diskNote[f];
-          }
-          return merged;
+          return mergeDetachedEdits(n, diskNote);
         });
       }
     }

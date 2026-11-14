@@ -84,6 +84,17 @@ async function stableClick(locator) {
   await locator.click({ force: true });
 }
 
+async function clickLayoutAction(win, id) {
+  const trigger = win.locator('#btnToolbarMore');
+  if (await trigger.getAttribute('aria-expanded') !== 'true') await trigger.click();
+  await win.locator('#' + id).click();
+}
+
+async function pinBoardNote(win) {
+  await win.evaluate(() => document.activeElement?.blur());
+  await win.locator('#board .note .t-desktop').first().press('Enter');
+}
+
 test('应用可启动，preload 注入与版本号来自 package.json', async () => {
   const ctx = await openApp();
   try {
@@ -178,15 +189,18 @@ test('最小窗口宽度下搜索与新建互不遮挡，次要操作可从菜�
     expect(bounds.search.width).toBeGreaterThan(200);
     await ctx.win.locator('#searchInput').fill('可用搜索');
     await ctx.win.locator('#searchInput').fill('');
+    await expect(ctx.win.locator('#btnQuickArrange')).toBeInViewport();
+    await ctx.win.getByRole('button', { name: '一键整理', exact: true }).click();
+    await expect(ctx.win.locator('#toolbarMoreMenu')).toBeHidden();
     await stableClick(ctx.win.locator('#btnToolbarMore'));
-    await expect(ctx.win.locator('#btnQuickArrange')).toBeVisible();
     await expect(ctx.win.locator('#btnSaveOrder')).toBeVisible();
+    await ctx.win.keyboard.press('Escape');
     await stableClick(ctx.win.locator('#btnBatchToggle'));
     await expect(ctx.win.locator('#toolbarMoreMenu')).toBeHidden();
     await expect(ctx.win.locator('body')).toHaveClass(/multi-select/);
     await ctx.electronApp.evaluate(({ BrowserWindow }) => BrowserWindow.getAllWindows()[0].setSize(1300, 800));
-    await expect(ctx.win.locator('#toolbarMoreWrap')).toBeHidden();
-    await expect(ctx.win.locator('#btnQuickArrange')).toBeVisible();
+    await expect(ctx.win.locator('#btnToolbarMore')).toBeVisible();
+    await expect(ctx.win.locator('#toolbarMoreMenu')).toBeHidden();
   } finally { await closeApp(ctx); }
 });
 
@@ -277,10 +291,10 @@ test('画布、备忘录和文档搜索无结果时有清除入口，真实空�
   } finally { await closeApp(ctx); }
 });
 
-test('搜索框在换行时铺满整行，在宽窗口随可用空间伸长', async () => {
+test('窄窗搜索铺满整行，中窗工具保持同排，宽窗搜索限宽', async () => {
   const ctx = await openApp({ seed: searchViewSeed() });
   try {
-    const sizes = [640, 800, 1024, 1050, 1052, 1200, 1600];
+    const sizes = [640, 800, 1024, 1080, 1200, 1320, 1600];
     const inputWidths = {};
     for (const width of sizes) {
       await ctx.electronApp.evaluate(({ BrowserWindow }, w) => BrowserWindow.getAllWindows()[0].setSize(w, 700), width);
@@ -289,21 +303,31 @@ test('搜索框在换行时铺满整行，在宽窗口随可用空间伸长', as
         const search = document.querySelector('.search-box').getBoundingClientRect();
         const input = document.querySelector('#searchInput').getBoundingClientRect();
         const add = document.querySelector('#btnAdd').getBoundingClientRect();
+        const toolbar = document.querySelector('.workspace-toolbar').getBoundingClientRect();
+        const controls = document.querySelector('.workspace-actions').getBoundingClientRect();
+        const heading = document.querySelector('.workspace-heading').getBoundingClientRect();
         return { width: window.innerWidth, search: { left: search.left, right: search.right, top: search.top },
-          inputWidth: input.width, add: { left: add.left, bottom: add.bottom } };
+          inputWidth: input.width, searchWidth: search.width, controlsTop: controls.top, controlsRight: controls.right, headingRight: heading.right, toolbarLeft: toolbar.left, add: { bottom: add.bottom } };
       });
       expect(Math.abs(bounds.width - width)).toBeLessThanOrEqual(2);
       inputWidths[width] = bounds.inputWidth;
-      if (bounds.width <= 1050) {
-        expect(bounds.search.left).toBeLessThanOrEqual(16);
+      if (bounds.width <= 820) {
+        expect(bounds.search.left - bounds.toolbarLeft).toBeCloseTo(16, 0);
         expect(bounds.search.right).toBeGreaterThanOrEqual(bounds.width - 16);
         expect(bounds.search.top).toBeGreaterThanOrEqual(bounds.add.bottom);
       } else {
-        expect(bounds.inputWidth).toBeGreaterThan(150);
-        expect(bounds.add.left - bounds.search.right).toBeLessThanOrEqual(20);
+        expect(bounds.inputWidth).toBeGreaterThan(110);
+        expect(bounds.searchWidth).toBeLessThanOrEqual(bounds.width >= 1320 ? 681 : 461);
+        expect(Math.abs(bounds.controlsTop - bounds.search.top)).toBeLessThan(6);
+        if (bounds.width >= 1320) {
+          expect(bounds.search.left).toBeGreaterThan(bounds.headingRight);
+          expect(bounds.controlsRight).toBeCloseTo(bounds.width - 16, 0);
+        } else {
+          expect(bounds.search.left).toBeGreaterThan(bounds.toolbarLeft);
+        }
       }
     }
-    expect(inputWidths[1600] - inputWidths[1200]).toBeGreaterThan(300);
+    expect(inputWidths[1600] - inputWidths[1320]).toBeGreaterThan(100);
   } finally { await closeApp(ctx); }
 });
 
@@ -352,7 +376,7 @@ test('钉窗(note.html)：钉桌可打开并显示便签标题', async () => {
 
     // 订阅新窗口事件（需在触发动作前），点击「钉到桌面」
     const noteWinPromise = ctx.electronApp.waitForEvent('window');
-    await ctx.win.locator('#board .note .t-desktop').first().click({ force: true });
+    await pinBoardNote(ctx.win);
     const noteWin = await noteWinPromise;
     await noteWin.waitForLoadState('domcontentloaded');
 
@@ -432,7 +456,7 @@ for (const entry of ['board', 'doc', 'context']) {
         ipcMain.removeHandler('data:save');
         ipcMain.handle('data:save', () => { throw new Error('模拟磁盘写入失败'); });
       });
-      if (entry === 'board') await stableClick(ctx.win.locator('#board .note .t-desktop').first());
+      if (entry === 'board') await pinBoardNote(ctx.win);
       else if (entry === 'doc') await stableClick(ctx.win.locator('#btnDocDesktop'));
       else await stableClick(ctx.win.locator('.ctx-menu button', { hasText: '钉在桌面' }).first());
       await expect(ctx.win.locator('#toast')).toContainText('保存失败');
@@ -460,7 +484,7 @@ test('主进程拒绝钉桌时不隐藏便签，也不显示成功提示', async
       ipcMain.removeHandler('note:pin');
       ipcMain.handle('note:pin', () => false);
     });
-    await stableClick(ctx.win.locator('#board .note .t-desktop').first());
+    await pinBoardNote(ctx.win);
     await expect(ctx.win.locator('#toast')).toContainText('钉到桌面失败');
     await expect(ctx.win.locator('#board .note')).toHaveCount(1);
     expect(await ctx.win.evaluate(() => state.notes[0].desktopPin)).toBe(false);
@@ -474,7 +498,7 @@ test('钉窗取消置顶前保存最后一次编辑', async () => {
     await stableClick(ctx.win.locator('#btnAdd'));
     await ctx.win.locator('#board .note .note-title').first().fill('原始标题');
     const noteWinPromise = ctx.electronApp.waitForEvent('window');
-    await stableClick(ctx.win.locator('#board .note .t-desktop').first());
+    await pinBoardNote(ctx.win);
     const noteWin = await noteWinPromise;
     await expect(noteWin.locator('#dnTitle')).toHaveValue('原始标题');
     await noteWin.locator('#dnTitle').fill('取消置顶前的最后编辑');
@@ -494,9 +518,9 @@ test('钉窗保存失败时取消置顶被阻止并显示警告', async () => {
   try {
     await stableClick(ctx.win.locator('#btnAdd'));
     const noteWinPromise = ctx.electronApp.waitForEvent('window');
-    await stableClick(ctx.win.locator('#board .note .t-desktop').first());
+    await pinBoardNote(ctx.win);
     const noteWin = await noteWinPromise;
-    await expect(noteWin.locator('#dnTitle')).toBeVisible();
+    await noteWin.waitForFunction(() => !!document.querySelector('#dnBody').firstElementChild);
     await ctx.electronApp.evaluate(({ ipcMain }) => {
       ipcMain.removeHandler('note:update');
       ipcMain.handle('note:update', () => false);
@@ -514,7 +538,7 @@ test('主窗口发起取消置顶时，独立便签保存失败则不关闭', as
     await stableClick(ctx.win.locator('#btnAdd'));
     const id = await ctx.win.locator('#board .note').first().getAttribute('data-id');
     const noteWinPromise = ctx.electronApp.waitForEvent('window');
-    await stableClick(ctx.win.locator('#board .note .t-desktop').first());
+    await pinBoardNote(ctx.win);
     const noteWin = await noteWinPromise;
     await expect(noteWin.locator('#dnTitle')).toBeVisible();
     await ctx.electronApp.evaluate(({ ipcMain }) => {
@@ -536,7 +560,7 @@ async function ux01ReadData(userDataDir) {
 
 async function ux01PinFirstCard(ctx) {
   const noteWinPromise = ctx.electronApp.waitForEvent('window');
-  await stableClick(ctx.win.locator('#board .note .t-desktop').first());
+  await pinBoardNote(ctx.win);
   const noteWin = await noteWinPromise;
   await noteWin.waitForLoadState('domcontentloaded');
   return noteWin;
@@ -670,7 +694,7 @@ test('UX-01 主窗保存其他便签的旧快照不会覆盖独立窗编辑，�
   try {
     // 钉桌第二张便签（订阅事件后再触发，避免与启动时序竞态）
     const noteWinPromise = ctx.electronApp.waitForEvent('window');
-    await stableClick(ctx.win.locator('#board .note[data-id="ux01-pinned"] .t-desktop'));
+    await ctx.win.locator('#board .note[data-id="ux01-pinned"] .t-desktop').evaluate(button => button.click());
     const noteWin = await noteWinPromise;
     await noteWin.waitForLoadState('domcontentloaded');
     await expect(noteWin.locator('#dnTitle')).toHaveValue('独立便签');
@@ -2256,7 +2280,7 @@ test('UX-20A 桌面便签摘要：计数/只读标题/普通与键盘唤起同�
     await stableClick(ctx.win.locator('#btnAdd'));
     await ctx.win.locator('#board .note .note-title').first().fill('桌面一');
     const noteWinPromise = ctx.electronApp.waitForEvent('window');
-    await stableClick(ctx.win.locator('#board .note .t-desktop').first());
+    await pinBoardNote(ctx.win);
     const noteWin = await noteWinPromise;
     await noteWin.waitForLoadState('domcontentloaded');
     await expect(noteWin.locator('#dnTitle')).toHaveValue('桌面一');
@@ -2329,6 +2353,7 @@ test('UX-20A 桌面便签摘要：计数/只读标题/普通与键盘唤起同�
     await ctx.win.waitForTimeout(250);
     await expect(ctx.win.locator('#desktopNotesSummary')).toContainText('Desktop notes');
     await expect(ctx.win.locator('#btnDesktopNotesClose')).toHaveText('Collapse');
+    await ctx.win.locator('#btnWorkspaceNav').click();
     // 展开后普通点击行（窄窗玻璃背景）
     if ((await ctx.win.locator('#desktopNotes').getAttribute('open')) === null) await ctx.win.locator('#desktopNotesSummary').click();
     await ctx.win.locator('.dn-row').first().click();
@@ -2362,7 +2387,7 @@ test('UX-20A 唤起缺失窗口安全重建；非钉桌/未知 id 与独立窗�
     await stableClick(ctx.win.locator('#btnAdd'));
     await ctx.win.locator('#board .note .note-title').first().fill('重建标题');
     const p = ctx.electronApp.waitForEvent('window');
-    await stableClick(ctx.win.locator('#board .note .t-desktop').first());
+    await pinBoardNote(ctx.win);
     const w1 = await p;
     await w1.waitForLoadState('domcontentloaded');
     await expect(w1.locator('#dnTitle')).toHaveValue('重建标题');
@@ -2479,7 +2504,7 @@ test('UX-20A 摘要随取消钉桌/删除/成功导入刷新，陈旧行 API 拒
       await stableClick(ctx.win.locator('#btnAdd'));
       await ctx.win.locator('#board .note .note-title').last().fill(title);
       const p = ctx.electronApp.waitForEvent('window');
-      await stableClick(ctx.win.locator('#board .note .t-desktop').first());
+      await pinBoardNote(ctx.win);
       const w = await p;
       await w.waitForLoadState('domcontentloaded');
     }
@@ -3145,7 +3170,7 @@ test('钉窗深度编辑：改标题同步持久化到数据', async () => {
     await ctx.win.locator('#board .note .note-title').first().fill('钉窗原始标题');
 
     const noteWinPromise = ctx.electronApp.waitForEvent('window');
-    await ctx.win.locator('#board .note .t-desktop').first().click({ force: true });
+    await pinBoardNote(ctx.win);
     const noteWin = await noteWinPromise;
     await noteWin.waitForLoadState('domcontentloaded');
     await expect(noteWin.locator('#dnTitle')).toHaveValue('钉窗原始标题');
@@ -3224,7 +3249,7 @@ test('外观可读性：设背景图自动 bright-bg，清除后取消', async (
 
 // —— P5 增量渲染：画布内只更新变化卡片，其余保留 ——
 test('P5 增量渲染：画布内切换置顶后其余便签内容保留', async () => {
-  const ctx = await openApp();
+  const ctx = await openApp({ seed: { version: 2, settings: { noteToolbarCompact: false } } });
   try {
     // 建两张便签并各输入内容
     for (let i = 1; i <= 2; i++) {
@@ -3273,7 +3298,7 @@ test('保存排序在「全部」视图生效：拖动后保存不弹回，顺�
       setEffPos(a, 500, 20);
     });
     // 保存当前排序
-    await stableClick(ctx.win.locator('#btnSaveOrder'));
+    await clickLayoutAction(ctx.win, 'btnSaveOrder');
     const res = await ctx.win.evaluate(() => {
       const a = state.notes.find((n) => n.id === 'a');
       const b = state.notes.find((n) => n.id === 'b');
@@ -3310,7 +3335,7 @@ test('切换分组再切回「全部」不改变已保存的布局', async () =>
   try {
     await expect(ctx.win.locator('#noteCount')).toHaveText('2');
     // 保存当前排序（记录「全部」布局）
-    await stableClick(ctx.win.locator('#btnSaveOrder'));
+    await clickLayoutAction(ctx.win, 'btnSaveOrder');
     // 切到分组 g1，再切回「全部」
     await stableClick(ctx.win.locator('#groupChips .chip').first());
     await stableClick(ctx.win.locator('#filterbar .chip[data-group="all"]'));
@@ -3349,8 +3374,8 @@ test('保存当前排序后备忘录列表保持顺序且跨视图一致', async
     const noteOrder = () => ctx.win.evaluate(() => state.settings.noteOrder.slice());
     const memoDom = () => ctx.win.evaluate(() => Array.from(document.querySelectorAll('#memoList .memo-row')).map((r) => r.dataset.id));
     // 便签视图：保存按钮可见，点击后按画布位置记录顺序 a,b,c
-    await expect(ctx.win.locator('#btnSaveOrder')).toBeVisible();
-    await stableClick(ctx.win.locator('#btnSaveOrder'));
+    await expect(ctx.win.locator('#btnToolbarMore')).toBeVisible();
+    await clickLayoutAction(ctx.win, 'btnSaveOrder');
     expect(await noteOrder()).toEqual(['a', 'b', 'c']);
     // 切备忘录：按保存后的顺序显示（而非按 updatedAt）
     await stableClick(ctx.win.locator('#viewMemo'));
@@ -3390,7 +3415,7 @@ test('UX-30B arrange follows changed custom order despite old saved layout (no i
     const pos = (id) => win.evaluate((i) => { const n = state.notes.find((x) => x.id === i); return { x: n.positionAll.x, y: n.positionAll.y }; }, id);
 
     // 保存当前排序与布局（记录快照 a/b/c）
-    await win.locator('#btnSaveOrder').click();
+    await clickLayoutAction(win, 'btnSaveOrder');
     const savedA = await pos('a');
     const snapBefore = await win.evaluate(() => JSON.stringify(state.settings.orderLayouts));
 
@@ -3437,7 +3462,7 @@ test('UX-30B explicit restore recovers saved positions independent of sortMode, 
     const pos = (id) => win.evaluate((i) => { const n = state.notes.find((x) => x.id === i); return { x: n.positionAll.x, y: n.positionAll.y }; }, id);
 
     // 保存布局（快照 a/b/c 在「全部」作用域）
-    await win.locator('#btnSaveOrder').click();
+    await clickLayoutAction(win, 'btnSaveOrder');
     // 打乱并加一个未保存的可见新便签
     await win.evaluate(() => {
       setEffPos(state.notes.find((n) => n.id === 'a'), 900, 500);
@@ -3544,7 +3569,7 @@ test('UX-30C explicit restore keeps exact coords even when oversized, warns visi
     const win = ctx.win;
     await expect(win.locator('#noteCount')).toHaveText('2');
     const pos = (id) => win.evaluate((i) => { const n = state.notes.find((x) => x.id === i); return { x: n.positionAll.x, y: n.positionAll.y }; }, id);
-    await win.locator('#btnSaveOrder').click(); // 保存布局（a 20,20 / b 300,20）
+    await clickLayoutAction(win, 'btnSaveOrder'); // 保存布局（a 20,20 / b 300,20）
     const snapBefore = await win.evaluate(() => JSON.stringify(state.settings.orderLayouts));
     // 缩窄主窗到 640（minWidth 可能钳制），等待渲染后按「实际画布宽」定义超大宽度
     await ctx.electronApp.evaluate(({ BrowserWindow }) => { const w = BrowserWindow.getAllWindows().find((x) => x.webContents.getURL().includes('renderer/index.html')); w.setBounds({ width: 640, height: 700 }); });
@@ -3576,7 +3601,7 @@ test('UX-30C explicit restore keeps exact coords even when oversized, warns visi
     await expect(win.locator('#toast')).toContainText('一键整理');
     // 原快照保持未变
     expect(await win.evaluate(() => JSON.stringify(state.settings.orderLayouts))).toBe(snapBefore);
-    // 一键整理：按当前尺寸处理（设置组织区的 #btnArrange 在窄窗仍可见；顶栏 #btnQuickArrange 在 640 会被收进 More 菜单）
+    // 一键整理：按当前尺寸处理（设置组织区的 #btnArrange 在窄窗仍可见；顶栏 #btnQuickArrange 在 640 以图标直达）
     await win.locator('#btnArrange').click();
     await win.locator('#btnCloseSettings').click();
     await win.waitForTimeout(150);
@@ -3629,7 +3654,7 @@ test('UX-30D undo/redo layout chain: save changes mode+snapshot, undo restores, 
     // 1) 保存排序（updated -> custom，含快照）
     const layoutsBefore = await layouts();
     const h0 = await hist();
-    await win.locator('#btnSaveOrder').click();
+    await clickLayoutAction(win, 'btnSaveOrder');
     expect(await mode()).toBe('custom');
     const layoutsCustom = await layouts();
     expect(layoutsCustom).not.toBe(layoutsBefore);
@@ -3657,7 +3682,7 @@ test('UX-30D undo/redo layout chain: save changes mode+snapshot, undo restores, 
     expect({ a: await pos('a'), b: await pos('b') }).toEqual(arranged);
 
     // 3) 重复无变化：当前已就位，保存一次「已 arranged 的布局快照」后撤销该保存（坐标仍 arranged，redo 含该保存）
-    await win.locator('#btnSaveOrder').click();
+    await clickLayoutAction(win, 'btnSaveOrder');
     const savedArrangedLayouts = await layouts();
     await win.locator('#btnUndo').click();
     // 坐标依旧 arranged（保存不改坐标）；redo 可重放该保存
@@ -3672,7 +3697,7 @@ test('UX-30D undo/redo layout chain: save changes mode+snapshot, undo restores, 
     expect(await layouts()).toBe(savedArrangedLayouts);
 
     // 4) 显式恢复：移动后恢复保存坐标，可撤销/重做；重复（无变化）不入栈
-    await win.locator('#btnSaveOrder').click();
+    await clickLayoutAction(win, 'btnSaveOrder');
     const saved = { a: await pos('a'), b: await pos('b') };
     await win.evaluate(() => { setEffPos(state.notes.find((n) => n.id === 'a'), 900, 900); renderAll(); });
     const moved = await pos('a');
@@ -3743,7 +3768,7 @@ test('UX-30D group scope: arrange/save x,y vs positionAll independent; zero quer
     expect(await xyOf('a')).toEqual(arrangedXY.a);
     expect(await xyOf('b')).toEqual(arrangedXY.b);
     // 保存（分组作用域）：仅动组内顺序/快照作用域；撤销后 positionAll 仍自基准不变
-    await win.locator('#btnSaveOrder').click();
+    await clickLayoutAction(win, 'btnSaveOrder');
     await win.locator('#btnUndo').click();
     expect(await paOf('a')).toEqual(base.a);
     expect(await paOf('b')).toEqual(base.b);
@@ -3753,7 +3778,7 @@ test('UX-30D group scope: arrange/save x,y vs positionAll independent; zero quer
     await expect(win.locator('#board .note')).toHaveCount(0);
     const hZero = await hist();
     await win.locator('#btnQuickArrange').click();
-    await win.locator('#btnSaveOrder').click();
+    await clickLayoutAction(win, 'btnSaveOrder');
     await win.waitForTimeout(150);
     expect(await hist()).toEqual(hZero);
     // 清空查询、无作用域快照 -> 恢复按钮禁用；内部 restore 返回 false 且历史不变
@@ -3840,42 +3865,65 @@ test('文档视图：拖动选择项(指针)重排便签顺序', async () => {
 });
 
 // —— 顶栏「一键整理 / 保存当前排序」只在便签视图显示 ——
-test('一键整理/保存排序按钮只在便签视图显示', async () => {
-  const now = Date.now();
-  const mk = (id, title, x, y) => ({
-    id, title, content: '内容' + id, type: 'note', items: [], images: [], files: [], tables: [],
-    color: '#93f1ce', textColor: null, groupId: null, pinned: false, desktopPin: false, reminder: null,
-    x, y, positionAll: { x, y }, w: 240, h: 200, z: 1, createdAt: 1000 + x, updatedAt: 1000 + x
-  });
-  const seed = {
-    version: 2,
-    settings: { viewMode: 'board', sortMode: 'updated' },
-    groups: [], trash: [],
-    notes: [mk('a', 'A', 20, 20), mk('b', 'B', 280, 20), mk('c', 'C', 540, 20)]
-  };
-  const ctx = await openApp({ seed });
+test('工作区工具栏：四个视图切换时控件位置固定，画布命令按需出现', async () => {
+  const ctx = await openApp({ seed: searchViewSeed() });
+  const { win } = ctx;
   try {
-    await expect(ctx.win.locator('#noteCount')).toHaveText('3');
-    // 便签视图：两个按钮显示
-    await expect(ctx.win.locator('#btnQuickArrange')).toBeVisible();
-    await expect(ctx.win.locator('#btnSaveOrder')).toBeVisible();
-    // 备忘录 / 待办 / 文档：隐藏
-    await stableClick(ctx.win.locator('#viewMemo'));
-    await expect(ctx.win.locator('#btnQuickArrange')).toBeHidden();
-    await expect(ctx.win.locator('#btnSaveOrder')).toBeHidden();
-    await stableClick(ctx.win.locator('#viewTodo'));
-    await expect(ctx.win.locator('#btnQuickArrange')).toBeHidden();
-    await expect(ctx.win.locator('#btnSaveOrder')).toBeHidden();
-    await stableClick(ctx.win.locator('#viewDoc'));
-    await expect(ctx.win.locator('#btnQuickArrange')).toBeHidden();
-    await expect(ctx.win.locator('#btnSaveOrder')).toBeHidden();
-    // 切回便签视图：重新显示
-    await stableClick(ctx.win.locator('#viewBoard'));
-    await expect(ctx.win.locator('#btnQuickArrange')).toBeVisible();
-    await expect(ctx.win.locator('#btnSaveOrder')).toBeVisible();
-  } finally {
-    await closeApp(ctx);
-  }
+    const trigger = win.locator('#btnToolbarMore');
+    const menu = win.locator('#toolbarMoreMenu');
+    const positions = () => win.evaluate(() => [
+      '#searchInput', '#viewBoard', '#viewMemo', '#viewTodo', '#viewDoc',
+      '#btnBatchToggle', '#btnUndo', '#btnRedo', '#btnToolbarMore'
+    ].map(id => {
+      const { x, y, width, height } = document.querySelector(id).getBoundingClientRect();
+      return [x, y, width, height];
+    }));
+    for (const width of [1480, 1280, 640]) {
+      await ctx.electronApp.evaluate(({ BrowserWindow }, w) => {
+        BrowserWindow.getAllWindows()[0].setSize(w, 700);
+      }, width);
+      await expect.poll(() => win.evaluate(() => innerWidth)).toBe(width);
+      await win.locator('#viewBoard').click();
+      const baseline = await positions();
+      for (const view of ['Memo', 'Todo', 'Doc', 'Board']) {
+        await win.locator('#view' + view).click();
+        await expect(win.locator('#view' + view)).toHaveAttribute('aria-pressed', 'true');
+        expect(await positions()).toEqual(baseline);
+        await trigger.focus();
+        await win.keyboard.press('ArrowDown');
+        await expect(menu).toBeVisible();
+        await expect(menu.locator('#btnQuickArrange')).toHaveCount(0);
+        const rules = menu.getByRole('menuitemradio');
+        await expect(rules).toHaveCount(5);
+        await expect(rules.first()).toBeFocused();
+        await expect(menu.getByRole('menuitemradio', { checked: true })).toHaveCount(1);
+        if (view === 'Board') {
+          await expect(win.locator('#btnQuickArrange')).toBeVisible();
+          await expect(win.locator('#btnSaveOrder')).toBeVisible();
+          await win.keyboard.press('End');
+          await expect(win.locator('#btnSaveOrder')).toBeFocused();
+        } else {
+          await expect(win.locator('#btnQuickArrange')).toBeHidden();
+          await expect(win.locator('#btnSaveOrder')).toBeHidden();
+        }
+        await win.keyboard.press('Escape');
+        await expect(menu).toBeHidden();
+        await expect(trigger).toBeFocused();
+      }
+      await trigger.click();
+      await menu.getByRole('menuitemradio', { name: '按标题' }).click();
+      await expect(menu).toBeHidden();
+      await expect(trigger).toBeFocused();
+      expect(await win.evaluate(() => state.settings.sortMode)).toBe('title');
+      await clickLayoutAction(win, 'btnWorkspaceSort');
+      await expect(win.getByRole('heading', { name: '编辑自定义顺序', exact: true })).toBeVisible();
+      await expect(win.locator('#settingsPanel .sp-nav')).toBeHidden();
+      await expect(win.locator('#settingsPanel section[data-tab="sort"]')).toBeVisible();
+      await expect(win.locator('#sortMode')).toHaveValue('custom');
+      await win.locator('#btnCloseSettings').click();
+      await expect(trigger).toBeFocused();
+    }
+  } finally { await closeApp(ctx); }
 });
 
 // —— 批量选中：点击便签/备忘录内容区只选中，不进入编辑；退出批量后可正常编辑 ——
@@ -4144,7 +4192,7 @@ test('更新安装前独立便签保存失败则保留窗口', async () => {
   try {
     await stableClick(ctx.win.locator('#btnAdd'));
     const noteWinPromise = ctx.electronApp.waitForEvent('window');
-    await stableClick(ctx.win.locator('#board .note .t-desktop').first());
+    await pinBoardNote(ctx.win);
     const noteWin = await noteWinPromise;
     await expect(noteWin.locator('#dnTitle')).toBeVisible();
     await ctx.electronApp.evaluate(({ ipcMain }) => {
@@ -4166,7 +4214,7 @@ test('更新安装前写入独立便签尚未落盘的编辑', async () => {
     await stableClick(ctx.win.locator('#btnAdd'));
     await ctx.win.locator('#board .note .note-title').first().fill('更新前的桌面便签');
     const noteWinPromise = ctx.electronApp.waitForEvent('window');
-    await stableClick(ctx.win.locator('#board .note .t-desktop').first());
+    await pinBoardNote(ctx.win);
     const noteWin = await noteWinPromise;
     await expect(noteWin.locator('#dnTitle')).toHaveValue('更新前的桌面便签');
     await noteWin.locator('#dnTitle').fill('更新后仍在的桌面便签');
@@ -4289,7 +4337,7 @@ test('独立便签异常退出后恢复最新标题，启动前不打开旧钉�
   try {
     await stableClick(first.win.locator('#btnAdd'));
     const noteWinPromise = first.electronApp.waitForEvent('window');
-    await stableClick(first.win.locator('#board .note .t-desktop').first());
+    await pinBoardNote(first.win);
     const noteWin = await noteWinPromise;
     await expect(noteWin.locator('#dnTitle')).toBeVisible();
     // 可观察就绪：note.js init 在绑定标题 input 监听器之后才把 #dnUnpin.title 设为本地化 tr('unpin')
@@ -4431,7 +4479,7 @@ test('退出应用前也会保存独立便签最后一次编辑', async () => {
     await stableClick(ctx.win.locator('#btnAdd'));
     await ctx.win.locator('#board .note .note-title').first().fill('退出前的桌面便签');
     const noteWinPromise = ctx.electronApp.waitForEvent('window');
-    await stableClick(ctx.win.locator('#board .note .t-desktop').first());
+    await pinBoardNote(ctx.win);
     const noteWin = await noteWinPromise;
     await expect(noteWin.locator('#dnTitle')).toHaveValue('退出前的桌面便签');
     await noteWin.locator('#dnTitle').fill('退出后仍在的桌面便签');
@@ -4503,56 +4551,43 @@ test('关闭确认：选「隐藏到任务栏」后窗口隐藏', async () => {
 });
 
 // —— 分组过多：筛选栏可收缩滚动，右侧按钮不被挤出 ——
-test('分组过多：分组区横向滚动，右侧视图切换与「+分组」仍可见', async () => {
-  const now = Date.now();
-  // 造 20 个分组，名字很长，确保溢出
-  const groups = Array.from({ length: 20 }, (_, i) => ({ id: 'g' + i, name: '分组很长的名字测试' + i, color: '#6c5ce7' }));
-  const mk = (id, title, x, y) => ({
-    id, title, content: '内容' + id, type: 'note', items: [], images: [], files: [], tables: [],
-    color: '#93f1ce', textColor: null, groupId: null, pinned: false, desktopPin: false, reminder: null,
-    x, y, positionAll: { x, y }, w: 240, h: 200, z: 1, createdAt: now + x, updatedAt: now + x
-  });
-  const seed = {
-    version: 2,
-    settings: { viewMode: 'board', sortMode: 'updated' },
-    groups, trash: [], notes: [mk('a', 'A', 20, 20)]
-  };
+test('工作区侧栏：长分组可滚动选择，窄窗可用键盘打开与关闭', async () => {
+  const seed = searchViewSeed();
+  seed.groups.push(...Array.from({ length: 24 }, (_, i) => ({
+    id: 'g' + i, name: '一个特别长的分组名字测试' + i, color: '#6c5ce7'
+  })));
   const ctx = await openApp({ seed });
+  const { win } = ctx;
   try {
-    await expect(ctx.win.locator('#noteCount')).toHaveText('1');
-    // 分组芯片已渲染（>0）
-    const chipCount = await ctx.win.locator('#groupChips .chip').count();
-    expect(chipCount).toBe(20);
-    // 右侧视图切换 + 「+分组」必须可见，不被挤出画布
-    await expect(ctx.win.locator('#viewBoard')).toBeVisible();
-    await expect(ctx.win.locator('#viewDoc')).toBeVisible();
-    await expect(ctx.win.locator('#btnAddGroup')).toBeVisible();
-    // 视口内能同时看到全部/未分组（左侧固定）
-    await expect(ctx.win.locator('#filterbar .chip[data-group="all"]')).toBeVisible();
-    await expect(ctx.win.locator('#filterbar .chip[data-group="ungrouped"]')).toBeVisible();
-    // 左右箭头可见；初始在左端 → 左箭头置灰、右箭头可用
-    const left = ctx.win.locator('#btnChipsLeft');
-    const right = ctx.win.locator('#btnChipsRight');
-    await expect(left).toBeVisible();
-    await expect(right).toBeVisible();
-    expect(await left.isDisabled()).toBe(true);
-    expect(await right.isDisabled()).toBe(false);
-    // 点右箭头滚动 → 左箭头变可用；点左箭头滚回 → 左箭头回到置灰
-    // 注：滚动/布局在负载高时可能滞后（3s 不够 → 曾假失败）。改为「点箭头直到真正滚动」的重试轮询。
-    const chipsWrap = ctx.win.locator('#groupChips');
-    await expect.poll(async () => {
-      if (await right.isEnabled()) await right.click({ force: true });
-      return chipsWrap.evaluate((el) => el.scrollLeft);
-    }, { timeout: 15_000 }).toBeGreaterThan(0);
-    await expect(left).toBeEnabled();
-    await expect.poll(async () => {
-      if (await left.isEnabled()) await left.click({ force: true });
-      return chipsWrap.evaluate((el) => el.scrollLeft);
-    }, { timeout: 15_000 }).toBeLessThanOrEqual(1);
-    await expect(left).toBeDisabled();
-  } finally {
-    await closeApp(ctx);
-  }
+    const resize = (width) => ctx.electronApp.evaluate(({ BrowserWindow }, w) => {
+      BrowserWindow.getAllWindows()[0].setSize(w, 620);
+    }, width);
+    await resize(1200);
+    const sidebar = win.locator('#filterbar');
+    const last = win.locator('#groupChips button').getByText('一个特别长的分组名字测试23', { exact: true });
+    await last.click();
+    await expect(win.locator('#workspaceTitle')).toHaveText('一个特别长的分组名字测试23');
+    expect(await sidebar.evaluate((node) => node.scrollTop)).toBeGreaterThan(0);
+    await expect(win.locator('#viewDoc')).toBeInViewport();
+
+    await resize(640);
+    await expect.poll(() => win.evaluate(() => innerWidth)).toBe(640);
+    await expect(sidebar).toBeHidden();
+    const toggle = win.locator('#btnWorkspaceNav');
+    await expect(toggle).toBeVisible();
+    await toggle.focus();
+    await win.keyboard.press('Enter');
+    await expect(toggle).toHaveAttribute('aria-expanded', 'true');
+    await expect(sidebar.locator('.chip.active')).toBeFocused();
+    await win.keyboard.press('Escape');
+    await expect(toggle).toBeFocused();
+    await expect(sidebar).toBeHidden();
+    await toggle.click();
+    await sidebar.locator('[data-group="all"]').click();
+    await expect(sidebar).toBeHidden();
+    await expect(win.locator('#workspaceTitle')).toHaveText('全部便签');
+    await expect(win.locator('#btnAdd')).toBeInViewport();
+  } finally { await closeApp(ctx); }
 });
 
 // —— 关闭弹窗与顶栏统一（亚克力/透明度一致）且文字可读 ——
@@ -5327,10 +5362,10 @@ test('空白分组新建便签后回到全部视图不与其他便签重叠', as
     // 切到「空分组」视图并新建便签
     await ctx.win.evaluate(() => { setFilter('group', 'g1'); });
     await ctx.win.evaluate(() => createNote());
-    await expect(ctx.win.locator('#noteCount')).toHaveText('3');
+    await expect(ctx.win.locator('#board .note')).toHaveCount(1);
     // 回到「全部」视图，任两便签都不重叠
     await ctx.win.evaluate(() => { setFilter('group', 'all'); });
-    await ctx.win.waitForTimeout(150);
+    await expect(ctx.win.locator('#noteCount')).toHaveText('3');
     const overlap = await ctx.win.evaluate(() => {
       const rects = state.notes.map((n) => { const p = n.positionAll; return { id: n.id, x: p.x, y: p.y, w: n.w, h: n.h }; });
       let bad = 0;
@@ -5423,7 +5458,7 @@ test('标签建议：按笔记文本在分组弹窗顶部推荐分组', async ()
   try {
     await expect(ctx.win.locator('#board .note')).toHaveCount(1);
     // 打开分组弹窗
-    await stableClick(ctx.win.locator('.note[data-id="a"] .t-group'));
+    await ctx.win.locator('.note[data-id="a"] .t-group').press('Enter');
     const pop = ctx.win.locator('.color-pop');
     await expect(pop).toBeVisible();
     // 出现「建议分组」标签与「工作」推荐按钮
@@ -5503,6 +5538,32 @@ test('撤销/重做：新建便签可撤销、重做，删除也可撤销', asyn
 
 // ---------- 便签工具栏：精简折叠 + 按钮显隐 ----------
 
+test('编辑便签标题时收起卡片工具，退出后恢复', async () => {
+  const seed = searchViewSeed();
+  seed.notes = seed.notes.slice(0, 1);
+  const ctx = await openApp({ seed });
+  const { win } = ctx;
+  try {
+    for (const [view, root, tools] of [
+      ['#viewBoard', '#board .note', '.note-tools'],
+      ['#viewMemo', '#memoList .memo-row', '.memo-tools']
+    ]) {
+      await win.locator(view).click();
+      const card = win.locator(root).first();
+      const title = card.locator('.note-title');
+      const toolbar = card.locator(tools);
+      await card.hover();
+      const before = await title.boundingBox();
+      await title.focus();
+      await expect(toolbar).toBeHidden();
+      const editing = await title.boundingBox();
+      expect(editing.width).toBeGreaterThan(before.width);
+      await title.press('Tab');
+      await expect(toolbar).toBeVisible();
+    }
+  } finally { await closeApp(ctx); }
+});
+
 test('便签工具栏：默认精简显示，次要按钮收进「更多」且可打开操作菜单', async () => {
   const now = Date.now();
   const mk = (id, x) => ({
@@ -5517,7 +5578,8 @@ test('便签工具栏：默认精简显示，次要按钮收进「更多」且�
     await expect(note.locator('.t-desktop')).toHaveCount(1);
     await expect(note.locator('.t-group')).toHaveCount(1);
     await expect(note.locator('.t-color')).toHaveCount(1);
-    await expect(note.locator('.t-pin')).toHaveCount(1);
+    await expect(note.locator('.t-pin')).toHaveCount(0);
+    await expect(note.locator('.t-desktop use')).toHaveAttribute('href', '#ui-pin');
     await expect(note.locator('.t-del')).toHaveCount(1);
     await expect(note.locator('.t-more')).toHaveCount(1);
     // 次要动作默认折叠
@@ -5526,6 +5588,7 @@ test('便签工具栏：默认精简显示，次要按钮收进「更多」且�
     // 「更多」打开便签操作菜单（复用右键菜单）
     await stableClick(note.locator('.t-more'));
     await expect(ctx.win.locator('.ctx-menu')).toBeVisible();
+    await expect(ctx.win.locator('.ctx-menu')).toContainText('置顶');
   } finally {
     await closeApp(ctx);
   }
@@ -5668,142 +5731,53 @@ test('数据合法：正常启动，无警告条，可创建便签并落盘', as
   }
 });
 
-// ---------- UX-14：设置抽屉键盘 / 焦点（正式门槛） ----------
-
-// 面板内可见且可用可聚焦控件的状态快照，与 settings-bind.js 的选择器保持一致
-function settingsFocusState(win) {
-  return win.evaluate(() => {
-    const panel = document.getElementById('settingsPanel');
-    const list = Array.from(panel.querySelectorAll('a[href], button, input, select, textarea, [tabindex]:not([tabindex="-1"])'))
-      .filter((el) => !el.disabled && el.tabIndex !== -1 && el.offsetParent !== null);
-    const active = document.activeElement;
-    return {
-      count: list.length,
-      idx: list.indexOf(active),
-      inside: panel.contains(active),
-      inApp: document.getElementById('app').contains(active),
-      activeId: active ? (active.id || '') : ''
-    };
-  });
-}
-
-test('UX-14 设置抽屉：dialog 语义、打开聚焦、背景 inert、四种关闭方式均恢复打开者焦点', async () => {
-  const ctx = await openApp();
-  const win = ctx.win;
-  const overlay = win.locator('#settingsOverlay');
+test('设置页：返回后恢复分组、搜索、画布位置与打开者焦点', async () => {
+  const seed = searchViewSeed();
+  seed.notes[0].x = 1900;
+  seed.notes[0].y = 1100;
+  seed.notes[0].positionAll = { x: 1900, y: 1100 };
+  const ctx = await openApp({ seed });
+  const { win } = ctx;
   const panel = win.locator('#settingsPanel');
+  const gear = win.locator('#btnSettings');
   try {
-    const settingsBefore = await win.evaluate(() => JSON.stringify(state.settings));
-
-    // 键盘打开：聚焦触发按钮后回车，验证真实键盘路径可用
-    await win.locator('#btnSettings').focus();
-    await win.keyboard.press('Enter');
-    await expect(overlay).toBeVisible();
-
-    // 可访问对话框 + 本地化名称（aria-labelledby -> 标题文案）
-    await expect(panel).toHaveAttribute('role', 'dialog');
-    await expect(panel).toHaveAttribute('aria-modal', 'true');
-    await expect(panel).toHaveAccessibleName(/全局设置/);
-
-    // 打开即聚焦面板内，设置入口之外的背景分支 inert（背景不可聚焦）
-    expect((await settingsFocusState(win)).inside).toBe(true);
-    expect(await win.locator('#searchInput').evaluate((el) => !!el.closest('[inert]'))).toBe(true);
-
-    // Escape 关闭 → 恢复 #app 可交互并归还焦点给打开者
-    await win.keyboard.press('Escape');
-    await expect(overlay).toBeHidden();
-    expect(await win.locator('#app').evaluate((el) => el.inert)).toBe(false);
-    expect(await win.evaluate(() => document.activeElement && document.activeElement.id)).toBe('btnSettings');
-
-    // The same real toolbar button remains clickable while the background is inert.
-    await win.locator('#btnSettings').click();
-    await expect(overlay).toBeVisible();
-    await expect(win.locator('#btnSettings')).toHaveAttribute('aria-expanded', 'true');
-    expect(await win.locator('#btnAdd').evaluate(el => !!el.closest('[inert]'))).toBe(true);
-    expect(await win.locator('#btnSettings').evaluate(el => !!el.closest('[inert]'))).toBe(false);
-    await win.locator('#btnSettings').click();
-    await expect(overlay).toBeHidden();
-    await expect(win.locator('#btnSettings')).toHaveAttribute('aria-expanded', 'false');
-    expect(await win.evaluate(() => document.activeElement.id)).toBe('btnSettings');
-
-    // 关闭按钮
-    await win.locator('#btnSettings').click();
-    await expect(overlay).toBeVisible();
-    await win.locator('#btnCloseSettings').click();
-    await expect(overlay).toBeHidden();
-    expect(await win.evaluate(() => document.activeElement && document.activeElement.id)).toBe('btnSettings');
-
-    // 点击遮罩（面板左侧空白）
-    await win.locator('#btnSettings').click();
-    await expect(overlay).toBeVisible();
-    await overlay.click({ force: true, position: { x: 5, y: 5 } });
-    await expect(overlay).toBeHidden();
-    expect(await win.evaluate(() => document.activeElement && document.activeElement.id)).toBe('btnSettings');
-
-    // 键盘开关不得改动任何设置值
-    expect(await win.evaluate(() => JSON.stringify(state.settings))).toBe(settingsBefore);
-  } finally {
-    await closeApp(ctx);
-  }
-});
-
-test('UX-14 设置抽屉：Tab/Shift+Tab 在面板内循环，不逃到被遮挡的背景', async () => {
-  const ctx = await openApp();
-  const win = ctx.win;
-  try {
-    await win.locator('#btnSettings').click();
-    await expect(win.locator('#settingsOverlay')).toBeVisible();
-
-    // 初始焦点在面板内（面板容器）
-    expect((await settingsFocusState(win)).inside).toBe(true);
-
-    // 连续正向 Tab：焦点始终留在面板内且不落入 #app 背景
-    for (let i = 0; i < 30; i++) {
+    await win.locator('#groupChips .chip').first().click();
+    await win.locator('#searchInput').fill('生活清单');
+    await expect(win.locator('#board .note')).toHaveCount(1);
+    const read = () => win.evaluate(() => {
+      const canvas = document.querySelector('#canvas');
+      return { group: filter.group, query: filter.query, zoom: state.settings.boardZoom,
+        left: canvas.scrollLeft, top: canvas.scrollTop };
+    });
+    await win.locator('#canvas').evaluate(el => el.scrollTo(300, 200));
+    const before = await read();
+    expect(before.left).toBeGreaterThan(0);
+    expect(before.top).toBeGreaterThan(0);
+    for (const close of [() => win.keyboard.press('Escape'), () => gear.click(),
+      () => win.locator('#btnCloseSettings').click()]) {
+      await gear.click();
+      await expect(panel).toBeFocused();
+      await expect(panel).toHaveRole('region');
+      await expect(win.locator('#canvas')).toBeHidden();
+      expect(await win.locator('#searchInput').evaluate(el => Boolean(el.closest('[inert]')))).toBe(true);
       await win.keyboard.press('Tab');
-      const s = await settingsFocusState(win);
-      expect(s.inside).toBe(true);
-      expect(s.inApp).toBe(false);
+      await expect(win.locator('#btnCloseSettings')).toBeFocused();
+      await close();
+      await expect(panel).toBeHidden();
+      await expect(gear).toBeFocused();
+      expect(await read()).toEqual(before);
     }
-    // 连续反向 Shift+Tab 同理
-    for (let i = 0; i < 30; i++) {
-      await win.keyboard.press('Shift+Tab');
-      const s = await settingsFocusState(win);
-      expect(s.inside).toBe(true);
-      expect(s.inApp).toBe(false);
-    }
-
-    // 首尾边界：第一个控件 Shift+Tab → 最后一个；最后一个控件 Tab → 第一个
-    const count = (await settingsFocusState(win)).count;
-    expect(count).toBeGreaterThan(2);
-    await win.evaluate(() => {
-      const panel = document.getElementById('settingsPanel');
-      const list = Array.from(panel.querySelectorAll('a[href], button, input, select, textarea, [tabindex]:not([tabindex="-1"])'))
-        .filter((el) => !el.disabled && el.tabIndex !== -1 && el.offsetParent !== null);
-      list[0].focus();
-    });
-    await win.keyboard.press('Shift+Tab');
-    expect((await settingsFocusState(win)).idx).toBe(count - 1);
-
-    await win.evaluate(() => {
-      const panel = document.getElementById('settingsPanel');
-      const list = Array.from(panel.querySelectorAll('a[href], button, input, select, textarea, [tabindex]:not([tabindex="-1"])'))
-        .filter((el) => !el.disabled && el.tabIndex !== -1 && el.offsetParent !== null);
-      list[list.length - 1].focus();
-    });
-    await win.keyboard.press('Tab');
-    expect((await settingsFocusState(win)).idx).toBe(0);
-  } finally {
-    await closeApp(ctx);
-  }
+  } finally { await closeApp(ctx); }
 });
 
-test('UX-14 设置抽屉：更上层确认框默认聚焦安全取消项，Escape 不关闭下层设置，回车取消后焦点归还', async () => {
+test('UX-14 设置页：更上层确认框默认聚焦安全取消项，Escape 不关闭下层设置，回车取消后焦点归还', async () => {
   const ctx = await openApp();
   const win = ctx.win;
   try {
-    await win.locator('#btnSettings').click();
-    await expect(win.locator('#settingsOverlay')).toBeVisible();
-    await win.locator('.sp-nav-item[data-tab="trash"]').click();
+    if (await win.locator('#btnWorkspaceNav').isVisible()) await win.locator('#btnWorkspaceNav').click();
+    await win.locator('#btnWorkspaceTrash').click();
+    await expect(win.locator('#settingsTitle')).toContainText('回收站');
+    await expect(win.locator('#settingsPanel .sp-nav')).toBeHidden();
     await win.locator('#btnEmptyTrash').click();
 
     const modal = win.locator('body > [data-modal-overlay]');
@@ -5813,22 +5787,22 @@ test('UX-14 设置抽屉：更上层确认框默认聚焦安全取消项，Escap
     await expect(win.locator('#cmCancel')).toBeFocused();
     // Escape 不入确认框语义，不得关闭下层设置，确认框也仍在
     await win.keyboard.press('Escape');
-    await expect(win.locator('#settingsOverlay')).toBeVisible();
+    await expect(win.locator('#settingsPanel')).toBeVisible();
     await expect(modal).toBeVisible();
 
     // 键盘取消：回车（不强制鼠标点击）→ 确认框关闭、焦点回到触发按钮、设置仍开；此时 Escape 才关闭设置
     await win.keyboard.press('Enter');
     await expect(modal).toHaveCount(0);
-    expect(await win.evaluate(() => document.activeElement && document.activeElement.id)).toBe('btnEmptyTrash');
-    await expect(win.locator('#settingsOverlay')).toBeVisible();
+    await expect(win.locator('#btnEmptyTrash')).toBeFocused();
+    await expect(win.locator('#settingsPanel')).toBeVisible();
     await win.keyboard.press('Escape');
-    await expect(win.locator('#settingsOverlay')).toBeHidden();
+    await expect(win.locator('#settingsPanel')).toBeHidden();
   } finally {
     await closeApp(ctx);
   }
 });
 
-test('UX-14 设置抽屉：关于页更新说明嵌套打开/关闭，焦点归还且不误关设置', async () => {
+test('UX-14 设置页：关于页更新说明嵌套打开/关闭，焦点归还且不误关设置', async () => {
   const ctx = await openApp();
   const win = ctx.win;
   try {
@@ -5840,23 +5814,23 @@ test('UX-14 设置抽屉：关于页更新说明嵌套打开/关闭，焦点归�
 
     // 更新说明在设置之上：Escape 不得关闭下层设置
     await win.keyboard.press('Escape');
-    await expect(win.locator('#settingsOverlay')).toBeVisible();
+    await expect(win.locator('#settingsPanel')).toBeVisible();
     await expect(win.locator('#changelogOverlay')).toBeVisible();
 
     // 关闭更新说明 → 焦点回到设置内的按钮，设置保持打开
     await win.locator('#btnChangelogClose').click();
     await expect(win.locator('#changelogOverlay')).toBeHidden();
-    await expect(win.locator('#settingsOverlay')).toBeVisible();
+    await expect(win.locator('#settingsPanel')).toBeVisible();
     expect(await win.evaluate(() => document.activeElement && document.activeElement.id)).toBe('btnChangelog');
   } finally {
     await closeApp(ctx);
   }
 });
 
-test('UX-14 设置抽屉：640/1080 宽度与亮/暗主题下顶栏开关/Tab 行为不变', async () => {
+test('UX-14 设置页：640/1080 宽度与亮/暗主题下顶栏开关/Tab 行为不变', async () => {
   const ctx = await openApp();
   const win = ctx.win;
-  const overlay = win.locator('#settingsOverlay');
+  const overlay = win.locator('#settingsPanel');
   try {
     for (const combo of [{ w: 640, mode: 'light' }, { w: 1080, mode: 'dark' }]) {
       await win.locator('#btnSettings').click();
@@ -5865,12 +5839,10 @@ test('UX-14 设置抽屉：640/1080 宽度与亮/暗主题下顶栏开关/Tab �
       await win.locator('#modeSeg [data-mode="' + combo.mode + '"]').click({ force: true });
       await expect(overlay).toBeVisible();
 
-      expect((await settingsFocusState(win)).inside).toBe(true);
+      await expect(win.locator('#modeSeg')).toBeVisible();
       expect(await win.locator('#searchInput').evaluate((el) => !!el.closest('[inert]'))).toBe(true);
       await win.keyboard.press('Tab');
-      const s = await settingsFocusState(win);
-      expect(s.inside).toBe(true);
-      expect(s.inApp).toBe(false);
+      expect(await win.evaluate(() => !!document.activeElement.closest('#settingsPanel'))).toBe(true);
 
       await win.locator('#btnSettings').click();
       await expect(overlay).toBeHidden();
@@ -5882,7 +5854,7 @@ test('UX-14 设置抽屉：640/1080 宽度与亮/暗主题下顶栏开关/Tab �
   }
 });
 
-test('UX-14 设置抽屉：打开前已有的 inert 状态在关闭后保留', async () => {
+test('UX-14 设置页：打开前已有的 inert 状态在关闭后保留', async () => {
   const ctx = await openApp();
   const win = ctx.win;
   try {
@@ -5891,9 +5863,9 @@ test('UX-14 设置抽屉：打开前已有的 inert 状态在关闭后保留', a
       document.getElementById('app').inert = true;
       document.getElementById('btnSettings').click();
     });
-    await expect(win.locator('#settingsOverlay')).toBeVisible();
+    await expect(win.locator('#settingsPanel')).toBeVisible();
     await win.keyboard.press('Escape');
-    await expect(win.locator('#settingsOverlay')).toBeHidden();
+    await expect(win.locator('#settingsPanel')).toBeHidden();
     expect(await win.locator('#app').evaluate((el) => el.inert)).toBe(true);
     await win.evaluate(() => { document.getElementById('app').inert = false; });
   } finally {
@@ -5901,10 +5873,10 @@ test('UX-14 设置抽屉：打开前已有的 inert 状态在关闭后保留', a
   }
 });
 
-test('UX-14 设置抽屉：快捷键录制中 Escape 只取消录制，设置保持打开，再次 Escape 才关闭', async () => {
+test('UX-14 设置页：快捷键录制中 Escape 只取消录制，设置保持打开，再次 Escape 才关闭', async () => {
   const ctx = await openApp();
   const win = ctx.win;
-  const overlay = win.locator('#settingsOverlay');
+  const overlay = win.locator('#settingsPanel');
   try {
     await win.locator('#btnSettings').click();
     await win.locator('.sp-nav-item[data-tab="shortcuts"]').click();
@@ -6125,14 +6097,10 @@ test('UX-15 键盘：共享便签工具栏按钮聚焦仍有可见焦点指示',
   const ctx = await openApp({ seed: ux15Seed() });
   const win = ctx.win;
   try {
-    const tabTo = async (sel) => {
-      for (let i = 0; i < 120; i++) {
-        await win.keyboard.press('Tab');
-        if (await win.evaluate((s) => document.activeElement && document.activeElement.matches(s), sel)) return true;
-      }
-      return false;
-    };
-    expect(await tabTo('#board .note[data-id="a"] .note-tools .t-del')).toBe(true);
+    const card = win.locator('#board .note[data-id="a"]');
+    await card.locator('.note-title').focus();
+    await win.keyboard.press('Tab');
+    await expect(card.locator('.note-tools button').first()).toBeFocused();
 
     const focus = await win.evaluate(() => {
       const el = document.activeElement;
@@ -8092,11 +8060,11 @@ test('V128-06 group selected arrange keeps all-view positions and fits narrow En
   try {
     await ctx.electronApp.evaluate(({ BrowserWindow }) => BrowserWindow.getAllWindows().find((w) => w.webContents.getURL().includes('index.html')).setBounds({ width: 640, height: 820 }));
     await expect.poll(() => win.evaluate(() => innerWidth)).toBe(640);
+    await win.locator('#btnWorkspaceNav').click();
     await win.locator('#groupChips .chip', { hasText: 'Group One' }).click();
     await expect(win.locator('#board .note')).toHaveCount(3);
-    const entryState = await win.evaluate(() => ({ width: innerWidth, compact: matchMedia('(max-width: 1050px)').matches, mode: state.settings.viewMode, moreClass: document.querySelector('#toolbarMoreWrap').className, buttonParent: document.querySelector('#btnBatchToggle').parentElement.id }));
+    const entryState = await win.evaluate(() => ({ width: innerWidth, compact: matchMedia('(max-width: 1120px)').matches, mode: state.settings.viewMode, moreClass: document.querySelector('#toolbarMoreWrap').className, buttonParent: document.querySelector('#btnBatchToggle').parentElement.id }));
     await testInfo.attach('batch-entry-state', { body: JSON.stringify(entryState), contentType: 'application/json' });
-    await win.locator('#btnToolbarMore').click();
     await win.locator('#btnBatchToggle').click();
     const arrange = win.locator('#btnBatchArrange');
     await expect(arrange).toHaveAccessibleName('⚡ Arrange selected');
@@ -8144,5 +8112,334 @@ test('V128-06 group selected arrange keeps all-view positions and fits narrow En
     await expect.poll(() => win.locator('#toast').evaluate((el) => getComputedStyle(el).bottom)).toBe('24px');
     expect(await notes()).toEqual(after);
     expect(errors).toEqual([]);
+  } finally { await closeApp(ctx); }
+});
+
+test('文档列表：键盘打开长列表中的便签并回到原卡片与滚动位置', async () => {
+  const seed = searchViewSeed();
+  seed.settings.viewMode = 'doc';
+  seed.notes = Array.from({ length: 32 }, (_, i) => ({
+    ...seed.notes[0], id: 'doc-' + i, title: '项目记录 ' + i, content: '正文 ' + i,
+    type: 'note', items: [], groupId: null
+  }));
+  const ctx = await openApp({ seed });
+  const { win } = ctx;
+  try {
+    for (const [hour, icon, greeting] of [[0, 'moon', '夜深了'], [6, 'sun', '早上好'], [12, 'sun', '下午好'], [18, 'moon', '晚上好']]) {
+      await win.evaluate(value => updateWorkspaceGreeting(value), hour);
+      await expect(win.locator('#workspaceGreetingIcon')).toHaveAttribute('href', '#ui-' + icon);
+      await expect(win.locator('#workspaceGreeting')).toContainText(greeting);
+    }
+    await win.locator('#searchInput').fill('项目记录');
+    const cards = win.locator('.doc-pick-item');
+    await expect(cards).toHaveCount(32);
+    const id = await cards.nth(24).getAttribute('data-id');
+    const card = win.locator('.doc-pick-item[data-id="' + id + '"]');
+    await card.scrollIntoViewIfNeeded();
+    await card.focus();
+    const canvas = win.locator('#canvas');
+    const top = await canvas.evaluate(el => el.scrollTop);
+    expect(top).toBeGreaterThan(0);
+    await win.keyboard.press('Enter');
+    await expect(win.locator('#btnDocBack')).toBeFocused();
+    await expect.poll(() => canvas.evaluate(el => el.scrollTop)).toBe(0);
+    await win.locator('#btnDocBack').click();
+    await expect(card).toBeFocused();
+    await expect.poll(() => canvas.evaluate(el => el.scrollTop)).toBe(top);
+    await expect(win.locator('#searchInput')).toHaveValue('项目记录');
+  } finally { await closeApp(ctx); }
+});
+test('壁纸主题同步，且新建便签可切换跟随主题与记住的自定义色', async () => {
+  const seed = searchViewSeed();
+  Object.assign(seed.settings, {
+    appearanceMode: 'auto', themeId: 'mint', topBarAcrylic: true, topBarOpacity: 55,
+    backgroundImage: 'data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAAC0lEQVR42mNkYPhfDwAChwGA60e6kgAAAABJRU5ErkJggg==',
+    noteColor: '#fa8072'
+  });
+  const ctx = await openApp({ seed });
+  const { win } = ctx;
+  try {
+    const colorOf = (selector, prop) => win.locator(selector).evaluate((el, key) => getComputedStyle(el)[key], prop);
+    const before = await colorOf('#titlebar', 'backgroundColor');
+    const buttonBefore = await colorOf('#btnAdd', 'backgroundColor');
+    await win.locator('#btnSettings').click();
+    await win.locator('#themeGrid .theme-card', { hasText: '羊皮纸' }).click();
+    await win.locator('[data-app-module="note"]').click();
+    const follow = win.locator('#noteColorFollowsTheme');
+    const color = win.locator('#noteColorInput');
+    await expect(follow).toBeChecked();
+    await expect(color).toHaveValue('#f7d65a');
+    await expect(color).toBeDisabled();
+    await follow.uncheck();
+    await expect(color).toHaveValue('#fa8072');
+    await expect(color).toBeEnabled();
+    expect(await colorOf('.preview-notes .preview-note:first-child', 'backgroundColor')).toBe('rgb(250, 128, 114)');
+    await win.locator('#btnCloseSettings').click();
+    expect(await colorOf('#titlebar', 'backgroundColor')).not.toBe(before);
+    expect(await colorOf('#btnAdd', 'backgroundColor')).not.toBe(buttonBefore);
+    await win.locator('#btnAdd').click();
+    const created = await win.evaluate(() => state.notes.find(note => note.color === '#fa8072')?.id);
+    expect(created).toBeTruthy();
+    await win.locator('#btnSettings').click();
+    await win.locator('[data-app-module="note"]').click();
+    await follow.check();
+    await expect(color).toHaveValue('#f7d65a');
+    await win.locator('#btnCloseSettings').click();
+    await win.locator('#btnAdd').click();
+    const colors = await win.evaluate(id => ({ previous: state.notes.find(note => note.id === id).color,
+      themed: state.notes.some(note => note.color === '#f7d65a'), savedCustom: state.settings.noteColor }), created);
+    expect(colors).toEqual({ previous: '#fa8072', themed: true, savedCustom: '#fa8072' });
+    await win.evaluate(() => saveNow());
+    expect((await ux01ReadData(ctx.userDataDir)).settings.noteColorFollowsTheme).toBe(true);
+  } finally { await closeApp(ctx); }
+});
+test('跨视图详情：画布、备忘录和待办返回原视图与筛选', async () => {
+  const seed = searchViewSeed();
+  seed.notes[0].y = 850;
+  seed.notes[0].positionAll.y = 850;
+  const ctx = await openApp({ seed });
+  const { win } = ctx;
+  try {
+    await win.locator('#filterbar').getByText('家庭', { exact: true }).click();
+    await win.locator('#searchInput').fill('生活清单');
+    const canvas = win.locator('#canvas');
+    for (const [mode, tab, selector] of [
+      ['board', '#viewBoard', '#board .note[data-id="home"]'],
+      ['memo', '#viewMemo', '#memoList .memo-row[data-id="home"]'],
+      ['todo', '#viewTodo', '#todoList .todo-line[data-item="home-1"]'],
+    ]) {
+      await stableClick(win.locator(tab));
+      const row = win.locator(selector);
+      await row.scrollIntoViewIfNeeded();
+      if (mode === 'todo') await row.locator('[data-goto]').focus();
+      else await row.locator('.note-title').click({ button: 'right' });
+      const top = await canvas.evaluate(el => el.scrollTop);
+      if (mode === 'board') expect(top).toBeGreaterThan(0);
+      if (mode === 'todo') await win.keyboard.press('Enter');
+      else await win.locator('.ctx-menu').getByRole('button', { name: '打开详情' }).click();
+      await expect(win.locator('#docTitle')).toHaveValue('生活清单');
+      await expect(win.locator('#btnDocBack')).toBeFocused();
+      expect(await win.evaluate(() => state.settings.viewMode)).toBe(mode);
+      await win.keyboard.press('Enter');
+      await expect(row.locator(mode === 'todo' ? '[data-goto]' : '.note-title')).toBeFocused();
+      await expect(win.locator('#searchInput')).toHaveValue('生活清单');
+      await expect(win.locator('#workspaceTitle')).toHaveText('家庭');
+      await expect.poll(() => canvas.evaluate(el => el.scrollTop)).toBe(top);
+    }
+    await win.locator('#todoList .todo-line[data-item="home-1"] [data-goto]').click();
+    await expect(win.locator('#btnDocBack')).toBeFocused();
+    await win.evaluate(() => deleteNote('home'));
+    await expect(win.locator('#btnDocBack')).toHaveCount(0);
+    await expect(win.locator('#viewTodo')).toHaveAttribute('aria-pressed', 'true');
+    await expect(win.locator('#searchInput')).toBeFocused();
+  } finally { await closeApp(ctx); }
+});
+
+test('保存失败可重试：主窗与桌面便签保留编辑并写入正式存档', async () => {
+  const ctx = await openApp();
+  try {
+    await stableClick(ctx.win.locator('#btnAdd'));
+    const win = ctx.win;
+    const title = win.locator('#board .note .note-title').first();
+    const fakeWrite = async (channel, reject) => ctx.electronApp.evaluate(({ ipcMain }, args) => {
+      globalThis.__originalWrite = ipcMain._invokeHandlers.get(args.channel);
+      ipcMain.removeHandler(args.channel);
+      ipcMain.handle(args.channel, () => {
+        if (args.reject) throw new Error('simulated disk error');
+        return false;
+      });
+    }, { channel, reject });
+    const restoreWrite = async channel => ctx.electronApp.evaluate(({ ipcMain }, key) => {
+      ipcMain.removeHandler(key);
+      ipcMain.handle(key, globalThis.__originalWrite);
+    }, channel);
+    const diskTitle = async () => JSON.parse(await fs.readFile(path.join(ctx.userDataDir, 'notes-data.json'), 'utf8')).notes[0]?.title;
+
+    await fakeWrite('data:save', true);
+    await title.fill('主窗重试后的标题');
+    const warning = win.locator('#saveWarning');
+    await expect(warning).toBeVisible();
+    await expect(title).toHaveValue('主窗重试后的标题');
+    await restoreWrite('data:save');
+    await warning.getByRole('button').click();
+    await expect(warning).toBeHidden();
+    await expect.poll(diskTitle).toBe('主窗重试后的标题');
+
+    const pending = ctx.electronApp.waitForEvent('window');
+    await win.locator('#board .note .t-desktop').first().evaluate(button => button.click());
+    const noteWin = await pending;
+    const desktopTitle = noteWin.locator('#dnTitle');
+    await expect(desktopTitle).toHaveValue('主窗重试后的标题');
+    await fakeWrite('note:update', false);
+    await desktopTitle.fill('桌面便签重试后的标题');
+    const desktopWarning = noteWin.locator('#noteSaveWarning');
+    await expect(desktopWarning).toBeVisible();
+    await expect(desktopTitle).toHaveValue('桌面便签重试后的标题');
+    await restoreWrite('note:update');
+    await desktopWarning.getByRole('button').click();
+    await expect(desktopWarning).toBeHidden();
+    await expect.poll(diskTitle).toBe('桌面便签重试后的标题');
+  } finally { await closeApp(ctx); }
+});
+
+test('最近编辑：按时间排序，在分组内键盘打开并返回搜索框', async () => {
+  const seed = searchViewSeed();
+  seed.notes[0].updatedAt = 100;
+  seed.notes.push({ ...seed.notes[0], id: 'recent', title: '最近编辑的便签', updatedAt: Date.now() });
+  const ctx = await openApp({ seed });
+  const { win } = ctx;
+  try {
+    await win.locator('#filterbar').getByText('家庭', { exact: true }).click();
+    const search = win.locator('#searchInput');
+    const panel = win.locator('#recentNotes');
+    await search.click();
+    await expect(panel.getByRole('button')).toHaveCount(2);
+    await expect(panel.getByRole('button').first()).toContainText('最近编辑的便签');
+    await search.press('ArrowDown');
+    await expect(panel.getByRole('button').first()).toBeFocused();
+    await win.keyboard.press('Enter');
+    await expect(win.locator('#docTitle')).toHaveValue('最近编辑的便签');
+    await expect(panel).toBeHidden();
+    await win.locator('#btnDocBack').click();
+    await expect(search).toBeFocused();
+    await expect(win.locator('#workspaceTitle')).toHaveText('家庭');
+    await search.press('Escape');
+    await expect(panel).toBeHidden();
+    await search.fill('生活清单');
+    await expect(panel).toBeHidden();
+  } finally { await closeApp(ctx); }
+});
+
+test('手动列宽：窄便签中调整含合并格的表格，重启保留并可恢复自动布局', async () => {
+  const seed = searchViewSeed();
+  const n = seed.notes[0];
+  n.type = 'note';
+  seed.notes = [n];
+  n.content = '[[table:widths]]';
+  n.tables = [{ id: 'widths', rows: 2, cols: 2, cells: [['合并标题', ''], ['https://example.test/' + 'x'.repeat(100), '内容']], merges: [{r:0,c:0,rowspan:1,colspan:2}], diagonals: [] }];
+  const ctx = await openApp({ seed });
+  let reopened;
+  try {
+    const table = ctx.win.locator('#board .note[data-id="home"] .note-table');
+    await expect(table.locator('td[colspan="2"]')).toHaveText('合并标题');
+    const cell = table.locator('td[data-r="1"][data-c="0"]');
+    await cell.scrollIntoViewIfNeeded();
+    await cell.evaluate(el => {
+      const scroller = el.closest('.note-table-block');
+      scroller.scrollLeft += el.getBoundingClientRect().right - scroller.getBoundingClientRect().right + 16;
+    });
+    const box = await cell.boundingBox();
+    expect(await cell.evaluate((el, point) => document.elementFromPoint(point.x, point.y)?.closest('td') === el,
+      {x: box.x + box.width - 4, y: box.y + 8})).toBe(true);
+    await ctx.win.mouse.move(box.x + box.width - 4, box.y + 8);
+    await ctx.win.mouse.down();
+    await ctx.win.mouse.move(box.x + box.width + 75, box.y + 8, { steps: 8 });
+    await ctx.win.mouse.up();
+    await expect.poll(() => table.evaluate(el => el.style.tableLayout)).toBe('fixed');
+    await expect.poll(async () => JSON.parse(await fs.readFile(path.join(ctx.userDataDir, 'notes-data.json'),'utf8')).notes[0].tables[0].columnWidths?.length).toBe(2);
+    const persisted = JSON.parse(await fs.readFile(path.join(ctx.userDataDir, 'notes-data.json'),'utf8'));
+    reopened = await openApp({seed:persisted});
+    const restored = reopened.win.locator('#board .note[data-id="home"] .note-table');
+    await expect.poll(() => restored.evaluate(el => el.style.tableLayout)).toBe('fixed');
+    await restored.locator('td').first().click({ button:'right', position:{x:15,y:10} });
+    await reopened.win.getByRole('button',{name:'恢复自动列宽'}).click();
+    await expect.poll(() => restored.evaluate(el => el.style.tableLayout)).toBe('');
+  } finally {
+    if (reopened) await closeApp(reopened);
+    await closeApp(ctx);
+  }
+});
+
+test('一键整理撤销：分组和批量整理均可一步复原，保留自定义尺寸', async () => {
+  const seed = searchViewSeed();
+  seed.notes = [
+    { ...v128Note('a', 380, 250, 1), groupId:'family', w:310, h:175 },
+    { ...v128Note('b', 230, 470, 2), groupId:'family', w:260, h:201 },
+    { ...v128Note('c', 20, 20, 3), groupId:'family', w:190, h:110 },
+    { ...v128Note('other', 580, 60, 4), w:170, h:90 },
+  ];
+  const ctx = await openApp({ seed });
+  const { win } = ctx;
+  try {
+    await win.locator('#filterbar').getByText('家庭', { exact: true }).click();
+    const snapshot = () => win.evaluate(() => Object.fromEntries(state.notes.map(
+      ({id,x,y,w,h,positionAll}) => [id,{x,y,w,h,positionAll}]
+    )));
+    const before = await snapshot();
+    await win.locator('#btnQuickArrange').click();
+    const arranged = await snapshot();
+    expect(arranged.a).not.toEqual(before.a);
+    expect(arranged.other).toEqual(before.other);
+    for (const id of Object.keys(before)) {
+      expect(arranged[id]).toMatchObject({w:before[id].w,h:before[id].h,positionAll:before[id].positionAll});
+    }
+    await win.locator('#btnUndo').click();
+    expect(await snapshot()).toEqual(before);
+    await win.locator('#btnRedo').click();
+    expect(await snapshot()).toEqual(arranged);
+    await win.locator('#btnUndo').click();
+
+    await win.locator('#btnBatchToggle').click();
+    await win.locator('#board .note[data-id="a"]').click({position:{x:20,y:80}});
+    await win.locator('#board .note[data-id="b"]').click({position:{x:20,y:80}});
+    await win.locator('#btnBatchArrange').click();
+    const selected = await snapshot();
+    expect(selected.a).not.toEqual(before.a);
+    expect(selected.c).toEqual(before.c);
+    expect(selected.other).toEqual(before.other);
+    await win.locator('#btnUndo').click();
+    expect(await snapshot()).toEqual(before);
+    await expect(win.locator('#workspaceTitle')).toHaveText('家庭');
+  } finally { await closeApp(ctx); }
+});
+
+test('草稿合并保留主窗位置和分组、独立窗正文及回收站', async () => {
+  const seed = searchViewSeed();
+  const userDataDir = await fs.mkdtemp(path.join(os.tmpdir(), 'mynotes-e2e-'));
+  let ctx;
+  try {
+    const original = seed.notes[0];
+    const deleted = seed.notes[1];
+    const mainNote = { ...original, groupId: null, x: 420, positionAll: { x: 530, y: 80 } };
+    const draft = { version: 1,
+      main: { token: 1, data: { ...seed, notes: [mainNote], trash: [{ note: deleted, deletedAt: Date.now() }] } },
+      notes: {
+        [original.id]: { token: 2, note: { ...original, content: '桌面窗最后正文' } },
+        [deleted.id]: { token: 3, note: { ...deleted, content: '删除前的草稿' } }
+      }
+    };
+    await fs.writeFile(path.join(userDataDir, 'notes-recovery.json'), JSON.stringify(draft));
+    ctx = await openApp({ seed, userDataDir, expectRecovery: true });
+    await expect(ctx.win.locator('#cmOk')).toBeVisible();
+    const result = await ctx.win.evaluate(() => window.api.resolveRecovery('restore'));
+    expect(result.ok).toBe(true);
+    const disk = JSON.parse(await fs.readFile(path.join(ctx.userDataDir, 'notes-data.json'), 'utf8'));
+    expect(disk.notes).toHaveLength(1);
+    expect(disk.notes[0]).toMatchObject({ groupId: null, x: 420, positionAll: { x: 530, y: 80 }, content: '桌面窗最后正文' });
+    expect(disk.trash[0].note.id).toBe(deleted.id);
+  } finally { if (ctx) await closeApp(ctx); }
+});
+
+test('桌面便签列宽拖动与恢复自动均写入存档', async () => {
+  const seed = searchViewSeed();
+  seed.notes = [{ ...seed.notes[0], type: 'note', desktopPin: true, content: '[[table:t]]',
+    tables: [{ id: 't', rows: 1, cols: 2, cells: [['甲', '乙']], merges: [], diagonals: [] }] }];
+  const ctx = await openApp({ seed });
+  try {
+    await expect.poll(() => ctx.electronApp.windows().some(w => w.url().includes('note.html'))).toBe(true);
+    const win = ctx.electronApp.windows().find(w => w.url().includes('note.html'));
+    const cell = win.locator('.note-table td').first();
+    await expect(cell).toBeVisible();
+    const box = await cell.boundingBox();
+    const x = box.x + box.width - 4, y = box.y + 8;
+    await win.mouse.move(x, y);
+    await win.mouse.down();
+    await win.mouse.move(x + 38, y, { steps: 5 });
+    await win.mouse.up();
+    const widths = async () => JSON.parse(await fs.readFile(path.join(ctx.userDataDir, 'notes-data.json'), 'utf8')).notes[0].tables[0].columnWidths;
+    await expect.poll(async () => (await widths())?.length).toBe(2);
+    await cell.click({ button: 'right', position: { x: 15, y: 8 } });
+    await win.getByRole('button', { name: '恢复自动列宽' }).click();
+    await expect.poll(widths).toBeUndefined();
   } finally { await closeApp(ctx); }
 });

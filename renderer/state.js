@@ -59,6 +59,7 @@
     todoRemindColor: null,
     todoRemindOpacity: 100,
     noteColor: DEFAULT_NOTE_COLOR,
+    noteColorFollowsTheme: true,
     noteRadius: 12,
     noteShadow: 0,
     noteBorderWidth: 0,

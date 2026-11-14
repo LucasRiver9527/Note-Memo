@@ -1,3 +1,10 @@
+function updateWorkspaceGreeting(hour = new Date().getHours()) {
+  const night = hour < 6 || hour >= 18;
+  const period = hour < 6 ? 'night' : hour < 12 ? 'morning' : hour < 18 ? 'afternoon' : 'evening';
+  $('#workspaceGreetingIcon').setAttribute('href', night ? '#ui-moon' : '#ui-sun');
+  $('#workspaceGreeting').textContent = t('workspace_' + period);
+}
+
 /* 便签视图（薄壳）：承载主渲染入口 renderAll / setViewMode / syncBoardSize 与增量渲染缓存。
    具体域已拆分到 board/*（卡片、媒体、表格、拖动、画布）等模块。
    非 UMD（需 DOM / window.api）；加载顺序须在 app.js 之前、各域模块之后。 */
@@ -67,8 +74,14 @@ function renderAll() {
   const visible = visibleNotes();
   const query = filter.query.trim().toLowerCase(); // 仅用于 todo 视图匹配与 no-match 判定
 
+  if (docPickerReturn && !state.notes.some((note) => note.id === docNoteId)) {
+    returnFromNoteDetail();
+    return;
+  }
+  const detailOpen = !!docPickerReturn;
+  const mode = detailOpen ? 'doc' : state.settings.viewMode;
   let resultCount = visible.length;
-  if (state.settings.viewMode === 'todo') {
+  if (mode === 'todo') {
     board.classList.add('hidden');
     memoList.classList.add('hidden');
     todoList.classList.remove('hidden');
@@ -78,7 +91,7 @@ function renderAll() {
     docList.innerHTML = '';
     lastRenderView = 'todo';
     resultCount = renderTodoView(visible, query);
-  } else if (state.settings.viewMode === 'memo') {
+  } else if (mode === 'memo') {
     board.classList.add('hidden');
     memoList.classList.remove('hidden');
     todoList.classList.add('hidden');
@@ -88,7 +101,7 @@ function renderAll() {
     docList.innerHTML = '';
     lastRenderView = 'memo';
     getSortedNotes(visible).forEach((n) => memoList.appendChild(buildMemoEl(n)));
-  } else if (state.settings.viewMode === 'doc') {
+  } else if (mode === 'doc') {
     board.classList.add('hidden');
     memoList.classList.add('hidden');
     todoList.classList.add('hidden');
@@ -97,7 +110,7 @@ function renderAll() {
     memoList.innerHTML = '';
     todoList.innerHTML = '';
     lastRenderView = 'doc';
-    if (docNoteId && !visible.some((n) => n.id === docNoteId)) docNoteId = null;
+    if (!detailOpen && docNoteId && !visible.some((n) => n.id === docNoteId)) { docNoteId = null; docPickerReturn = null; }
     renderDocView(visible);
   } else {
     board.classList.remove('hidden');
@@ -133,12 +146,17 @@ function renderAll() {
     });
   }
 
-  $('#noteCount').textContent = state.notes.length;
+  updateWorkspaceGreeting();
+  $('#noteCount').textContent = visible.length;
   const empty = state.notes.length === 0;
   const hasFilter = !!query || !!filter.archive || filter.group !== 'all' ||
     Object.values(state.settings.collapsedGroups || {}).some(Boolean);
-  const noMatches = !empty && hasFilter && resultCount === 0;
-  const showEmpty = empty && state.settings.viewMode !== 'todo';
+  const group = state.groups.find((g) => g.id === filter.group);
+  $('#workspaceTitle').textContent = filter.archive ? t('archive_view') :
+    filter.group === 'ungrouped' ? t('ungrouped') : group?.name || t('workspace_all');
+  $('#noteCount').classList.toggle('hidden', hasFilter);
+  const noMatches = !detailOpen && !empty && hasFilter && resultCount === 0;
+  const showEmpty = !detailOpen && empty && mode !== 'todo';
   const emptyHint = $('#emptyHint');
   emptyHint.classList.toggle('hidden', !showEmpty && !noMatches);
   $('.empty-icon', emptyHint).textContent = noMatches ? '⌕' : '🗒️';
@@ -147,18 +165,19 @@ function renderAll() {
   $('#btnEmptyCreate').classList.toggle('hidden', !showEmpty);
   $('#btnClearFilters').classList.toggle('hidden', !noMatches);
   $('#btnClearFilters').onclick = clearViewFilters;
-  if (noMatches && state.settings.viewMode === 'todo') todoList.classList.add('hidden');
-  if ((noMatches || showEmpty) && state.settings.viewMode === 'doc') docList.classList.add('hidden');
+  if (noMatches && mode === 'todo') todoList.classList.add('hidden');
+  if ((noMatches || showEmpty) && mode === 'doc') docList.classList.add('hidden');
   $('#btnBatchToggle').classList.toggle('hidden', empty);
-  $('#btnQuickArrange').classList.toggle('hidden', empty || state.settings.viewMode !== 'board');
-  $('#btnSaveOrder').classList.toggle('hidden', empty || state.settings.viewMode !== 'board');
-  if (typeof syncToolbarMore === 'function') syncToolbarMore();
+  const arrangeButton = $('#btnQuickArrange');
+  arrangeButton.disabled = empty || mode !== 'board';
+  arrangeButton.classList.toggle('arrange-unavailable', arrangeButton.disabled);
+  $('#btnSaveOrder').classList.toggle('hidden', empty || mode !== 'board');
   if (multiSelect) syncSelectedVisual();
 
-  if (state.settings.viewMode === 'board') syncBoardSize();
+  if (mode === 'board') syncBoardSize();
   if (typeof syncZoomToolbar === 'function') syncZoomToolbar();
   if (typeof renderDesktopNotes === 'function') renderDesktopNotes();
-  if (typeof renderFilterStatus === 'function') renderFilterStatus(resultCount, state.settings.viewMode);
+  if (typeof renderFilterStatus === 'function') renderFilterStatus(resultCount, mode);
   // UX-30B：显式「恢复保存布局」按钮的可用性随视图/筛选/查询/保存/导入更新。
   const restoreBtn = $('#btnRestoreLayout');
   if (restoreBtn) restoreBtn.disabled = !(typeof canRestoreSavedLayout === 'function' && canRestoreSavedLayout());
@@ -200,6 +219,67 @@ function prepareNewNoteVisibility() {
   if (isGroupCollapsed(filter.group)) toggleGroupCollapse(filter.group);
 }
 
+let scheduleBoardEdgeFade;
+
+function bindBoardEdgeFade(canvas, board) {
+  let frame = 0;
+  let faded = new Set();
+
+  function syncEdges() {
+    frame = 0;
+    const updates = new Map();
+    const previous = faded;
+    faded = new Set();
+    if (board.offsetWidth) {
+      const zoom = boardZoom();
+      const scrollLeft = canvas.scrollLeft;
+      const scrollTop = canvas.scrollTop;
+      const right = scrollLeft + canvas.clientWidth;
+      const bottom = scrollTop + canvas.clientHeight;
+      const fadeWidth = 7;
+      const fadeX = Math.min(fadeWidth, canvas.scrollWidth - right);
+      const fadeY = Math.min(fadeWidth, canvas.scrollHeight - bottom);
+      if (fadeX > 1 || fadeY > 1) {
+        for (const card of board.querySelectorAll('.note')) {
+          const left = card.offsetLeft;
+          const top = card.offsetTop;
+          if (left * zoom >= right || top * zoom >= bottom ||
+              (left + card.offsetWidth) * zoom <= scrollLeft ||
+              (top + card.offsetHeight) * zoom <= scrollTop) continue;
+          const masks = [];
+          if (fadeX > 1 && (left + card.offsetWidth) * zoom > right) {
+            const edge = right / zoom - left;
+            masks.push(`linear-gradient(to right, #000 ${edge - fadeX / zoom}px, transparent ${edge}px)`);
+          }
+          if (fadeY > 1 && (top + card.offsetHeight) * zoom > bottom) {
+            const edge = bottom / zoom - top;
+            masks.push(`linear-gradient(to bottom, #000 ${edge - fadeY / zoom}px, transparent ${edge}px)`);
+          }
+          if (masks.length) {
+            updates.set(card, masks.join(', '));
+            faded.add(card);
+            previous.delete(card);
+          }
+        }
+      }
+    }
+    // Finish all geometry reads before changing any masks.
+    for (const [card, mask] of updates) {
+      if (card.style.getPropertyValue('--note-edge-mask') !== mask) card.style.setProperty('--note-edge-mask', mask);
+    }
+    for (const card of previous) card.style.removeProperty('--note-edge-mask');
+  }
+
+  const schedule = () => {
+    if (!frame) frame = requestAnimationFrame(syncEdges);
+  };
+  canvas.addEventListener('scroll', schedule, { passive: true });
+  const observer = new ResizeObserver(schedule);
+  observer.observe(canvas);
+  observer.observe(board);
+  return schedule;
+}
+
 // 自适应画布尺寸：让「画布」高度/宽度至少等于视口，随便签内容增大。
 // 这样内容不超视口时不出现滚动条（#canvas overflow:auto 因 content<=client 而无滚动），
 // 超出时出现并让滚动条拇指长度随内容自适应。仅画布视图需要。
@@ -208,6 +288,8 @@ function syncBoardSize() {
   const board = $('#board');
   const canvas = $('#canvas');
   if (!board || !canvas) return;
+  scheduleBoardEdgeFade ??= bindBoardEdgeFade(canvas, board);
+  scheduleBoardEdgeFade();
   const L = (typeof BoardLayout !== 'undefined' && BoardLayout.LAYOUT) ? BoardLayout.LAYOUT : { margin: 20, gap: 18 };
   const cw = canvas.clientWidth || 0;
   const ch = canvas.clientHeight || 0;
@@ -244,9 +326,8 @@ function syncViewToggles(mode) {
 
 function setViewMode(mode) {
   state.settings.viewMode = mode;
-  if (mode !== 'doc') docNoteId = null;
+  if (mode !== 'doc' || docPickerReturn) { docNoteId = null; docPickerReturn = null; }
   syncViewToggles(mode);
-  syncSortToolbar(mode);
   save();
   renderAll();
 }

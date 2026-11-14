@@ -28,6 +28,7 @@
     saveTimer: null,
     dragSortId: null,
     docNoteId: null,
+    docPickerReturn: null,
     savedRange: null,
     savedSelText: '',
     savedNoteId: null,

@@ -1,4 +1,4 @@
-﻿/* ============ 便签 - 渲染进程逻辑 ============ */
+/* ============ 便签 - 渲染进程逻辑 ============ */
 
 // $ / $$ / toast 已拆分到 core/dom.js（L1 零依赖，挂顶层全局）
 
@@ -48,19 +48,14 @@ function t(key) {
   return T(key, lang);
 }
 
-// v1.2.8 更新说明：仅列相对 1.2.7 已完成的用户可见变化。
+// v1.3.0 用户可见更新。
 const CHANGELOG = [
-  { zh: "本版聚焦搜索、表格编辑、画布整理和桌面便签体验，修复拖动遮挡与桌面圆角灰影。", en: "This release improves search, table editing, arranging and desktop notes, and fixes dragged notes appearing behind other cards and gray desktop-note corners." },
-  { zh: "搜索结果显示命中摘要与来源，可定位到标题、普通正文或待办项；富文本、表格和附件提供查看入口，不触发其中的链接。", en: "Search results show matching snippets and their source, with navigation to titles, plain text or to-do items. Rich text, tables and attachments offer a view action without opening links." },
-  { zh: "文档选择列表的自动字色适配主题、背景图和透明度，增强摘要与命中词的可读性，并保留手动字色设置。", en: "Automatic text colors in the document picker adapt to themes, background images and opacity for clearer snippets and matches, while respecting custom text colors." },
-  { zh: "画布拖动时，当前便签及批量拖动的便签保持在其他普通便签上方，避免被遮挡。", en: "Dragged canvas notes, including a selected group, stay above other ordinary notes instead of disappearing behind them." },
-  { zh: "批量选择新增“整理选中”：仅排列选中的可见便签，避让同一布局范围内其他便签，支持撤销和重做。", en: "The batch bar adds Arrange selected: arrange only selected visible notes, avoid other notes in the same layout scope, and undo or redo the arrangement." },
-  { zh: "普通表格编辑支持 Tab / Shift+Tab 前后跳格，自动跳过合并覆盖格与斜线专用格；Esc 取消当前格修改。", en: "Use Tab and Shift+Tab to move between ordinary table cells, skipping merged-away and diagonal cells. Escape cancels edits in the current cell." },
-  { zh: "表格列宽随字号合理伸展，改善长链接、连续英文和中文的阅读；宽表可横向滚动，未指定颜色的网格跟随文字颜色。", en: "Table columns scale with font size for more readable links and long text. Wide tables scroll horizontally, and default grid colors follow the text color." },
-  { zh: "桌面便签新增贴边吸附与细线预览，可在设置中关闭；确认落点时保持窗口大小，取消移动时恢复原位。", en: "Desktop notes gain edge snapping with a subtle outline preview and a setting to disable it. Snapping preserves window size, and canceling a move restores the original position." },
-  { zh: "修复桌面便签透明圆角的灰影，保留亚克力模糊与透明度；桌面采用系统圆角，圆角设为 0 时为直角，应用内卡片继续支持自定义圆角。", en: "Fix gray artifacts around transparent desktop-note corners while retaining Acrylic and opacity. Desktop notes use system corners, or square corners when the radius is 0; in-app cards keep custom corner radii." },
-  { zh: "优化空态、批量操作栏与提示的可读性和间距，并明确备份导出及替换导入的范围。", en: "Improve empty-state readability, spacing around batch actions and notifications, and explanations of backup export and replacement import." },
-  { zh: "保存失败后对本次临时文件进行有限清理重试；无法清理时记录残留路径，保存失败仍会如实反馈。", en: "Failed saves retry cleanup of their temporary file a limited number of times. If cleanup still fails, the remaining path is logged and the save failure is still reported." }
+  { zh: "全新工作区与绿色 NM 图标。主工具栏在切换视图时保持稳定，设置中心、备忘录和文档目录重新布局。", en: "A redesigned workspace and green NM icon, with a stable toolbar and refreshed settings, memo list, and document catalog." },
+  { zh: "从画布、备忘录或待办打开便签详情，返回后恢复原视图、筛选与位置。聚焦空搜索框可快速打开最近编辑的便签。", en: "Open note details from the canvas, memo list, or tasks and return to the original view, filters, and position. Focus the empty search box to open recently edited notes." },
+  { zh: "外观设置提供实时预览，新建便签底色默认跟随主题，也可改用自定义颜色。", en: "Appearance settings include a live preview. New notes follow the theme color by default and can use a custom color." },
+  { zh: "拖动轻量表格的列边界可调整列宽，右键可恢复自动列宽。", en: "Drag a table column edge to resize it. Use the table context menu to restore automatic widths." },
+  { zh: "保存失败会保留当前编辑并提供重试。恢复草稿时，主窗口的位置与分组可和桌面便签的正文编辑一起恢复。", en: "Failed saves retain current edits and offer retry. Draft recovery combines main-window positions and groups with edits from desktop notes." },
+  { zh: "统一画布横竖滚动条与便签贴边效果，减少大量便签滚动时的重复计算。", en: "Canvas scrollbars and edge fades are consistent, with less redundant work when scrolling large boards." }
 ];
 
 const APP_VERSION = (window.api && window.api.appVersion) || '';
@@ -165,21 +160,9 @@ UndoHistory.setApplier(applySnapshot);
 
 /* ============ 工具函数 ============ */
 function defaultNoteColor() {
-  return state.settings.noteColor || DEFAULT_NOTE_COLOR;
-}
-
-// 分组芯片区左右箭头状态刷新：无可滚动/在最左/在最右时置灰；无分组时隐藏。供芯片重渲染后调用。
-function refreshChipsScroll() {
-  const wrap = $('#groupChips');
-  const left = $('#btnChipsLeft');
-  const right = $('#btnChipsRight');
-  if (!wrap || !left || !right) return;
-  const empty = wrap.childElementCount === 0;
-  left.classList.toggle('hidden', empty);
-  right.classList.toggle('hidden', empty);
-  const max = wrap.scrollWidth - wrap.clientWidth;
-  left.disabled = empty || max <= 0 || wrap.scrollLeft <= 1;
-  right.disabled = empty || max <= 0 || wrap.scrollLeft >= max - 1;
+  return state.settings.noteColorFollowsTheme !== false
+    ? getTheme().mini?.[1] || DEFAULT_NOTE_COLOR
+    : state.settings.noteColor || DEFAULT_NOTE_COLOR;
 }
 
 function getTheme() {
@@ -242,6 +225,26 @@ function formatDate(ts) {
 
 // toast() 已拆分到 core/dom.js（挂顶层全局）
 
+let saveAttempt = 0;
+
+function showSaveWarning(visible) {
+  const warning = $('#saveWarning');
+  warning.classList.toggle('hidden', !visible || dataReadonly);
+  $('button', warning).onclick = () => saveNow();
+}
+
+function writeMainData(data, opts) {
+  const attempt = ++saveAttempt;
+  return window.api.saveData(data, opts).then(() => {
+    if (attempt === saveAttempt) showSaveWarning(false);
+    return true;
+  }, (err) => {
+    reportSaveError(err);
+    if (attempt === saveAttempt && !opts.replace) showSaveWarning(true);
+    return false;
+  });
+}
+
 // 保存失败提示：不静默丢数据（已尝试 toast 一次，避免每次保存都弹）
 // （saveErrorShown 见 core/app-state.js）
 function reportSaveError(err) {
@@ -294,7 +297,7 @@ function save(opts) {
   clearTimeout(saveTimer);
   saveTimer = setTimeout(() => {
     state.notes.forEach(cleanupRefs);
-    window.api.saveData({ settings: state.settings, groups: state.groups, notes: state.notes, trash: state.trash }, { draftToken, ...(opts || {}) }).catch(reportSaveError);
+    writeMainData({ settings: state.settings, groups: state.groups, notes: state.notes, trash: state.trash }, { draftToken, ...(opts || {}) });
   }, 300);
 }
 
@@ -307,21 +310,7 @@ function saveNow(opts) {
   const replacing = !!(opts && opts.replace);
   const draftToken = replacing ? undefined : window.api.captureDraft({ settings: state.settings, groups: state.groups, notes: state.notes, trash: state.trash });
   if (!replacing && !draftToken) reportSaveError(new Error('恢复草稿写入失败'));
-  return window.api.saveData({ settings: state.settings, groups: state.groups, notes: state.notes, trash: state.trash }, { draftToken, ...(opts || {}) })
-    .then(() => true, (err) => {
-      reportSaveError(err);
-      return false;
-    });
-}
-
-// 「一键整理 / 保存当前排序」只在便签视图显示；其它视图排序简单，无需这两个按键（避免无关 bug）。
-function syncSortToolbar(viewMode) {
-  const arrangeBtn = $('#btnQuickArrange');
-  const saveOrderBtn = $('#btnSaveOrder');
-  const hidden = viewMode !== 'board' || state.notes.length === 0;
-  if (arrangeBtn) arrangeBtn.classList.toggle('hidden', hidden);
-  if (saveOrderBtn) saveOrderBtn.classList.toggle('hidden', hidden);
-  if (typeof syncToolbarMore === 'function') syncToolbarMore();
+  return writeMainData({ settings: state.settings, groups: state.groups, notes: state.notes, trash: state.trash }, { draftToken, ...(opts || {}) });
 }
 
 /* ============ 主题 / 字体 / 语言 / 设置面板（已拆分到 settings-panel.js，见全局 SettingsPanel） ============ */
@@ -333,6 +322,8 @@ function syncSortToolbar(viewMode) {
 
 /* ============ 通用弹窗 / 关闭确认弹窗 / 备份（已拆分到 system/dialogs.js） ============ */
 function switchTab(name) {
+  const settingsContent = $('#settingsPanel .sp-content');
+  if (settingsContent) settingsContent.scrollTop = 0;
   $$('.sp-nav-item').forEach((b) => b.classList.toggle('active', b.dataset.tab === name));
   $$('.sp-tab').forEach((s) => s.classList.toggle('hidden', s.dataset.tab !== name));
   if (name === 'appearance') { syncSettingsInputs(); renderThemePanel(); }
@@ -421,7 +412,6 @@ async function init() {
   renderGroupChips();
   renderAll();
   syncViewToggles(state.settings.viewMode);
-  syncSortToolbar(state.settings.viewMode);
 
   setInterval(() => purgeTrash(), 60 * 60 * 1000);
 

@@ -59,7 +59,7 @@ async function pinNoteToDesktop(n) {
    ponytail: 「更多」直接复用便签右键菜单（showNoteContextMenu）作为溢出面板，
    省去重复的按钮动作；若日后要「图标式溢出」再单独做，不必现在抽象。 */
 const NOTE_TOOL_PRIMARY = ['desktop', 'group', 'color', 'pin', 'del'];
-const NOTE_TOOL_SECONDARY = ['desktop', 'todo', 'image', 'table', 'remind', 'preview'];
+const NOTE_TOOL_SECONDARY = ['todo', 'image', 'table', 'remind', 'preview'];
 
 function noteToolHtml(id, n, isTodo) {
   // 纯图标按钮：本地化名称同时写入 title 与 aria-label（aria-label 显式覆盖符号文本）。
@@ -67,26 +67,27 @@ function noteToolHtml(id, n, isTodo) {
   const A = (key) => `title="${escapeHtml(t(key))}" aria-label="${escapeHtml(t(key))}"`;
   const pressed = (on) => `aria-pressed="${on ? 'true' : 'false'}"`;
   switch (id) {
-    case 'desktop': return `<button class="t-desktop" ${A('desktop')}>📌</button>`;
-    case 'todo': return `<button class="t-todo ${isTodo ? 'active' : ''}" ${A('todo_mode')} ${pressed(isTodo)}>☑</button>`;
-    case 'group': return `<button class="t-group ${n.groupId ? 'active' : ''}" ${A(n.groupId ? 'remove_from_group' : 'add_to_group')}>🏷</button>`;
-    case 'image': return `<button class="t-image" ${A('insert_image')}>🖼️</button>`;
-    case 'table': return `<button class="t-table" ${A('insert_table')}>▦</button>`;
-    case 'remind': return `<button class="t-remind" ${A('todo_remind')}>⏰</button>`;
-    case 'color': return `<button class="t-color" ${A('color')}>🎨</button>`;
-    case 'preview': return isTodo ? '' : `<button class="t-preview ${n.preview ? 'active' : ''}" ${A(n.preview ? 'note_preview_off' : 'note_preview')} ${pressed(n.preview)}>👁</button>`;
-    case 'pin': return `<button class="t-pin ${n.pinned ? 'active' : ''}" ${A('pin')} ${pressed(n.pinned)}>🔝</button>`;
-    case 'del': return `<button class="t-del" ${A('delete')}>🗑</button>`;
+    case 'desktop': return `<button class="t-desktop" ${A('desktop')}><svg class="ui-icon" aria-hidden="true" focusable="false"><use href="#ui-pin"/></svg></button>`;
+    case 'todo': return `<button class="t-todo ${isTodo ? 'active' : ''}" ${A('todo_mode')} ${pressed(isTodo)}><svg class="ui-icon" aria-hidden="true" focusable="false"><use href="#ui-todo"/></svg></button>`;
+    case 'group': return `<button class="t-group ${n.groupId ? 'active' : ''}" ${A(n.groupId ? 'remove_from_group' : 'add_to_group')}><svg class="ui-icon" aria-hidden="true" focusable="false"><use href="#ui-folder"/></svg></button>`;
+    case 'image': return `<button class="t-image" ${A('insert_image')}><svg class="ui-icon" aria-hidden="true" focusable="false"><use href="#ui-image"/></svg></button>`;
+    case 'table': return `<button class="t-table" ${A('insert_table')}><svg class="ui-icon" aria-hidden="true" focusable="false"><use href="#ui-arrange"/></svg></button>`;
+    case 'remind': return `<button class="t-remind" ${A('todo_remind')}><svg class="ui-icon" aria-hidden="true" focusable="false"><use href="#ui-clock"/></svg></button>`;
+    case 'color': return `<button class="t-color" ${A('color')}><svg class="ui-icon" aria-hidden="true" focusable="false"><use href="#ui-color"/></svg></button>`;
+    case 'preview': return isTodo ? '' : `<button class="t-preview ${n.preview ? 'active' : ''}" ${A(n.preview ? 'note_preview_off' : 'note_preview')} ${pressed(n.preview)}><svg class="ui-icon" aria-hidden="true" focusable="false"><use href="#ui-eye"/></svg></button>`;
+    case 'pin': return `<button class="t-pin ${n.pinned ? 'active' : ''}" ${A('pin')} ${pressed(n.pinned)}><svg class="ui-icon" aria-hidden="true" focusable="false"><use href="#ui-raise"/></svg></button>`;
+    case 'del': return `<button class="t-del" ${A('delete')}><svg class="ui-icon" aria-hidden="true" focusable="false"><use href="#ui-trash"/></svg></button>`;
     default: return '';
   }
 }
 
-function noteToolsHtml(n, isTodo) {
+function noteToolsHtml(n, isTodo, onBoard = false) {
   const hidden = new Set(state.settings.noteToolbarHidden || []);
   const compact = state.settings.noteToolbarCompact !== false;
   const render = (ids) => ids.filter((id) => !hidden.has(id)).map((id) => noteToolHtml(id, n, isTodo)).join('');
   if (!compact) return render(NOTE_TOOL_PRIMARY.concat(NOTE_TOOL_SECONDARY));
-  return render(NOTE_TOOL_PRIMARY) + `<button class="t-more" title="${escapeHtml(t('more'))}" aria-label="${escapeHtml(t('more'))}">⋯</button>`;
+  const quickTools = render(onBoard ? NOTE_TOOL_PRIMARY.filter((id) => id !== 'pin') : NOTE_TOOL_PRIMARY);
+  return `<div class="compact-quick-tools">${quickTools}</div><button class="t-more" title="${escapeHtml(t('more'))}" aria-label="${escapeHtml(t('more'))}"><svg class="ui-icon" aria-hidden="true" focusable="false"><use href="#ui-more"/></svg></button>`;
 }
 
 function buildNoteEl(n) {
@@ -137,7 +138,7 @@ function buildNoteEl(n) {
         <span class="note-grip">⠿</span>
         <input class="note-title" value="${escapeHtml(n.title || '')}" placeholder="${t('note_title')}" />
       </div>
-      <div class="note-tools">${noteToolsHtml(n, isTodo)}</div>
+      <div class="note-tools${state.settings.noteToolbarCompact !== false ? ' compact-tools' : ''}">${noteToolsHtml(n, isTodo, true)}</div>
     </div>
     <div class="note-body">${bodyHtml}</div>
     <div class="note-foot">
@@ -372,13 +373,13 @@ function buildMemoEl(n) {
       <div class="memo-head">
         <span class="memo-grip" title="${t('drag_sort')}">⠿</span>
         <input class="note-title" value="${escapeHtml(n.title || '')}" placeholder="${t('note_title')}" />
-        <div class="memo-tools">${noteToolsHtml(n, isTodo)}</div>
+          <span class="date">${formatDate(n.updatedAt || n.createdAt)}</span>
+        <div class="memo-tools${state.settings.noteToolbarCompact !== false ? ' compact-tools' : ''}">${noteToolsHtml(n, isTodo)}</div>
       </div>
       <div class="memo-body">${bodyHtml}</div>
       <div class="memo-foot">
-        <span class="group-tag" title="${t('set_group')}"><span class="dot" style="background:${sanitizeCss(group && group.color) || '#999'}"></span>${group ? escapeHtml(group.name) : t('ungrouped')}</span>
+        <span class="group-tag${group ? '' : ' memo-ungrouped'}" title="${t('set_group')}"><span class="dot" style="background:${sanitizeCss(group && group.color) || '#999'}"></span>${group ? escapeHtml(group.name) : t('ungrouped')}</span>
         ${reminder ? `<span class="reminder-chip ${overdue ? 'overdue' : ''}" title="${formatDate(n.reminder.time)}">⏰ ${formatDate(n.reminder.time)}</span>` : ''}
-        <span class="date">${formatDate(n.updatedAt || n.createdAt)}</span>
       </div>
     </div>`;
 
@@ -398,6 +399,14 @@ function wireCommon(el, n) {
   });
   const checkboxes = $$('.todo-item input[type=checkbox]', el);
 
+  titleInput.addEventListener('keydown', (event) => {
+    if (event.key !== 'Tab' || event.shiftKey || event.isComposing) return;
+    const firstTool = el.querySelector('.note-tools button:not(:disabled), .memo-tools button:not(:disabled)');
+    if (!firstTool) return;
+    event.preventDefault();
+    titleInput.blur();
+    firstTool.focus();
+  });
   titleInput.addEventListener('input', () => { n.title = titleInput.value; n.updatedAt = Date.now(); save(); refreshFoot(el, n); });
   if (content) {
     content.addEventListener('click', (e) => {

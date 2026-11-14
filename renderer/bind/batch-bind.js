@@ -12,28 +12,6 @@
 }(typeof self !== 'undefined' ? self : this, function () {
   'use strict';
 
-const compactToolbar = typeof window === 'undefined'
-  ? { matches: false, addEventListener() {} }
-  : window.matchMedia('(max-width: 1050px)');
-function syncToolbarMore() {
-  const wrap = $('#toolbarMoreWrap');
-  const menu = $('#toolbarMoreMenu');
-  const undoBtn = $('#btnUndo');
-  if (!wrap || !menu || !undoBtn) return;
-  const actions = ['btnQuickArrange', 'btnSaveOrder', 'btnBatchToggle'].map((id) => $('#' + id));
-  if (compactToolbar.matches) {
-    actions.forEach((button) => { if (button.parentElement !== menu) menu.appendChild(button); });
-    wrap.classList.toggle('hidden', !actions.some((button) => !button.classList.contains('hidden')));
-    actions.forEach((button) => button.setAttribute('role', 'menuitem'));
-  } else {
-    actions.forEach((button) => { if (button.parentElement !== undoBtn.parentElement) undoBtn.before(button); });
-    actions.forEach((button) => button.removeAttribute('role'));
-    wrap.classList.add('hidden');
-    menu.classList.add('hidden');
-    $('#btnToolbarMore').setAttribute('aria-expanded', 'false');
-  }
-}
-
 function bindBatch() {
   $('#btnAdd').onclick = () => {
     if (state.settings.viewMode === 'todo') {
@@ -54,17 +32,63 @@ function bindBatch() {
   const moreWrap = $('#toolbarMoreWrap');
   const moreMenu = $('#toolbarMoreMenu');
   const moreButton = $('#btnToolbarMore');
-  const closeMore = () => { moreMenu.classList.add('hidden'); moreButton.setAttribute('aria-expanded', 'false'); };
-  moreButton.onclick = () => {
-    const opening = moreMenu.classList.contains('hidden');
-    moreMenu.classList.toggle('hidden', !opening);
-    moreButton.setAttribute('aria-expanded', String(opening));
+  const entries = () => Array.from(moreMenu.querySelectorAll('button:not(.hidden):not(:disabled)'));
+  const closeMore = (restoreFocus = false) => {
+    if (moreMenu.classList.contains('hidden')) return;
+    moreMenu.classList.add('hidden');
+    moreButton.setAttribute('aria-expanded', 'false');
+    if (restoreFocus) moreButton.focus();
   };
-  moreMenu.addEventListener('click', (event) => { if (event.target.closest('button')) closeMore(); });
+  const sortMode = $('#sortMode');
+  const sortRules = $('#toolbarSortRules');
+  const openMore = () => {
+    sortRules.replaceChildren(...Array.from(sortMode.options, (option) => {
+      const button = document.createElement('button');
+      button.type = 'button';
+      button.className = 'tb-btn secondary';
+      button.setAttribute('role', 'menuitemradio');
+      button.setAttribute('aria-checked', String(option.selected));
+      button.textContent = option.textContent;
+      button.onclick = () => {
+        if (sortMode.value === option.value) return;
+        sortMode.value = option.value;
+        sortMode.dispatchEvent(new Event('change'));
+      };
+      return button;
+    }));
+    moreMenu.classList.remove('hidden');
+    moreButton.setAttribute('aria-expanded', 'true');
+    entries()[0]?.focus();
+  };
+  moreButton.onclick = () => {
+    if (moreMenu.classList.contains('hidden')) openMore();
+    else closeMore(true);
+  };
+  moreButton.addEventListener('keydown', (event) => {
+    if (event.key === 'ArrowDown') { event.preventDefault(); openMore(); }
+  });
+  moreMenu.addEventListener('keydown', (event) => {
+    if (!['ArrowDown', 'ArrowUp', 'Home', 'End'].includes(event.key)) return;
+    event.preventDefault();
+    const items = entries();
+    if (!items.length) return;
+    const i = items.indexOf(document.activeElement);
+    const next = event.key === 'Home' ? 0 : event.key === 'End' ? items.length - 1 :
+      (i + (event.key === 'ArrowDown' ? 1 : -1) + items.length) % items.length;
+    items[next].focus();
+  });
+  moreMenu.addEventListener('click', (event) => {
+    const action = event.target.closest('button');
+    if (action) closeMore(action.id !== 'btnWorkspaceSort');
+  });
+  moreWrap.addEventListener('focusout', (event) => { if (!moreWrap.contains(event.relatedTarget)) closeMore(); });
   document.addEventListener('pointerdown', (event) => { if (!moreWrap.contains(event.target)) closeMore(); });
-  document.addEventListener('keydown', (event) => { if (event.key === 'Escape') closeMore(); });
-  compactToolbar.addEventListener('change', syncToolbarMore);
-  syncToolbarMore();
+  document.addEventListener('keydown', (event) => {
+    if (event.key === 'Escape' && !moreMenu.classList.contains('hidden')) {
+      event.preventDefault();
+      closeMore(true);
+    }
+  });
   // Keep feedback above the batch actions, including when translated buttons wrap.
   const batchBar = $('#batchBar');
   new ResizeObserver(() => {
@@ -104,28 +128,42 @@ function bindBatch() {
     };
   }
 
-  // 分组过多时：鼠标滚轮在分组芯片区水平滚动，让「后面未显示的分组」可达
-  const chipsWrap = $('#groupChips');
-  if (chipsWrap) {
-    chipsWrap.addEventListener('wheel', (e) => {
-      if (Math.abs(e.deltaY) > Math.abs(e.deltaX)) {
-        e.preventDefault();
-        chipsWrap.scrollLeft += e.deltaY;
-      }
-    }, { passive: false });
-
-    // 左右箭头滚动分组：固定在两端，按是否可滚动方向置灰，无分组时隐藏
-    const leftArrow = $('#btnChipsLeft');
-    const rightArrow = $('#btnChipsRight');
-    const chipsStep = () => Math.max(120, Math.round(chipsWrap.clientWidth * 0.7));
-    const scrollChips = (dir) => { chipsWrap.scrollLeft += dir * chipsStep(); requestAnimationFrame(refreshChipsScroll); };
-    if (leftArrow) leftArrow.onclick = () => scrollChips(-1);
-    if (rightArrow) rightArrow.onclick = () => scrollChips(1);
-    chipsWrap.addEventListener('scroll', refreshChipsScroll);
-    window.addEventListener('resize', refreshChipsScroll);
-    refreshChipsScroll();
-  }
+  const nav = $('#filterbar');
+  const navToggle = $('#btnWorkspaceNav');
+  const setNav = (open) => {
+    nav.classList.toggle('workspace-nav-open', open);
+    navToggle.setAttribute('aria-expanded', String(open));
+  };
+  const narrowNav = window.matchMedia('(max-width: 820px)');
+  const add = $('#btnAdd');
+  const placeAdd = () => {
+    if (narrowNav.matches) navToggle.parentElement.appendChild(add);
+    else nav.querySelector('.workspace-nav-items').prepend(add);
+    setNav(false);
+  };
+  narrowNav.addEventListener('change', placeAdd);
+  placeAdd();
+  navToggle.onclick = () => {
+    const open = !nav.classList.contains('workspace-nav-open');
+    setNav(open);
+    if (open) (nav.querySelector('.chip.active') || nav.querySelector('.chip')).focus();
+  };
+  document.addEventListener('pointerdown', (event) => {
+    if (!nav.contains(event.target) && !navToggle.contains(event.target)) setNav(false);
+  });
+  document.addEventListener('keydown', (event) => {
+    if (!event.defaultPrevented && event.key === 'Escape' && nav.classList.contains('workspace-nav-open') && navToggle.offsetWidth && $('#settingsPanel').classList.contains('hidden')) {
+      setNav(false);
+      navToggle.focus();
+    }
+  });
+  nav.addEventListener('click', (event) => {
+    if (event.composedPath().some((el) => el instanceof Element && el.matches('.filter-scope .chip, #groupChips .chip'))) {
+      if (nav.classList.contains('workspace-nav-open') && navToggle.offsetWidth) navToggle.focus();
+      setNav(false);
+    }
+  }, true);
 }
 
-  return { bindBatch, syncToolbarMore };
+  return { bindBatch };
 }));

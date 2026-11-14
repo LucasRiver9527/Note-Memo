@@ -13,11 +13,24 @@
   'use strict';
 
 function bindAppearance() {
+  $$('[data-appearance-jump]').forEach((button) => {
+    button.addEventListener('click', () => {
+      const heading = document.getElementById(button.dataset.appearanceJump);
+      heading.focus({ preventScroll: true });
+      heading.scrollIntoView({ block: 'start' });
+    });
+  });
   // 外观输入
   $('#noteOpacity').addEventListener('input', (e) => { state.settings.noteOpacity = Number(e.target.value); applyTheme(); });
   $('#noteOpacity').addEventListener('change', save);
-  $('#noteColorInput').addEventListener('input', (e) => { state.settings.noteColor = e.target.value; });
+  $('#noteColorInput').addEventListener('input', (e) => { state.settings.noteColor = e.target.value; applyTheme(); });
   $('#noteColorInput').addEventListener('change', save);
+  $('#noteColorFollowsTheme').addEventListener('change', (e) => {
+    state.settings.noteColorFollowsTheme = e.target.checked;
+    syncSettingsInputs();
+    applyTheme();
+    save();
+  });
   $('#noteRadius').addEventListener('input', (e) => { state.settings.noteRadius = Number(e.target.value); applyTheme(); });
   $('#noteRadius').addEventListener('change', save);
   $('#noteShadow').addEventListener('input', (e) => { state.settings.noteShadow = Number(e.target.value); applyTheme(); });
@@ -30,6 +43,7 @@ function bindAppearance() {
   $('#noteLetterSpacing').addEventListener('change', save);
   $('#btnResetNoteColor').onclick = () => {
     state.settings.noteColor = DEFAULT_NOTE_COLOR;
+    applyTheme();
     syncSettingsInputs();
     save();
     toast(t('toast_note_bg_reset'));

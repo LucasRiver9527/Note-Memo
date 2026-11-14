@@ -213,6 +213,44 @@ function refreshDocPickerForeground() {
 }
 
 
+function openNoteDetail(id, trigger) {
+  if (!state.notes.some((note) => note.id === id)) return;
+  const canvas = $('#canvas');
+  const source = trigger?.closest('.note, .memo-row, .todo-line, .doc-pick-item');
+  docPickerReturn = {
+    id, mode: state.settings.viewMode, top: canvas.scrollTop, left: canvas.scrollLeft,
+    rowId: source?.dataset.item,
+    more: !!trigger?.closest('.t-more'),
+    fromRecent: !!trigger?.closest('#recentNotes'),
+  };
+  docNoteId = id;
+  renderAll();
+  canvas.scrollTo(0, 0);
+  $('#btnDocBack')?.focus({ preventScroll: true });
+}
+
+function returnFromNoteDetail(restoreFocus = true) {
+  const origin = docPickerReturn;
+  docPickerReturn = null;
+  docNoteId = null;
+  renderAll();
+  if (!origin) return;
+  $('#canvas').scrollTo(origin.left, origin.top);
+  if (!restoreFocus) return;
+  if (origin.fromRecent) {
+    $('#searchInput').focus({ preventScroll: true });
+    return;
+  }
+  const rows = { board: '#board .note', memo: '#memoList .memo-row',
+    todo: '#todoList .todo-line', doc: '#docList .doc-pick-item' };
+  const row = $$(rows[origin.mode]).find((item) =>
+    (item.dataset.id || item.dataset.note) === origin.id && item.dataset.item === origin.rowId);
+  const target = origin.mode === 'doc' ? row : row?.querySelector(
+    origin.mode === 'todo' ? '[data-goto]' : origin.more ? '.t-more' : '.note-title'
+  );
+  (target || $('#searchInput'))?.focus({ preventScroll: true });
+}
+
 function renderDocView(visible) {
   const list = $('#docList');
   if (!list) return;
@@ -223,20 +261,26 @@ function renderDocView(visible) {
       const c = sanitizeCss(n.color);
       const tc = pickerForegroundFor(n, pickerCtx);
       return `
-      <div class="doc-pick-item${n.archived ? ' archived' : ''}" data-id="${escapeHtml(n.id)}" style="--note-color:${c};background:${c || 'transparent'};color:${sanitizeCss(tc)}">
+      <div class="doc-pick-item${n.archived ? ' archived' : ''}" data-id="${escapeHtml(n.id)}" tabindex="0" style="--note-color:${c};background:${c || 'transparent'};color:${sanitizeCss(tc)}">
+        <span class="dp-icon" aria-hidden="true"><svg class="ui-icon"><use href="#ui-doc"/></svg></span>
         <div class="dp-info">
           <div class="dp-title">${escapeHtml(n.title || t('untitled'))}</div>
           <div class="dp-sub">${escapeHtml((noteText(n) || '').slice(0, 80))}</div>
         </div>
-        <span class="dp-arrow">→</span>
+        <span class="dp-arrow" aria-hidden="true"><svg class="ui-icon"><use href="#ui-cm-chevron"/></svg></span>
       </div>`;
     }).join('');
-    list.innerHTML = `<div class="doc-picker-head"><h3>${t('doc_view')}</h3></div>
-      <p class="sp-hint">${t('doc_pick_hint')}</p>
+    list.innerHTML = `<div class="doc-picker-head"><h3>${t('doc_view')}</h3><p class="sp-hint">${t('doc_pick_hint')}</p></div>
       <div class="doc-picker">${items}</div>`;
     const picker = $('.doc-picker', list);
     $$('.doc-pick-item', list).forEach((it) => {
-      it.onclick = () => { docNoteId = it.dataset.id; renderAll(); };
+      const open = () => openNoteDetail(it.dataset.id, it);
+      it.onclick = open;
+      it.addEventListener('keydown', (event) => {
+        if (event.target !== it || !['Enter', ' '].includes(event.key)) return;
+        event.preventDefault();
+        open();
+      });
       // 文档选择列表支持拖拽自定义排序（同备忘录，会切换到「自定义顺序」并保存）。
       // 用指针事件而非原生 HTML5 DnD，拖拽时仍可滚动画布滚轮，可边拖边滚。
       it.addEventListener('pointerdown', (e) => {
@@ -330,7 +374,7 @@ function wireDocView(n, isTodo) {
   // V128-01D3：打开文档时插入紧凑搜索解释（查询为空则不出现）。
   refreshDocSearch(n);
   const back = $('#btnDocBack');
-  if (back) back.onclick = () => { docNoteId = null; renderAll(); };
+  if (back) back.onclick = () => returnFromNoteDetail();
 
   // 便签右上角功能按钮（文档模式）
   const pinBtn = $('#btnDocPin');
@@ -602,7 +646,10 @@ function refreshDocSearch(n) {
 // 定位：必要时打开该文档，重新计算实时命中（不信任旧偏移），聚焦/选中合适的实时目标。
 // 不写 n.z/几何，不改变查询/分组/归档/排序/顺序，不触发文件/链接打开。
 function locateDocSearch(noteId) {
-  if (docNoteId !== noteId) { docNoteId = noteId; renderAll(); }
+  if (docNoteId !== noteId) {
+    const item = $$('.doc-pick-item', $('#docList')).find((row) => row.dataset.id === noteId);
+    openNoteDetail(noteId, item);
+  }
   const n = state.notes.find((x) => x.id === noteId);
   if (!n) return;
   const query = filter.query.trim();
@@ -681,5 +728,5 @@ function locateDocSearch(noteId) {
   }
 }
 
-  return { renderDocView, wireDocView, refreshDocPickerForeground };
+  return { openNoteDetail, returnFromNoteDetail, renderDocView, wireDocView, refreshDocPickerForeground };
 }));

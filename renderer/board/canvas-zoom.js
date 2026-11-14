@@ -85,9 +85,9 @@ function setBoardScaledSize() {
 function syncZoomToolbar() {
   const wrap = $('#canvasToolbar');
   if (!wrap) return;
-  const settingsOpen = $('#settingsOverlay') && !$('#settingsOverlay').classList.contains('hidden');
+  const settingsOpen = $('#settingsPanel') && !$('#settingsPanel').classList.contains('hidden');
   const boardView = state.settings.viewMode === 'board';
-  const show = boardView && !settingsOpen;
+  const show = boardView && !settingsOpen && !docPickerReturn;
   wrap.classList.toggle('hidden', !show);
   if (!show) {
     // 收起时让展开态复位，下次显示回归小圆钮
@@ -369,37 +369,34 @@ function showBoardContextMenu(e) {
   const by = (e.clientY - rect.top) / z;
   const pop = document.createElement('div');
   pop.className = 'color-pop ctx-menu';
-  pop.style.gridTemplateColumns = '1fr';
-  pop.style.minWidth = '140px';
-  pop.style.padding = '4px';
-  pop.style.maxHeight = Math.min(window.innerHeight - 24, 440) + 'px';
-  pop.style.overflowY = 'auto';
-
-  const addItem = (icon, label, onClick, danger) => {
-    const b = document.createElement('button');
-    b.style.cssText = 'background:transparent;border:none;color:var(--fg);padding:4px 9px;border-radius:6px;cursor:pointer;text-align:left;font-size:12.5px;line-height:1.3;font-family:inherit;width:100%;display:flex;align-items:center;gap:6px;';
-    b.innerHTML = `<span>${icon}</span><span>${label}</span>`;
-    b.onmouseenter = () => (b.style.background = 'var(--accent-soft)');
-    b.onmouseleave = () => (b.style.background = 'transparent');
-    b.onclick = () => { closePops(); onClick(); };
-    pop.appendChild(b);
+  const addItem = (icon, label, onClick) => {
+    const button = document.createElement('button');
+    button.type = 'button';
+    button.className = 'cm-row';
+    button.innerHTML = `<svg class="ui-icon cm-icon" aria-hidden="true" focusable="false"><use href="#ui-${icon}"/></svg><span class="cm-label"></span>`;
+    button.querySelector('.cm-label').textContent = label;
+    button.onclick = () => { closePops(); onClick(); };
+    pop.appendChild(button);
   };
 
-  addItem('📝', t('board_new_note'), () => createNote(Math.round(bx), Math.round(by)));
-  addItem('☑', t('board_new_todo'), () => {
+  addItem('plus', t('board_new_note'), () => createNote(Math.round(bx), Math.round(by)));
+  addItem('todo', t('board_new_todo'), () => {
     const n = createTodoNote('', Math.round(bx), Math.round(by));
     renderAll();
     focusNewNote(n.id);
   });
-  addItem('📥', t('board_paste_note'), async () => {
+  addItem('cm-paste', t('board_paste_note'), async () => {
     const text = await window.api.readClipboard();
     if (text && text.trim()) createNoteWithContent(Math.round(bx), Math.round(by), text);
     else toast(t('toast_paste_empty'));
   });
-  addItem('▦', t('board_arrange'), () => arrangeNotes());
+  const separator = document.createElement('div');
+  separator.className = 'cm-separator';
+  pop.appendChild(separator);
+  addItem('arrange', t('board_arrange'), () => arrangeNotes());
   // 仅在存在可恢复的已保存布局（当前作用域、当前可见）时显示「恢复保存布局」。
   if (typeof canRestoreSavedLayout === 'function' && canRestoreSavedLayout()) {
-    addItem('↩', t('restore_layout'), () => restoreSavedLayout());
+    addItem('undo', t('restore_layout'), () => restoreSavedLayout());
   }
 
   // 菜单外观（透明度/亚克力）已归位到「设置 → 外观」，不再挂在每个右键菜单底部

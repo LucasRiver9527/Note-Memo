@@ -119,6 +119,8 @@ function save() {
   saveTimer = setTimeout(() => { saveNow(draftToken); }, 300);
 }
 
+let noteSaveAttempt = 0;
+
 async function saveNow(pendingToken) {
   clearTimeout(saveTimer);
   saveTimer = null;
@@ -126,9 +128,17 @@ async function saveNow(pendingToken) {
   cleanupRefs();
   const draftToken = pendingToken || window.api.captureNoteDraft(note);
   if (!draftToken) console.error('[note] 恢复草稿写入失败');
+  const attempt = ++noteSaveAttempt;
   let ok = false;
   try { ok = await window.api.noteUpdate(note, { draftToken }) === true; }
   catch (err) { console.error('[note] 保存失败：', err); }
+  if (attempt !== noteSaveAttempt) return ok;
+  const warning = $('#noteSaveWarning');
+  warning.classList.toggle('hidden', ok);
+  warning.querySelector('span').textContent = tr('save_pending');
+  const retry = warning.querySelector('button');
+  retry.textContent = tr('save_retry');
+  retry.onclick = () => saveNow();
   const unpinBtn = $('#dnUnpin');
   if (unpinBtn) {
     unpinBtn.textContent = ok ? '📌' : '⚠';
@@ -494,6 +504,13 @@ function showTableContextMenu(e, block) {
     const tbl = getTableById(block.dataset.tableId);
     if (tbl) openTableSettingsDialog(tbl);
   });
+  if (getTableById(block.dataset.tableId)?.columnWidths) {
+    addItem('↔', tr('table_auto_width'), () => {
+      const tbl = getTableById(block.dataset.tableId);
+      delete tbl.columnWidths;
+      refreshTableBlock(block);
+    });
+  }
   addItem('🗑', tr('del_table'), () => {
     removeTableFromNote(block.dataset.tableId);
     deselectTable();
@@ -531,6 +548,10 @@ function highlightBox(block, box) {
 
 function wireTables() {
   $$('.note-table-block').forEach((block) => {
+    bindColumnResize(block, () => getTableById(block.dataset.tableId), (tbl, widths) => {
+      tbl.columnWidths = widths;
+      refreshTableBlock(block);
+    });
     block.addEventListener('click', (e) => {
       e.stopPropagation();
       if (Date.now() - lastTableBoxTime < 150) return;

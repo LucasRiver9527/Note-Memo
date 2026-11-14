@@ -318,6 +318,13 @@ function showTableContextMenu(e, n, block) {
     const tbl = getTableById(n, block.dataset.tableId);
     if (tbl) openTableSettingsDialog(n, tbl);
   });
+  if (getTableById(n, block.dataset.tableId)?.columnWidths) {
+    addItem('↔', t('table_auto_width'), () => {
+      const tbl = getTableById(n, block.dataset.tableId);
+      delete tbl.columnWidths;
+      refreshTableBlock(block, n);
+    });
+  }
   addItem('🗑', t('del_table'), () => {
     removeTableFromNote(n, block.dataset.tableId);
     deselectTable();
@@ -355,6 +362,10 @@ function highlightBox(block, box) {
 
 function wireTables(el, n) {
   $$('.note-table-block', el).forEach((block) => {
+    bindColumnResize(block, () => getTableById(n, block.dataset.tableId), (tbl, widths) => {
+      tbl.columnWidths = widths;
+      refreshTableBlock(block, n);
+    });
     block.addEventListener('click', (e) => {
       e.stopPropagation();
       if (Date.now() - lastTableBoxTime < 150) return;

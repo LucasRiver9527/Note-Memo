@@ -137,7 +137,7 @@ function renderTodoView(visible, query) {
           <div class="tl-text">${escapeHtml(item.text || t('empty_item'))}</div>
           <div class="tl-meta">
             ${group ? `<span class="dot" style="background:${group.color}"></span>` : ''}
-            <span class="link" data-goto="${note.id}">${escapeHtml(note.title || t('untitled'))}</span>
+            <button type="button" class="link" data-goto="${note.id}">${escapeHtml(note.title || t('untitled'))}</button>
           </div>
         </div>
         ${reminder ? `<span class="tl-flag ${overdue ? 'overdue' : ''}">${overdue ? t('overdue') : ''} ${formatDate(note.reminder.time)}</span>` : ''}
@@ -159,7 +159,7 @@ function renderTodoView(visible, query) {
           <div class="tl-text">${escapeHtml(note.title || t('untitled'))}</div>
           <div class="tl-meta">
             ${group ? `<span class="dot" style="background:${group.color}"></span>` : ''}
-            <span class="link" data-goto="${note.id}">${t('open_note')}</span>
+            <button type="button" class="link" data-goto="${note.id}">${t('open_note')}</button>
           </div>
         </div>
         <span class="tl-flag ${overdue ? 'overdue' : ''}">${overdue ? t('overdue') + ' · ' : ''}${formatDate(note.reminder.time)}</span>
@@ -215,7 +215,7 @@ function wireTodoView() {
       }
     }
     $$('.link[data-goto]', line).forEach((link) => {
-      link.onclick = () => openNoteById(link.dataset.goto);
+      link.onclick = () => openNoteDetail(link.dataset.goto, link);
     });
   });
 

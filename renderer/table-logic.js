@@ -27,6 +27,7 @@
   /** @param {NoteTable} tbl */
   function tableAddCol(tbl) {
     tbl.cols++;
+    if (Array.isArray(tbl.columnWidths)) tbl.columnWidths.push(112);
     (tbl.cells || []).forEach((row) => row.push(''));
   }
   // ⚠️ 索引合法性：JS 的 Array.splice 接受负数（从末尾算）且不校验上界，
@@ -50,6 +51,7 @@
     if (tbl.cols <= 1) return;
     if (!validCol(tbl, c)) return;
     tbl.cols--;
+    if (Array.isArray(tbl.columnWidths)) tbl.columnWidths.splice(c, 1);
     (tbl.cells || []).forEach((row) => row.splice(c, 1));
     tbl.merges = (tbl.merges || []).filter((m) => m.c !== c).map((m) => m.c > c ? { r: m.r, c: m.c - 1, rowspan: m.rowspan, colspan: m.colspan } : m);
     tbl.diagonals = (tbl.diagonals || []).filter((d) => d.c !== c).map((d) => d.c > c ? { r: d.r, c: d.c - 1, dir: d.dir, t1: d.t1, t2: d.t2 } : d);
@@ -82,5 +84,66 @@
     if (idx >= 0) tbl.merges.splice(idx, 1);
   }
 
-  return { newTable, tableAddRow, tableAddCol, tableRemoveRow, tableRemoveCol, tableMerge, tableSplit };
+  // Delegate to the block so cell edits and structural changes can replace its contents.
+  function bindColumnResize(block, getTable, commit) {
+    block.addEventListener('pointerdown', (event) => {
+      if (event.button !== 0) return;
+      const cell = event.target.closest('td');
+      if (!cell || cell.closest('.note-table-block') !== block) return;
+      const rect = cell.getBoundingClientRect();
+      if (rect.right - event.clientX > 7 || rect.right < event.clientX) return;
+      const tbl = getTable();
+      if (!tbl) return;
+      const table = cell.closest('table');
+      const columns = Array.from(table.querySelectorAll('col'));
+      const scale = table.getBoundingClientRect().width / table.offsetWidth;
+      if (!scale || !columns.length) return;
+      const index = Number(cell.dataset.c) + cell.colSpan - 1;
+      const widths = columns.map((col) => Math.max(56, Math.min(1200, col.offsetWidth)));
+      const startWidth = widths[index];
+      const startX = event.clientX;
+      const oldWidth = table.style.width;
+      const oldLayout = table.style.tableLayout;
+      const previous = columns.map((col) => col.style.width);
+      event.preventDefault();
+      event.stopPropagation();
+      block.setPointerCapture(event.pointerId);
+      let changed = false;
+
+      const move = (next) => {
+        if (next.pointerId !== event.pointerId) return;
+        const delta = Math.round((next.clientX - startX) / scale);
+        if (!changed && Math.abs(delta) < 3) return;
+        changed = true;
+        widths[index] = Math.min(1200, Math.max(56, startWidth + delta));
+        columns.forEach((col, i) => { col.style.width = widths[i] + 'px'; });
+        table.style.tableLayout = 'fixed';
+        table.style.width = widths.reduce((sum, width) => sum + width, 0) + 'px';
+      };
+      const finish = (end) => {
+        if (end.pointerId !== event.pointerId) return;
+        block.removeEventListener('pointermove', move);
+        block.removeEventListener('pointerup', finish);
+        block.removeEventListener('lostpointercapture', finish);
+        if (end.type === 'pointerup' && changed && widths[index] !== startWidth) {
+          commit(tbl, widths);
+        } else if (changed) {
+          columns.forEach((col, i) => { col.style.width = previous[i]; });
+          table.style.width = oldWidth;
+          table.style.tableLayout = oldLayout;
+        }
+      };
+      block.addEventListener('pointermove', move);
+      block.addEventListener('pointerup', finish);
+      block.addEventListener('lostpointercapture', finish);
+    });
+    block.addEventListener('pointermove', (event) => {
+      const cell = event.target.closest('td');
+      block.classList.toggle('tbl-column-edge',
+        !!cell && cell.getBoundingClientRect().right - event.clientX <= 7);
+    });
+    block.addEventListener('pointerleave', () => block.classList.remove('tbl-column-edge'));
+  }
+
+  return { bindColumnResize, newTable, tableAddRow, tableAddCol, tableRemoveRow, tableRemoveCol, tableMerge, tableSplit };
 }));

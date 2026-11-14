@@ -1,4 +1,4 @@
-﻿/* 设置面板 / 主题 / 字体 / 语言 纯功能模块：单一来源，可由 Node 测，也可挂页面全局。
+/* 设置面板 / 主题 / 字体 / 语言 纯功能模块：单一来源，可由 Node 测，也可挂页面全局。
    - Node: module.exports
    - 浏览器: 挂 root.SettingsPanel + 顶层全局，app.js 可直接按名字调用 */
 (function (root, factory) {
@@ -45,6 +45,9 @@ function applyTheme() {
   const hl = s.highlightColor || '#fff59d';
   root.style.setProperty('--hl-color', hl);
   root.style.setProperty('--hl-fg', isDarkColor(hl) ? '#ffffff' : '#2d2f38');
+  const previewColor = defaultNoteColor();
+  root.style.setProperty('--preview-note-color', previewColor);
+  root.style.setProperty('--preview-note-ink', s.noteTextColor || autoTextColor(previewColor));
   root.style.setProperty('--note-opacity', (s.noteOpacity / 100).toFixed(2));
   window.api.setNoteOpacity(s.noteOpacity);
   // 便签外观自定义：圆角 / 阴影 / 边框 / 字距 / 背景图案（单一来源，实时作用于所有便签卡片）
@@ -97,6 +100,21 @@ function applyNoteAppearance(s) {
   root.style.setProperty('--note-glass-border-width', bw + 'px');
   root.style.setProperty('--note-glass-border-color', s.noteBorderColor || 'rgba(255,255,255,0.22)');
 
+  const values = [
+    ['noteOpacity', s.noteOpacity, 60, 100, '%'],
+    ['noteRadius', radius, 0, 28, ' px'],
+    ['noteShadow', shadow, 0, 3, ''],
+    ['noteBorderWidth', bw, 0, 4, ' px'],
+  ];
+  for (const [id, value, min, max, unit] of values) {
+    const input = document.getElementById(id);
+    const readout = document.getElementById(id + 'Value');
+    if (input && readout) {
+      input.style.setProperty('--range-fill', ((value - min) / (max - min) * 100) + '%');
+      readout.textContent = value + unit;
+    }
+  }
+
   // 字体字距（作用于便签内容与全局文字）
   const ls = (s.noteLetterSpacing != null ? s.noteLetterSpacing : 0);
   root.style.setProperty('--font-letter-spacing', ls + 'px');
@@ -137,16 +155,27 @@ function applyBackground() {
     bgLayer.style.backgroundPosition = '';
   }
 
-  const borderBase = s.topBarColor || currentBg();
+  const previewWallpaper = $('.preview-wallpaper');
+  if (previewWallpaper) {
+    for (const property of ['backgroundColor', 'backgroundImage', 'backgroundSize', 'backgroundRepeat', 'backgroundPosition', 'opacity']) {
+      previewWallpaper.style[property] = bgLayer.style[property];
+    }
+  }
+
+  const warmWorkspace = isLightTheme() && s.themeId === DEFAULT_THEME_ID &&
+    !s.canvasColor && !s.backgroundImage;
+  document.body.classList.toggle('workspace-warm', warmWorkspace);
+  document.body.classList.toggle('workspace-wallpaper', !!s.backgroundImage);
+  const borderBase = s.topBarColor || (warmWorkspace ? '#f8f8f3' : currentBg());
   let borderAlpha = (s.topBarOpacity != null ? s.topBarOpacity : 100) / 100;
   if (s.topBarAcrylic) borderAlpha = 0.12 + borderAlpha * 0.88;
   const bc = hexToRgba(borderBase, borderAlpha);
   // 供关闭确认等弹窗复用顶栏配色（颜色/透明度/亚克力），保持全局风格统一
   document.documentElement.style.setProperty('--topbar-bg', bc);
-  const tb = $('#titlebar');
-  if (tb) tb.style.backgroundColor = bc;
-  const fb = $('#filterbar');
-  if (fb) fb.style.backgroundColor = bc;
+  const root = document.documentElement;
+  if (s.topBarColor) root.style.setProperty('--chrome-tint', s.topBarColor);
+  else root.style.removeProperty('--chrome-tint');
+  root.style.setProperty('--chrome-opacity', (0.12 + 0.83 * borderAlpha).toFixed(3));
   const bb = $('#batchBar');
   if (bb) bb.style.backgroundColor = bc;
 
@@ -167,7 +196,9 @@ function applyWindowControls() {
   const light = (typeof luminance === 'function') ? luminance(bg) > 0.55 : true;
   // 明亮/复杂背景（bright-bg）也按背景亮度取反色
   const onBright = document.body.classList.contains('bright-bg');
-  const symbolColor = (light || onBright) ? '#1f2430' : '#eef0f6';
+  const protectedChrome = !!state.settings.backgroundImage && !!state.settings.topBarAcrylic;
+  const lightChrome = protectedChrome ? isLightTheme() : light || onBright;
+  const symbolColor = lightChrome ? '#1f2430' : '#eef0f6';
   // 亮背景下再补一层对比背景不必要；窗口控制区域由顶部背景承担
   window.api.setWindowControls({ symbolColor });
 }
@@ -187,6 +218,7 @@ function renderThemePanel() {
         <div class="mini-note" style="background:${sanitizeCss(mini[0]) || 'transparent'}"></div>
         <div class="mini-note" style="background:${sanitizeCss(mini[1]) || 'transparent'}"></div>
       </div>
+      <span class="theme-check" aria-hidden="true"><svg class="ui-icon" aria-hidden="true" focusable="false"><use href="#ui-check"/></svg></span>
       <span class="tname">${escapeHtml(themeName(p))}</span>
       ${isCustom ? `<button class="t-del" title="${t('delete')}">✕</button>` : ''}`;
     card.onclick = () => {
@@ -331,7 +363,12 @@ function syncSettingsInputs() {
   const nbc = $('#noteBorderColor'); if (nbc) nbc.value = state.settings.noteBorderColor || '#000000';
   $('#noteLetterSpacing').value = state.settings.noteLetterSpacing != null ? state.settings.noteLetterSpacing : 0;
   $('#winOpacity').value = state.settings.winOpacity;
-  const nc = $('#noteColorInput'); if (nc) nc.value = state.settings.noteColor || DEFAULT_NOTE_COLOR;
+  const followsTheme = state.settings.noteColorFollowsTheme !== false;
+  $('#noteColorFollowsTheme').checked = followsTheme;
+  const nc = $('#noteColorInput');
+  nc.value = defaultNoteColor();
+  nc.disabled = followsTheme;
+  $('#btnResetNoteColor').disabled = followsTheme;
   $('#fontSize').value = state.settings.fontSize;
   $('#fontFamily').value = state.settings.fontFamily;
   $('#canvasColor').value = state.settings.canvasColor || getTheme().bg;
@@ -475,7 +512,7 @@ function deleteCustomFont(id) {
 function applyLanguage() {
   const lang = state.settings.language || 'zh';
   document.documentElement.lang = lang === 'en' ? 'en' : 'zh-CN';
-  $$('[data-i18n]').forEach((el) => { el.textContent = t(el.dataset.i18n); });
+  $$('[data-i18n]').forEach((el) => { const label = t(el.dataset.i18n); el.textContent = el.classList.contains('ui-icon-label') ? label.replace(/^[＋⚡💾☑🗑]\s*/u, '') : label; });
   $$('[data-i18n-title]').forEach((el) => { el.title = t(el.dataset.i18nTitle); });
   // 纯图标控件的可访问名称：显式 aria-label 覆盖符号文本，语言切换时一并刷新
   $$('[data-i18n-aria-label]').forEach((el) => { el.setAttribute('aria-label', t(el.dataset.i18nAriaLabel)); });
@@ -502,8 +539,9 @@ function renderGroupChips() {
     : state.groups;
   recent.forEach((g) => {
     const chip = document.createElement('button');
-    chip.className = 'chip' + (filter.group === g.id ? ' active' : '');
-    chip.innerHTML = `<span class="dot" style="background:${sanitizeCss(g.color) || 'transparent'}"></span>${escapeHtml(g.name)}${isGroupCollapsed(g.id) ? '<span class="chip-collapsed">▸</span>' : ''}`;
+    chip.className = 'chip' + (!filter.archive && filter.group === g.id ? ' active' : '');
+    chip.innerHTML = `<span class="dot" style="background:${sanitizeCss(g.color) || 'transparent'}"></span><span class="workspace-group-name">${escapeHtml(g.name)}</span>${isGroupCollapsed(g.id) ? '<span class="chip-collapsed">▸</span>' : ''}`;
+    chip.setAttribute('aria-pressed', String(!filter.archive && filter.group === g.id));
     chip.title = t('left_click_filter');
     chip.onclick = () => setFilter('group', g.id);
     chip.addEventListener('contextmenu', (e) => {
@@ -513,11 +551,16 @@ function renderGroupChips() {
     wrap.appendChild(chip);
   });
   $$('#filterbar .chip[data-group]').forEach((c) => {
-    c.classList.toggle('active', !filter.archive && c.dataset.group === filter.group);
+    const active = !filter.archive && c.dataset.group === filter.group;
+    c.classList.toggle('active', active);
+    c.setAttribute('aria-pressed', String(active));
   });
   const archiveChip = $('#btnArchiveFilter');
-  if (archiveChip) archiveChip.classList.toggle('active', !!filter.archive);
-  if (typeof refreshChipsScroll === 'function') refreshChipsScroll();
+  if (archiveChip) {
+    archiveChip.classList.toggle('active', !!filter.archive);
+    archiveChip.setAttribute('aria-pressed', String(!!filter.archive));
+  }
+
 }
 
 function setFilter(key, val) {

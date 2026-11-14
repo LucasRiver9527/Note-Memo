@@ -47,33 +47,26 @@ function showNoteContextMenu(e, n) {
   captureSelection();
   savedImageSrc = getSelectedImageSrc(n);
   // 菜单锚点：切换模式/展开二级后需按同一锚点重新定位，避免菜单"跳走"
-  const anchorX = e.clientX;
-  const anchorY = e.clientY;
+  const trigger = e.type === 'click' && e.detail === 0 && e.currentTarget instanceof HTMLElement
+    ? e.currentTarget.getBoundingClientRect() : null;
+  const anchorX = trigger ? trigger.left : e.clientX;
+  const anchorY = trigger ? trigger.bottom : e.clientY;
   const pop = document.createElement('div');
   pop.className = 'color-pop ctx-menu';
-  pop.style.gridTemplateColumns = '1fr';
-  pop.style.minWidth = '132px';
-  pop.style.padding = '4px';
-  pop.style.maxHeight = Math.min(window.innerHeight - 24, 440) + 'px';
-  pop.style.overflowY = 'auto';
-
-  // 菜单项：danger = 破坏性操作（红色）；accel = 右侧快捷键提示；host = 容器（默认 pop，二级用 childHost）
+  const menuIcon = (name) => '<svg class="ui-icon cm-icon" aria-hidden="true" focusable="false"><use href="#ui-' + name + '"/></svg>';
+  const row = (icon, label, end = '') => menuIcon(icon) + '<span class="cm-label">' + label + '</span>' + end;
   const addItem = (icon, label, onClick, danger, accel, host) => {
-    const b = document.createElement('button');
-    b.style.cssText = 'background:transparent;border:none;color:' + (danger ? 'var(--danger, #e24b4a)' : 'var(--fg)') + ';padding:3.5px 8px;border-radius:6px;cursor:pointer;text-align:left;font-size:12px;line-height:1.3;font-family:inherit;width:100%;display:flex;align-items:center;gap:5px;';
-    b.innerHTML = `<span>${icon}</span><span style="flex:1">${label}</span>` + (accel ? `<span style="opacity:.55;font-size:11px">${accel}</span>` : '');
-    b.onmouseenter = () => (b.style.background = danger ? 'var(--danger-soft, rgba(226,75,74,.16))' : 'var(--accent-soft)');
-    b.onmouseleave = () => (b.style.background = 'transparent');
-    b.onclick = () => { closePops(); onClick(); };
-    (host || pop).appendChild(b);
-    return b;
+    const button = document.createElement('button');
+    button.className = danger ? 'cm-row cm-danger' : 'cm-row';
+    button.innerHTML = row(icon, label, accel ? '<kbd class="cm-key">' + accel + '</kbd>' : '');
+    button.onclick = () => { closePops(); onClick(); };
+    (host || pop).appendChild(button);
+    return button;
   };
-
-  // 分隔线
-  const addSep = (host) => {
-    const s = document.createElement('div');
-    s.style.cssText = 'height:1px;background:var(--border);margin:4px 0;';
-    (host || pop).appendChild(s);
+  const addSep = () => {
+    const separator = document.createElement('div');
+    separator.className = 'cm-separator';
+    pop.appendChild(separator);
   };
 
   // 定位：把菜单夹在可视区内。展开二级或切换模式后高度会变，需重复调用。
@@ -90,18 +83,16 @@ function showNoteContextMenu(e, n) {
     const wrap = document.createElement('div');
     const btn = document.createElement('button');
     btn.setAttribute('aria-expanded', expanded ? 'true' : 'false');
-    btn.style.cssText = 'background:transparent;border:none;color:var(--fg);padding:3.5px 8px;border-radius:6px;cursor:pointer;text-align:left;font-size:12px;line-height:1.3;font-family:inherit;width:100%;display:flex;align-items:center;gap:5px;';
-    btn.innerHTML = `<span>${icon}</span><span style="flex:1">${label}</span><span style="opacity:.6;font-size:10px">${expanded ? '▾' : '▸'}</span>`;
-    btn.onmouseenter = () => (btn.style.background = 'var(--accent-soft)');
-    btn.onmouseleave = () => (btn.style.background = 'transparent');
+    btn.className = 'cm-row cm-disclosure';
+    btn.innerHTML = row(icon, label, menuIcon('cm-chevron'));
     const childHost = document.createElement('div');
-    childHost.style.cssText = 'display:' + (expanded ? 'block' : 'none') + ';padding-left:14px;';
+    childHost.className = 'cm-submenu';
+    childHost.style.display = expanded ? 'block' : 'none';
     btn.onclick = (ev) => {
       ev.stopPropagation();                       // 不冒泡到「点空白关闭菜单」
       const nowOpen = childHost.style.display === 'none';
       childHost.style.display = nowOpen ? 'block' : 'none';
       btn.setAttribute('aria-expanded', nowOpen ? 'true' : 'false');
-      btn.lastElementChild.textContent = nowOpen ? '▾' : '▸';
       positionMenu();                             // 展开后高度变了，重新夹到可视区
     };
     wrap.appendChild(btn);
@@ -283,10 +274,9 @@ function showNoteContextMenu(e, n) {
     sw.setAttribute('role', 'switch');
     sw.setAttribute('aria-checked', compact ? 'false' : 'true');
     sw.title = t('ctx_menu_switch_tip');
-    sw.style.cssText = 'background:transparent;border:none;color:var(--fg);padding:4px 8px;border-radius:6px;cursor:pointer;text-align:left;font-size:12px;line-height:1.3;font-family:inherit;width:100%;display:flex;align-items:center;gap:5px;';
-    sw.innerHTML = `<span>☰</span><span style="flex:1">${t('ctx_menu_compact')} / ${t('ctx_menu_full')}</span><span style="opacity:.6;font-size:11px">${compact ? t('ctx_menu_compact') : t('ctx_menu_full')}</span>`;
-    sw.onmouseenter = () => (sw.style.background = 'var(--accent-soft)');
-    sw.onmouseleave = () => (sw.style.background = 'transparent');
+    sw.className = 'cm-row cm-mode';
+    sw.innerHTML = row('menu', t('ctx_menu_compact') + ' / ' + t('ctx_menu_full'),
+      '<span class="cm-mode-value">' + t(compact ? 'ctx_menu_compact' : 'ctx_menu_full') + '</span>');
     sw.onclick = (ev) => {
       ev.stopPropagation();
       state.settings.ctxMenuMode = compact ? 'full' : 'compact';
@@ -297,50 +287,49 @@ function showNoteContextMenu(e, n) {
     addSep();
 
     // —— 文本编辑：两种模式都在一级（绝对高频，且带原生/全局快捷键） ——
-    addItem('📋', t('copy'), fnCopy, false, 'Ctrl+C');
-    addItem('✂️', t('cut'), fnCut, false, 'Ctrl+X');
-    addItem('📥', t('paste'), fnPaste, false, 'Ctrl+V');
-    addItem('▤', t('select_all'), fnSelectAll, false, 'Ctrl+A');
+    addItem('cm-copy', t('copy'), fnCopy, false, 'Ctrl+C');
+    addItem('cm-cut', t('cut'), fnCut, false, 'Ctrl+X');
+    addItem('cm-paste', t('paste'), fnPaste, false, 'Ctrl+V');
+    addItem('cm-select', t('select_all'), fnSelectAll, false, 'Ctrl+A');
     addSep();
     const isBold = !!document.queryCommandState('bold');
     const isHl = selectionHasHighlight();
-    addItem('𝗕', isBold ? t('unbold') : t('bold'), fnBold, false, 'Ctrl+B');
-    addItem('🖍', isHl ? t('unhighlight') : t('highlight'), fnHighlight, false, 'Ctrl+H');
+    addItem('cm-bold', isBold ? t('unbold') : t('bold'), fnBold, false, 'Ctrl+B');
+    addItem('cm-highlight', isHl ? t('unhighlight') : t('highlight'), fnHighlight, false, 'Ctrl+H');
 
     // —— 格式：精简收进「格式 ▸」，完整平铺 ——
-    const fmtHost = compact ? addSubmenu('⌗', t('ctx_menu_format'), false).childHost : pop;
-    addItem('⇤', t('align_left'), () => alignNote('justifyLeft'), false, 'Ctrl+L', fmtHost);
-    addItem('⇹', t('align_center'), () => alignNote('justifyCenter'), false, 'Ctrl+E', fmtHost);
-    addItem('⇥', t('align_right'), () => alignNote('justifyRight'), false, 'Ctrl+R', fmtHost);
+    const fmtHost = compact ? addSubmenu('settings', t('ctx_menu_format'), false).childHost : pop;
+    addItem('cm-align-left', t('align_left'), () => alignNote('justifyLeft'), false, 'Ctrl+L', fmtHost);
+    addItem('cm-align-center', t('align_center'), () => alignNote('justifyCenter'), false, 'Ctrl+E', fmtHost);
+    addItem('cm-align-right', t('align_right'), () => alignNote('justifyRight'), false, 'Ctrl+R', fmtHost);
     addHighlightRow(fmtHost);
     addSep();
 
     // —— 便签操作：精简收进「便签 ▸」，完整平铺 ——
-    const noteHost = compact ? addSubmenu('📄', t('ctx_menu_note'), false).childHost : pop;
-    addItem('▦', t('insert_table'), fnTable, false, null, noteHost);
-    addItem('🖼️', t('insert_image'), fnImage, false, null, noteHost);
-    addItem('🔝', n.pinned ? t('unpin_note') : t('pin'), fnPin, false, null, noteHost);
-    addItem('☑', t('todo_mode'), fnTodo, false, null, noteHost);
-    addItem('🏷', n.groupId ? t('remove_from_group') : t('add_to_group'), fnGroup, false, null, noteHost);
-    addItem('🖥️', t('desktop'), fnDesktop, false, null, noteHost);
-    addItem('⏰', t('todo_remind'), fnRemind, false, null, noteHost);
-    addItem('🎨', t('color'), fnColor, false, null, noteHost);
-    if (n.type !== 'todo') addItem('👁', t(n.preview ? 'note_preview_off' : 'note_preview'), fnPreview, false, null, noteHost);
-    addItem('📥', t(n.archived ? 'note_unarchive' : 'note_archive'), fnArchive, false, null, noteHost);
+    const noteHost = compact ? addSubmenu('doc', t('ctx_menu_note'), false).childHost : pop;
+    addItem('cm-table', t('insert_table'), fnTable, false, null, noteHost);
+    addItem('image', t('insert_image'), fnImage, false, null, noteHost);
+    addItem('raise', n.pinned ? t('unpin_note') : t('pin'), fnPin, false, null, noteHost);
+    addItem('todo', t('todo_mode'), fnTodo, false, null, noteHost);
+    addItem('folder', n.groupId ? t('remove_from_group') : t('add_to_group'), fnGroup, false, null, noteHost);
+    addItem('pin', t('desktop'), fnDesktop, false, null, noteHost);
+    addItem('clock', t('todo_remind'), fnRemind, false, null, noteHost);
+    addItem('color', t('color'), fnColor, false, null, noteHost);
+    if (n.type !== 'todo') addItem('eye', t(n.preview ? 'note_preview_off' : 'note_preview'), fnPreview, false, null, noteHost);
+    addItem('archive', t(n.archived ? 'note_unarchive' : 'note_archive'), fnArchive, false, null, noteHost);
     addSep();
 
     // —— 导出：两种模式都在一级（工具栏没有该入口，且 e2e 用例依赖其可见） ——
-    addItem('📝', t('export_markdown'), fnExportMd);
+    if (!docNoteId && ['board', 'memo'].includes(state.settings.viewMode)) {
+      addItem('doc', t('open_detail'), () => openNoteDetail(n.id, e.target));
+    }
+    addItem('cm-export', t('export_markdown'), fnExportMd);
     addSep();
 
     // ★ 删除：固定一级（不折叠进二级），danger 样式 + 独立分隔线
-    addItem('🗑', t('delete'), fnDelete, true);
+    addItem('trash', t('delete'), fnDelete, true);
 
     // 菜单外观（透明度/亚克力）已归位到「设置 → 外观」，不再挂在每个右键菜单底部
-    // 改为：精简模式固定为「收起时」的宽度 → 展开二级（尤其「格式」里的高亮色板）时菜单不再被撑宽，
-    // 只在下方展开内容（与「便签 ▸」一致）；完整模式保持自适应宽度。
-    pop.style.width = '';
-    if (compact) pop.style.width = pop.offsetWidth + 'px';
     positionMenu();
   };
 
@@ -574,6 +563,7 @@ function openGroupEditPop(anchorEl, g) {
         g.name = name.trim();
         save();
         renderGroupChips();
+        renderAll();
       }
     });
   });
