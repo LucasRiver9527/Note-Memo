@@ -1,9 +1,21 @@
-# Note-Memo
+<p align="center">
+  <img src="./assets/icon.png" width="64" height="64" alt="Note-Memo 图标">
+</p>
 
-> 一款本地优先的 Windows 桌面便签：随手快速记录，也能在画布上整理、管理待办清单，并用文档视图写长内容。
-> 数据保存在你自己的电脑上，日常记笔记无需联网、无需账号。
+<h1 align="center">Note-Memo</h1>
 
-[下载稳定版](https://github.com/LucasRiver9527/Note-Memo/releases/latest) · [更新日志](./CHANGELOG.md) · [反馈问题](https://github.com/LucasRiver9527/Note-Memo/issues)
+<p align="center">
+  <strong>本地优先的 Windows 桌面便签</strong><br>
+  随手记录、钉到桌面，在画布上整理。无需账号，数据保存在本机。
+</p>
+
+<p align="center">
+  <strong><a href="https://github.com/LucasRiver9527/Note-Memo/releases/latest">下载稳定版</a></strong>
+  &nbsp;·&nbsp;
+  <a href="./CHANGELOG.md">更新日志</a>
+  &nbsp;·&nbsp;
+  <a href="https://github.com/LucasRiver9527/Note-Memo/issues">反馈问题</a>
+</p>
 
 ## 快速上手
 
