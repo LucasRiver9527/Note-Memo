@@ -10,8 +10,7 @@ function updateWorkspaceGreeting(hour = new Date().getHours()) {
    非 UMD（需 DOM / window.api）；加载顺序须在 app.js 之前、各域模块之后。 */
 
 /* ============ 表格 ============ */
-// activeTableEl / activeTableNote / activeTableToolbar / activeTableSelCell / activeTableSelBox /
-// lastTableBoxTime 已移至 core/app-state.js（跨模块共享，顶层访问器）
+// 表格选中状态见 core/app-state.js。
 
 
 
@@ -63,88 +62,47 @@ function renderRichCached(n) {
   return html;
 }
 
+function mountWorkspaceView(mode, views) {
+  for (const [name, element] of Object.entries(views)) {
+    element.classList.toggle('hidden', name !== mode);
+  }
+  if (lastRenderView === mode) return;
+  for (const element of Object.values(views)) element.replaceChildren();
+  boardEls.clear();
+  lastRenderView = mode;
+}
+
+function refreshWorkspaceContent(mode, views, visible, query, detailOpen) {
+  if (mode === 'todo') return renderTodoView(visible, query);
+  if (mode === 'memo') {
+    views.memo.replaceChildren();
+    getSortedNotes(visible).forEach((note) => views.memo.appendChild(buildMemoEl(note)));
+  } else if (mode === 'doc') {
+    if (!detailOpen && docNoteId && !visible.some((note) => note.id === docNoteId)) {
+      docNoteId = null;
+      docPickerReturn = null;
+    }
+    renderDocView(visible);
+  } else {
+    refreshBoardCards(views.board, visible);
+  }
+  return visible.length;
+}
+
 function renderAll() {
   deselectTable();
-  const board = $('#board');
-  const memoList = $('#memoList');
-  const todoList = $('#todoList');
-  const docList = $('#docList');
-
-  // 单一可见选择器：canvas-zoom.visibleNotes（正确处理 desktopPin/归档精确状态/折叠分组/查询/分组）。
-  const visible = visibleNotes();
-  const query = filter.query.trim().toLowerCase(); // 仅用于 todo 视图匹配与 no-match 判定
-
   if (docPickerReturn && !state.notes.some((note) => note.id === docNoteId)) {
     returnFromNoteDetail();
     return;
   }
+
+  const views = { board: $('#board'), memo: $('#memoList'), todo: $('#todoList'), doc: $('#docList') };
+  const visible = visibleNotes();
+  const query = filter.query.trim().toLowerCase();
   const detailOpen = !!docPickerReturn;
   const mode = detailOpen ? 'doc' : state.settings.viewMode;
-  let resultCount = visible.length;
-  if (mode === 'todo') {
-    board.classList.add('hidden');
-    memoList.classList.add('hidden');
-    todoList.classList.remove('hidden');
-    docList.classList.add('hidden');
-    board.innerHTML = '';
-    memoList.innerHTML = '';
-    docList.innerHTML = '';
-    lastRenderView = 'todo';
-    resultCount = renderTodoView(visible, query);
-  } else if (mode === 'memo') {
-    board.classList.add('hidden');
-    memoList.classList.remove('hidden');
-    todoList.classList.add('hidden');
-    docList.classList.add('hidden');
-    board.innerHTML = '';
-    memoList.innerHTML = '';
-    docList.innerHTML = '';
-    lastRenderView = 'memo';
-    getSortedNotes(visible).forEach((n) => memoList.appendChild(buildMemoEl(n)));
-  } else if (mode === 'doc') {
-    board.classList.add('hidden');
-    memoList.classList.add('hidden');
-    todoList.classList.add('hidden');
-    docList.classList.remove('hidden');
-    board.innerHTML = '';
-    memoList.innerHTML = '';
-    todoList.innerHTML = '';
-    lastRenderView = 'doc';
-    if (!detailOpen && docNoteId && !visible.some((n) => n.id === docNoteId)) { docNoteId = null; docPickerReturn = null; }
-    renderDocView(visible);
-  } else {
-    board.classList.remove('hidden');
-    memoList.classList.add('hidden');
-    todoList.classList.add('hidden');
-    docList.classList.add('hidden');
-    memoList.innerHTML = '';
-    todoList.innerHTML = '';
-    docList.innerHTML = '';
-
-    // 进入画布视图：全量重建；保持在画布：增量复用未变化卡片
-    if (lastRenderView !== 'board') {
-      board.innerHTML = '';
-      boardEls.clear();
-    }
-    lastRenderView = 'board';
-
-    const visibleIds = new Set(visible.map((n) => n.id));
-    for (const [id, el] of boardEls) {
-      if (!visibleIds.has(id)) { el.remove(); boardEls.delete(id); }
-    }
-    getSortedNotes(visible).forEach((n) => {
-      const existing = boardEls.get(n.id);
-      const snap = noteFingerprint(n);
-      if (existing && existing.__snap === snap) {
-        refreshCardSearch(existing, n);
-        return;
-      }
-      const el = buildNoteEl(n);
-      el.__snap = snap;
-      if (existing) existing.replaceWith(el); else board.appendChild(el);
-      boardEls.set(n.id, el);
-    });
-  }
+  mountWorkspaceView(Object.hasOwn(views, mode) ? mode : 'board', views);
+  const resultCount = refreshWorkspaceContent(mode, views, visible, query, detailOpen);
 
   updateWorkspaceGreeting();
   $('#noteCount').textContent = visible.length;
@@ -165,8 +123,8 @@ function renderAll() {
   $('#btnEmptyCreate').classList.toggle('hidden', !showEmpty);
   $('#btnClearFilters').classList.toggle('hidden', !noMatches);
   $('#btnClearFilters').onclick = clearViewFilters;
-  if (noMatches && mode === 'todo') todoList.classList.add('hidden');
-  if ((noMatches || showEmpty) && mode === 'doc') docList.classList.add('hidden');
+  if (noMatches && mode === 'todo') views.todo.classList.add('hidden');
+  if ((noMatches || showEmpty) && mode === 'doc') views.doc.classList.add('hidden');
   $('#btnBatchToggle').classList.toggle('hidden', empty);
   const arrangeButton = $('#btnQuickArrange');
   arrangeButton.disabled = empty || mode !== 'board';
@@ -314,57 +272,3 @@ function syncBoardSize() {
 
 // 视图切换按钮：active 视觉态与 aria-pressed 始终同源。
 // 增量渲染可能复用旧 DOM，任何真正切换视图的地方都要走这里，避免留下过期状态。
-function syncViewToggles(mode) {
-  mode = (mode === 'memo' || mode === 'todo' || mode === 'doc') ? mode : 'board';
-  ['board', 'memo', 'todo', 'doc'].forEach((m) => {
-    const btn = $('#view' + m.charAt(0).toUpperCase() + m.slice(1));
-    if (!btn) return;
-    btn.classList.toggle('active', mode === m);
-    btn.setAttribute('aria-pressed', mode === m ? 'true' : 'false');
-  });
-}
-
-function setViewMode(mode) {
-  state.settings.viewMode = mode;
-  if (mode !== 'doc' || docPickerReturn) { docNoteId = null; docPickerReturn = null; }
-  syncViewToggles(mode);
-  save();
-  renderAll();
-}
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-

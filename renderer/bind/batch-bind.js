@@ -137,8 +137,11 @@ function bindBatch() {
   const narrowNav = window.matchMedia('(max-width: 820px)');
   const add = $('#btnAdd');
   const placeAdd = () => {
-    if (narrowNav.matches) navToggle.parentElement.appendChild(add);
-    else nav.querySelector('.workspace-nav-items').prepend(add);
+    if (narrowNav.matches) {
+      navToggle.parentElement.appendChild(add);
+      return;
+    }
+    nav.querySelector('.workspace-nav-items').prepend(add);
     setNav(false);
   };
   narrowNav.addEventListener('change', placeAdd);

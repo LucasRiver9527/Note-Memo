@@ -64,6 +64,89 @@ function restoreRaisedNotes(records) {
   });
 }
 
+function alignmentForAxis(moving, targets, dx, dy, axis, zoom) {
+  const cross = axis === 'x' ? 'y' : 'x';
+  const offset = axis === 'x' ? dx : dy;
+  const crossOffset = axis === 'x' ? dy : dx;
+  const from = moving[cross][0] + crossOffset;
+  const to = moving[cross][2] + crossOffset;
+  let best = null;
+  for (const target of targets) {
+    const [start, , end] = target[cross];
+    const gap = Math.max(0, start - to, from - end);
+    if (gap * zoom > 120) continue;
+    for (let i = 0; i < 3; i++) {
+      const at = target[axis][i];
+      const correction = at - moving[axis][i] - offset;
+      const distance = Math.abs(correction);
+      if (distance * zoom > 6) continue;
+      if (best && (distance > best.distance || (distance === best.distance && gap >= best.gap))) continue;
+      best = { correction, distance, gap, at, start, end };
+    }
+  }
+  return best;
+}
+
+function makeAlignmentGuides(board, dragged, origin, zoom) {
+  const draggedSet = new Set(dragged);
+  const bounds = (node) => {
+    const rect = node.getBoundingClientRect();
+    if (!rect.width || !rect.height) return null;
+    const left = (rect.left - origin.left) / zoom;
+    const top = (rect.top - origin.top) / zoom;
+    const width = rect.width / zoom;
+    const height = rect.height / zoom;
+    return { x: [left, left + width / 2, left + width], y: [top, top + height / 2, top + height] };
+  };
+  const group = dragged.map(bounds).filter(Boolean);
+  const groupAxis = (axis) => {
+    const start = Math.min(...group.map((r) => r[axis][0]));
+    const end = Math.max(...group.map((r) => r[axis][2]));
+    return [start, (start + end) / 2, end];
+  };
+  const moving = { x: groupAxis('x'), y: groupAxis('y') };
+  const targets = Array.from(board.querySelectorAll('.note')).filter((node) => !draggedSet.has(node)).map(bounds).filter(Boolean);
+
+  const lines = ['x', 'y'].map((axis) => {
+    const line = document.createElement('div');
+    line.className = 'note-align-guide';
+    line.dataset.axis = axis;
+    line.hidden = true;
+    board.appendChild(line);
+    return line;
+  });
+
+  const draw = (line, match, from, to, vertical) => {
+    line.hidden = !match;
+    if (!match) return;
+    const start = to < match.start ? to : match.end < from ? match.end : Math.max(from, match.start);
+    const end = to < match.start ? match.start : match.end < from ? from : Math.min(to, match.end);
+    const length = Math.max(10 / zoom, end - start);
+    const thickness = 1 / zoom;
+    Object.assign(line.style, {
+      left: (vertical ? match.at : start) + 'px',
+      top: (vertical ? start : match.at) + 'px',
+      width: (vertical ? thickness : length) + 'px',
+      height: (vertical ? length : thickness) + 'px'
+    });
+  };
+
+  return {
+    apply(dx, dy, free, minDx, minDy) {
+      let x = free ? null : alignmentForAxis(moving, targets, dx, dy, 'x', zoom);
+      let y = free ? null : alignmentForAxis(moving, targets, dx, dy, 'y', zoom);
+      if (x && dx + x.correction < minDx) x = null;
+      if (y && dy + y.correction < minDy) y = null;
+      const nextX = dx + (x?.correction || 0);
+      const nextY = dy + (y?.correction || 0);
+      draw(lines[0], x, moving.y[0] + nextY, moving.y[2] + nextY, true);
+      draw(lines[1], y, moving.x[0] + nextX, moving.x[2] + nextX, false);
+      return [nextX, nextY];
+    },
+    remove() { lines.forEach((line) => line.remove()); }
+  };
+}
+
 function startDrag(el, n, e) {
   // 延迟提交：按下时只暂存前置快照；松开时若真的产生位移才入栈（点击不动 → 无历史项）
   beginUndo();
@@ -77,7 +160,7 @@ function startDrag(el, n, e) {
 
   // 批量模式：拖动任意已选便签，其余选中便签同步移动
   const batch = multiSelect && selectedNotes.has(n.id);
-  const batchIds = Array.from(selectedNotes);
+
   isBatchDragging = batch;
   const batchStart = new Map();
   if (batch) {
@@ -98,6 +181,9 @@ function startDrag(el, n, e) {
     : [el];
   if (!draggedEls.includes(el)) draggedEls.unshift(el);
   const raised = raiseDraggedNotes(draggedEls);
+  const guides = makeAlignmentGuides(board, draggedEls, rect, z);
+  const minDx = -Math.min(npos.x, ...Array.from(batchStart.values(), (pos) => pos.x));
+  const minDy = -Math.min(npos.y, ...Array.from(batchStart.values(), (pos) => pos.y));
 
   const updateRect = () => { rect = board.getBoundingClientRect(); };
   canvas.addEventListener('scroll', updateRect, { passive: true });
@@ -112,8 +198,9 @@ function startDrag(el, n, e) {
     const nx = Math.max(0, Math.round((ev.clientX - rect.left) / z - offsetX));
     const ny = Math.max(0, Math.round((ev.clientY - rect.top) / z - offsetY));
     const np = effPos(n);
-    const dx = nx - np.x;
-    const dy = ny - np.y;
+    const rawX = Math.max(minDx, nx - np.x);
+    const rawY = Math.max(minDy, ny - np.y);
+    const [dx, dy] = guides.apply(rawX, rawY, ev.altKey || (!rawX && !rawY), minDx, minDy);
     el.style.transform = `translate3d(${dx}px, ${dy}px, 0)`;
     if (batch) {
       $$('.note').forEach((other) => {
@@ -170,6 +257,7 @@ function startDrag(el, n, e) {
         }
       });
     }
+    guides.remove();
     canvas.removeEventListener('scroll', updateRect);
     document.removeEventListener('pointermove', onMove);
     document.removeEventListener('pointerup', onUp);

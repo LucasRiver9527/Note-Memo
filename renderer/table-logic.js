@@ -1,4 +1,4 @@
-/* 表格数据纯逻辑模块（不含 DOM）：行/列增删、合并/拆分、创建。单一来源，可单测。
+/* 共享表格操作：行列、合并、单元格数据和列宽交互。
    - Node: module.exports
    - 浏览器: 挂 root.TableLogic + 顶层全局，notes-view.js 可直接按名字调用 */
 (function (root, factory) {
@@ -84,8 +84,78 @@
     if (idx >= 0) tbl.merges.splice(idx, 1);
   }
 
+  let lastTableBoxTime = 0;
+
+  function bindTableSelection(block, selectCell, selectBox) {
+    const cellAt = (node) => {
+      const cell = node?.closest('td');
+      return cell?.closest('.note-table-block') === block ? cell : null;
+    };
+    const coordinates = (cell) => ({ r: Number(cell.dataset.r), c: Number(cell.dataset.c) });
+    const highlight = (box) => {
+      block.querySelectorAll('td').forEach((cell) => {
+        const { r, c } = coordinates(cell);
+        cell.classList.toggle('box-selected', r >= box.r1 && r <= box.r2 && c >= box.c1 && c <= box.c2);
+      });
+    };
+
+    block.addEventListener('click', (event) => {
+      event.stopPropagation();
+      if (Date.now() - lastTableBoxTime < 150) return;
+      const cell = cellAt(event.target);
+      selectCell(cell ? coordinates(cell) : null);
+    });
+
+    block.addEventListener('mousedown', (event) => {
+      const cell = cellAt(event.target);
+      if (event.button !== 0 || !cell) return;
+      event.preventDefault();
+      const { r, c } = coordinates(cell);
+      let box = { r1: r, c1: c, r2: r, c2: c };
+      let moved = false;
+      const move = (pointer) => {
+        const target = cellAt(document.elementFromPoint(pointer.clientX, pointer.clientY));
+        if (!target) return;
+        const end = coordinates(target);
+        box = { r1: Math.min(r, end.r), c1: Math.min(c, end.c), r2: Math.max(r, end.r), c2: Math.max(c, end.c) };
+        if (r !== end.r || c !== end.c) moved = true;
+        highlight(box);
+      };
+      document.addEventListener('mousemove', move);
+      document.addEventListener('mouseup', () => {
+        document.removeEventListener('mousemove', move);
+        if (!moved) return;
+        lastTableBoxTime = Date.now();
+        selectBox(box);
+        highlight(box);
+      }, { once: true });
+    });
+  }
+
+  function ordinaryTableCells(block) {
+    return Array.from(block.querySelectorAll('td:not(.diag)'));
+  }
+
+  function nextOrdinaryTableRC(block, cell, backwards) {
+    const cells = ordinaryTableCells(block);
+    const index = cells.indexOf(cell);
+    if (index < 0) return null;
+    const next = cells[index + (backwards ? -1 : 1)];
+    return next ? { r: Number(next.dataset.r), c: Number(next.dataset.c) } : null;
+  }
+
+  function findOrdinaryTableCell(block, r, c) {
+    return ordinaryTableCells(block).find((cell) => Number(cell.dataset.r) === r && Number(cell.dataset.c) === c) || null;
+  }
+
+  function resetTableColumnWidths(tbl, refresh) {
+    if (!tbl?.columnWidths) return;
+    delete tbl.columnWidths;
+    refresh();
+  }
+
   // Delegate to the block so cell edits and structural changes can replace its contents.
-  function bindColumnResize(block, getTable, commit) {
+  function bindColumnResize(block, getTable, refresh) {
     block.addEventListener('pointerdown', (event) => {
       if (event.button !== 0) return;
       const cell = event.target.closest('td');
@@ -126,7 +196,8 @@
         block.removeEventListener('pointerup', finish);
         block.removeEventListener('lostpointercapture', finish);
         if (end.type === 'pointerup' && changed && widths[index] !== startWidth) {
-          commit(tbl, widths);
+          tbl.columnWidths = widths;
+          refresh();
         } else if (changed) {
           columns.forEach((col, i) => { col.style.width = previous[i]; });
           table.style.width = oldWidth;
@@ -145,5 +216,5 @@
     block.addEventListener('pointerleave', () => block.classList.remove('tbl-column-edge'));
   }
 
-  return { bindColumnResize, newTable, tableAddRow, tableAddCol, tableRemoveRow, tableRemoveCol, tableMerge, tableSplit };
+  return { bindTableSelection, nextOrdinaryTableRC, findOrdinaryTableCell, bindColumnResize, resetTableColumnWidths, newTable, tableAddRow, tableAddCol, tableRemoveRow, tableRemoveCol, tableMerge, tableSplit };
 }));

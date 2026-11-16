@@ -1458,7 +1458,11 @@ test('P0-04 主窗/独立窗阻止顶层导航与新窗口，本地重载/query 
 });
 
 test('P0-04 open-external 仅放行真实 http(s)，openPath 附件仍放行（mock shell）', async () => {
-  const ctx = await openApp();
+  const seed = searchViewSeed();
+  seed.notes[0].id = 'attachment-note';
+  seed.notes[0].content = '[[file:attachment-file]]';
+  seed.notes[0].files = [{ id: 'attachment-file', path: 'C:/notes/ok.txt', isDir: false }];
+  const ctx = await openApp({ seed });
   try {
     await ctx.electronApp.evaluate(({ shell }) => {
       globalThis.__p004RealOpenExternal = shell.openExternal;
@@ -1477,7 +1481,9 @@ test('P0-04 open-external 仅放行真实 http(s)，openPath 附件仍放行（m
       js: await window.api.openExternal('javascript:alert(1)'),
       ctrl: await window.api.openExternal('https://evil.example/x\ncalc.exe'),
       nohost: await window.api.openExternal('https://'),
-      opened: await window.api.openFilePath('C:/notes/ok.txt', false)
+      opened: await window.api.openFilePath('attachment-note', 'attachment-file'),
+      unknown: await window.api.openFilePath('attachment-note', 'missing'),
+      rawPath: await window.api.openFilePath('C:/notes/ok.txt', false)
     }));
     expect(r.https).toBe(true);
     expect(r.http).toBe(true);
@@ -1486,7 +1492,9 @@ test('P0-04 open-external 仅放行真实 http(s)，openPath 附件仍放行（m
     expect(r.js).toBe(false);
     expect(r.ctrl).toBe(false);
     expect(r.nohost).toBe(false);
-    expect(r.opened && r.opened.ok).toBe(true);
+    expect(r.opened.ok).toBe(true);
+    expect(r.unknown.ok).toBe(false);
+    expect(r.rawPath.ok).toBe(false);
 
     const recorded = await ctx.electronApp.evaluate(() => ({ opened: globalThis.__p004Opened, paths: globalThis.__p004OpenedPath }));
     expect(recorded.opened).toEqual(['https://example.com/a', 'http://host.example/b']);
@@ -3261,10 +3269,14 @@ test('P5 增量渲染：画布内切换置顶后其余便签内容保留', async
     }
     await expect(ctx.win.locator('#noteCount')).toHaveText('2');
 
+    // 先刷新刚编辑过的两张卡片，再独立检验置顶引起的更新。
+    await ctx.win.evaluate(() => renderAll());
+    const unchangedCard = await ctx.win.locator('#board .note').nth(1).elementHandle();
     // 触发画布重排：给第一张切置顶
     await ctx.win.locator('#board .note .t-pin').first().click({ force: true });
 
     await expect(ctx.win.locator('#board .note').first()).toHaveClass(/\bpinned\b/);
+    expect(await unchangedCard.evaluate((card) => card.isConnected)).toBe(true);
     // 两张便签内容都保留（未变化卡片被复用、未丢失）
     await expect(ctx.win.locator('#board .note .note-content').nth(0)).toContainText('内容1');
     await expect(ctx.win.locator('#board .note .note-content').nth(1)).toContainText('内容2');
@@ -4260,7 +4272,11 @@ test('退出前保存失败时留在应用内', async () => {
   try {
     await ctx.electronApp.evaluate(({ ipcMain }) => {
       ipcMain.removeHandler('data:save');
-      ipcMain.handle('data:save', () => { throw new Error('simulated disk error'); });
+      globalThis.__quitSaveAttempts = 0;
+      ipcMain.handle('data:save', () => {
+        globalThis.__quitSaveAttempts++;
+        throw new Error('simulated disk error');
+      });
     });
     await ctx.win.evaluate(() => window.api.close());
     await expect(ctx.win.locator('#closeOverlay')).toBeVisible();
@@ -4269,6 +4285,12 @@ test('退出前保存失败时留在应用内', async () => {
     expect(await ctx.electronApp.evaluate(({ BrowserWindow }) =>
       BrowserWindow.getAllWindows().some((win) => !win.isDestroyed())
     )).toBe(true);
+    await expect.poll(() => ctx.electronApp.evaluate(() => globalThis.__quitSaveAttempts)).toBe(1);
+    await ctx.electronApp.evaluate(({ BrowserWindow }) => {
+      BrowserWindow.getAllWindows()[0].webContents.send('window:close-request', 'quit');
+    });
+    await expect.poll(() => ctx.electronApp.evaluate(() => globalThis.__quitSaveAttempts)).toBe(2);
+    await expect(ctx.win.locator('#closeOverlay')).toBeHidden();
     const saved = JSON.parse(await fs.readFile(path.join(ctx.userDataDir, 'notes-data.json'), 'utf8'));
     expect(saved.notes).toEqual(seed.notes);
     expect(saved.groups).toEqual(seed.groups);
@@ -8441,5 +8463,289 @@ test('桌面便签列宽拖动与恢复自动均写入存档', async () => {
     await cell.click({ button: 'right', position: { x: 15, y: 8 } });
     await win.getByRole('button', { name: '恢复自动列宽' }).click();
     await expect.poll(widths).toBeUndefined();
+    const first = await win.locator('.note-table td').nth(0).boundingBox();
+    const second = await win.locator('.note-table td').nth(1).boundingBox();
+    await win.mouse.move(first.x + first.width / 2, first.y + first.height / 2);
+    await win.mouse.down();
+    await win.mouse.move(second.x + second.width / 2, second.y + second.height / 2, { steps: 4 });
+    await win.mouse.up();
+    await expect(win.locator('.note-table td.box-selected')).toHaveCount(2);
+  } finally { await closeApp(ctx); }
+});
+
+test('窗口最大化状态在便签保存与退出后仍能恢复', async () => {
+  const ctx = await openApp({ seed: searchViewSeed() });
+  let reopened;
+  try {
+    await ctx.electronApp.evaluate(({ BrowserWindow }) => BrowserWindow.getAllWindows()[0].maximize());
+    const diskState = async () => JSON.parse(await fs.readFile(path.join(ctx.userDataDir, 'notes-data.json'), 'utf8')).settings.windowState;
+    await expect.poll(async () => (await diskState())?.maximized).toBe(true);
+    await ctx.win.evaluate(async () => {
+      delete state.settings.windowState;
+      state.notes[0].title = '最大化时编辑';
+      await saveNow();
+    });
+    expect((await diskState()).maximized).toBe(true);
+    await ctx.win.evaluate(() => window.api.close());
+    await expect(ctx.win.locator('#closeOverlay')).toBeVisible();
+    const closed = ctx.electronApp.waitForEvent('close');
+    await ctx.win.locator('#btnCloseQuit').click();
+    await closed;
+    expect((await diskState()).maximized).toBe(true);
+    reopened = await openApp({ userDataDir: ctx.userDataDir });
+    await expect.poll(() => reopened.electronApp.evaluate(({ BrowserWindow }) =>
+      BrowserWindow.getAllWindows()[0].isMaximized())).toBe(true);
+  } finally { await closeApp(reopened || ctx); }
+});
+
+test('英文文件对话框标题与筛选、提醒快捷日期', async () => {
+  const seed = searchViewSeed();
+  seed.settings.language = 'en';
+  const ctx = await openApp({ seed });
+  try {
+    await ctx.electronApp.evaluate(({ dialog }) => {
+      dialog.showOpenDialog = async (parent, options) => {
+        globalThis.__dialogOptions = options;
+        return { canceled: true, filePaths: [] };
+      };
+    });
+    await ctx.win.evaluate(() => window.api.pickImage());
+    expect(await ctx.electronApp.evaluate(() => globalThis.__dialogOptions)).toMatchObject({
+      title: 'Choose a background image', filters: [{name:'Images'}]
+    });
+    await ctx.win.evaluate(() => openReminder(state.notes[0]));
+    const win = ctx.win;
+    await win.locator('#reminderTomorrow').click();
+    await expect(win.locator('#reminderInput')).toHaveValue(/T09:00$/);
+    await expect(win.locator('#reminderTimePreview')).toContainText('09:00');
+    await win.locator('#btnReminderSave').click();
+    expect(await win.evaluate(() => new Date(state.notes[0].reminder.time).getHours())).toBe(9);
+  } finally { await closeApp(ctx); }
+});
+
+test('备份目录只接受默认目录、已保存目录或本次选择的目录', async () => {
+  const ctx = await openApp();
+  try {
+    const chosen = path.join(ctx.userDataDir, 'chosen');
+    const saved = path.join(ctx.userDataDir, 'saved');
+    const denied = path.join(ctx.userDataDir, 'unapproved');
+    await ctx.electronApp.evaluate(({ dialog, shell }, folder) => {
+      dialog.showOpenDialog = async () => ({ canceled: false, filePaths: [folder] });
+      shell.openPath = async () => '';
+    }, chosen);
+    const dataFile = path.join(ctx.userDataDir, 'notes-data.json');
+    const disk = JSON.parse(await fs.readFile(dataFile, 'utf8'));
+    disk.settings.backupDir = saved;
+    await fs.writeFile(dataFile, JSON.stringify(disk));
+    const result = await ctx.win.evaluate(async ({ denied, saved }) => {
+      const payload = { notes: [] };
+      const deniedOpen = await window.api.openPath(denied);
+      const deniedWrite = await window.api.backupExport(payload, denied);
+      const defaultWrite = await window.api.backupExport(payload, null);
+      const savedOpen = await window.api.openPath(saved);
+      const selection = await window.api.chooseDirectory();
+      const chosenWrite = await window.api.backupExport(payload, selection.path);
+      return { deniedOpen, deniedWrite, defaultWrite, savedOpen, chosenWrite };
+    }, { denied, saved });
+    expect(result.deniedOpen.ok).toBe(false);
+    expect(result.deniedWrite.ok).toBe(false);
+    await expect(fs.stat(denied)).rejects.toMatchObject({ code: 'ENOENT' });
+    expect(result.savedOpen.ok).toBe(true);
+    expect(path.dirname(result.defaultWrite.path)).toBe(path.join(ctx.userDataDir, 'backups'));
+    expect(path.dirname(result.chosenWrite.path)).toBe(chosen);
+    expect(JSON.parse(await fs.readFile(result.chosenWrite.path, 'utf8'))).toEqual({ notes: [] });
+  } finally { await closeApp(ctx); }
+});
+
+test('只查询或导入当前窗口通过本地文件或剪贴板取得的路径', async () => {
+  const ctx = await openApp();
+  try {
+    const image = path.join(ctx.userDataDir, 'drop.png');
+    const documentPath = path.join(ctx.userDataDir, 'clipboard.txt');
+    await fs.copyFile(path.join(ROOT, 'assets', 'icon.png'), image);
+    await fs.writeFile(documentPath, 'clipboard attachment');
+    await ctx.electronApp.evaluate(({ clipboard }, file) => {
+      clipboard.readBuffer = (format) => format === 'FileNameW'
+        ? Buffer.from(file + '\0', 'utf16le')
+        : Buffer.alloc(0);
+    }, documentPath);
+    await ctx.win.evaluate(() => {
+      const input = document.createElement('input');
+      input.type = 'file';
+      input.id = 'test-native-file';
+      document.body.appendChild(input);
+    });
+    await ctx.win.locator('#test-native-file').setInputFiles(image);
+    const results = await ctx.win.evaluate(async ({ image, documentPath }) => {
+      const initialStat = await window.api.statPath(documentPath);
+      const initialImport = await window.api.addImageFile(image);
+      const synthetic = await window.api.getPathForFile(new File(['fake'], image));
+      const file = document.querySelector('#test-native-file').files[0];
+      const grantedPath = await window.api.getPathForFile(file);
+      const imported = await window.api.addImageFile(grantedPath);
+      const clipboardFiles = await window.api.readClipboardFiles();
+      const clipboardStat = await window.api.statPath(clipboardFiles[0]);
+      return { initialStat, initialImport, synthetic, grantedPath, imported, clipboardFiles, clipboardStat };
+    }, { image, documentPath });
+    expect(results.initialStat).toEqual({ exists: false });
+    expect(results.initialImport.ok).toBe(false);
+    expect(results.synthetic).toBe('');
+    expect(results.grantedPath).toBe(image);
+    expect(results.imported.ok).toBe(true);
+    const importedName = decodeURIComponent(new URL(results.imported.url).pathname.slice(1));
+    expect(await fs.readFile(path.join(ctx.userDataDir, 'images', importedName))).toEqual(await fs.readFile(image));
+    expect(results.clipboardFiles).toEqual([documentPath]);
+    expect(results.clipboardStat).toMatchObject({ exists: true, isFile: true });
+  } finally { await closeApp(ctx); }
+});
+
+test('Windows 主窗口和独立便签运行在沙箱内并保留附件与剪贴板能力', async () => {
+  test.skip(process.platform !== 'win32', '仅验证 Windows 进程隔离');
+  const seed = searchViewSeed();
+  seed.notes = [
+    { ...seed.notes[0], id: 'sandbox-detached', type: 'note', desktopPin: true, content: '[[file:own]]',
+      files: [{ id: 'own', path: 'C:/notes/own.txt', isDir: false }] },
+    { ...seed.notes[0], id: 'sandbox-main', type: 'note', content: '[[file:other]]',
+      files: [{ id: 'other', path: 'C:/notes/other.txt', isDir: false }] }
+  ];
+  const ctx = await openApp({ seed, extraArgs: [] });
+  try {
+    const pageFor = (name) => ctx.electronApp.windows().find((page) => new URL(page.url()).pathname.endsWith('/' + name));
+    await expect.poll(() => !!pageFor('note.html')).toBe(true);
+    const detached = pageFor('note.html');
+    await expect(detached.locator('#dnTitle')).toHaveValue(seed.notes[0].title);
+
+    await expect.poll(() => ctx.electronApp.evaluate(({ app, BrowserWindow }) => {
+      const metrics = app.getAppMetrics();
+      return Object.fromEntries(BrowserWindow.getAllWindows().map(({ webContents }) => {
+        const page = new URL(webContents.getURL()).pathname.split('/').pop();
+        const metric = metrics.find(({ pid }) => pid === webContents.getOSProcessId());
+        return [page, metric?.sandboxed];
+      }));
+    })).toMatchObject({ 'index.html': true, 'note.html': true });
+
+    await ctx.electronApp.evaluate(({ clipboard, shell }) => {
+      clipboard.readText = () => 'sandbox clipboard';
+      shell.openPath = async () => '';
+    });
+    const result = await detached.evaluate(async () => ({
+      own: await window.api.openFilePath('sandbox-detached', 'own'),
+      otherRejected: await window.api.openFilePath('sandbox-main', 'other').then(() => false, () => true),
+      clipboard: await window.api.readClipboard()
+    }));
+    expect(result.own.ok).toBe(true);
+    expect(result.otherRejected).toBe(true);
+    expect(result.clipboard).toBe('sandbox clipboard');
+  } finally { await closeApp(ctx); }
+});
+
+test('画布对齐辅助线：吸附、Alt 自由拖动以及缩放和多选', async () => {
+  const seed = searchViewSeed();
+  seed.notes = [v128Note('move', 80, 100, 1), v128Note('target', 365, 140, 2), v128Note('group', 80, 330, 3)];
+  const ctx = await openApp({ seed });
+  const win = ctx.win;
+  const line = win.locator('#board .note-align-guide[data-axis="y"]');
+  const position = (id) => win.evaluate((key) => effPos(state.notes.find((note) => note.id === key)).y, id);
+  const grab = async () => {
+    const point = await v128GrabPoint(win, 'move');
+    await win.mouse.move(point.x, point.y);
+    await win.mouse.down();
+    await expect(win.locator('body')).toHaveClass(/note-dragging/);
+    return point;
+  };
+  try {
+    let point = await grab();
+    await win.mouse.move(point.x, point.y + 37);
+    await expect(line).toBeVisible();
+    await win.mouse.up();
+    await expect(line).toHaveCount(0);
+    expect(await position('move')).toBe(140);
+    expect(await position('target')).toBe(140);
+
+    point = await grab();
+    await win.keyboard.down('Alt');
+    await win.mouse.move(point.x, point.y - 4);
+    await expect(line).toBeHidden();
+    await win.mouse.up();
+    await win.keyboard.up('Alt');
+    expect(await position('move')).toBe(136);
+
+    await stableClick(win.locator('#btnBatchToggle'));
+    await win.evaluate(() => {
+      toggleSelectNote('move');
+      toggleSelectNote('group');
+      applyBoardZoomRatio(0.75);
+    });
+    const groupY = await position('group');
+    point = await grab();
+    await win.mouse.move(point.x, point.y + 1);
+    await expect(line).toBeVisible();
+    await win.mouse.up();
+    await expect(line).toHaveCount(0);
+    expect(await position('move')).toBe(140);
+    expect(await position('group')).toBe(groupY + 4);
+  } finally { await closeApp(ctx); }
+});
+
+test('独立便签保存过期快照时保留主窗已保存和待保存的布局字段', async () => {
+  const seed = searchViewSeed();
+  seed.notes[0].desktopPin = true;
+  const ctx = await openApp({ seed });
+  try {
+    const detachedPage = () => ctx.electronApp.windows().find((page) => page.url().includes('note.html'));
+    await expect.poll(() => !!detachedPage()).toBe(true);
+    const detached = detachedPage();
+    await expect(detached.locator('#dnTitle')).toHaveValue(seed.notes[0].title);
+    expect(await ctx.win.evaluate(async () => {
+      const item = state.notes.find((entry) => entry.id === 'home');
+      item.groupId = null;
+      item.x = 420;
+      item.positionAll = { x: 530, y: 80 };
+      const saved = await saveNow();
+      item.positionAll = { x: 710, y: 90 };
+      window.api.captureDraft({ settings: state.settings, groups: state.groups, notes: state.notes, trash: state.trash });
+      return saved;
+    })).toBe(true);
+    expect(await detached.evaluate(() => {
+      note.content = '独立窗口最后正文';
+      return saveNow();
+    })).toBe(true);
+
+    const disk = JSON.parse(await fs.readFile(path.join(ctx.userDataDir, 'notes-data.json'), 'utf8'));
+    expect(disk.notes.find((item) => item.id === 'home')).toMatchObject({
+      content: '独立窗口最后正文', groupId: null, x: 420, positionAll: { x: 530, y: 80 }
+    });
+    await expect.poll(() => ctx.win.evaluate(() => state.notes.find((item) => item.id === 'home'))).toMatchObject({
+      content: '独立窗口最后正文', groupId: null, x: 420, positionAll: { x: 710, y: 90 }
+    });
+    expect(await ctx.win.evaluate(() => saveNow())).toBe(true);
+    expect(await ctx.win.evaluate(async () => (await window.api.loadData()).recovery)).toBeNull();
+  } finally { await closeApp(ctx); }
+});
+
+test('提醒快捷项可设 15 分钟后与今天 18:00，到点只隐藏当天选项', async () => {
+  const ctx = await openApp({ seed: searchViewSeed() });
+  const { win } = ctx;
+  try {
+    const beforeCutoff = await win.evaluate(() => new Date(2026, 10, 15, 17, 58).getTime());
+    await win.clock.install({ time: new Date(beforeCutoff) });
+    await win.evaluate(() => openReminder(state.notes[0]));
+    const input = win.locator('#reminderInput');
+    const evening = win.getByRole('button', { name: '今天 18:00' });
+    await win.getByRole('button', { name: '15 分钟后' }).click();
+    await expect(input).toHaveValue('2026-11-15T18:13');
+    await evening.click();
+    await expect(input).toHaveValue('2026-11-15T18:00');
+    await expect(win.locator('#reminderTimePreview')).toContainText('18:00');
+
+    await win.clock.fastForward(125_000);
+    await expect(evening).toBeHidden();
+    await expect(win.locator('#reminderInFifteen')).toBeVisible();
+    await expect(win.locator('#reminderInHour')).toBeVisible();
+    await win.locator('#reminderTomorrow').click();
+    await expect(input).toHaveValue('2026-11-16T09:00');
+    await win.locator('#btnReminderCancel').click();
+    await win.evaluate(() => openReminder(state.notes[0]));
+    await expect(win.locator('#reminderTodayEvening')).toBeHidden();
   } finally { await closeApp(ctx); }
 });

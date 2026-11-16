@@ -419,7 +419,9 @@ function wireCommon(el, n) {
       const fl = e.target.closest('.file-link');
       if (fl) {
         e.stopPropagation();
-        window.api.openFilePath(fl.getAttribute('data-path'), fl.getAttribute('data-is-dir') === '1');
+        (saveTimer ? saveNow() : Promise.resolve(true)).then((saved) => {
+          if (saved) return window.api.openFilePath(n.id, fl.dataset.fileId);
+        });
         return;
       }
       const ii = e.target.closest('.inline-img');
@@ -459,7 +461,7 @@ function wireCommon(el, n) {
       e.preventDefault();
       e.stopPropagation();
       const files = Array.from((e.dataTransfer && e.dataTransfer.files) || []);
-      const paths = files.map((f) => window.api.getPathForFile(f)).filter((p) => p && p.length > 1);
+      const paths = (await Promise.all(files.map((f) => window.api.getPathForFile(f)))).filter(Boolean);
       if (paths.length) {
         content.focus();
         await insertPastedFilesAtCursor(n, paths);
@@ -673,6 +675,25 @@ function wireMemoEvents(el, n) {
   }
 }
 
+function refreshBoardCards(board, visible) {
+  const visibleIds = new Set(visible.map((n) => n.id));
+  for (const [id, el] of boardEls) {
+    if (!visibleIds.has(id)) { el.remove(); boardEls.delete(id); }
+  }
+  getSortedNotes(visible).forEach((n) => {
+    const existing = boardEls.get(n.id);
+    const snap = noteFingerprint(n);
+    if (existing && existing.__snap === snap) {
+      refreshCardSearch(existing, n);
+      return;
+    }
+    const el = buildNoteEl(n);
+    el.__snap = snap;
+    if (existing) existing.replaceWith(el); else board.appendChild(el);
+    boardEls.set(n.id, el);
+  });
+}
+
 function bringToFront(el) {
   $$('.note').forEach((x) => x.classList.remove('focused'));
   el.classList.add('focused');
@@ -683,5 +704,5 @@ function refreshFoot(el, n) {
   if (date) date.textContent = formatDate(n.updatedAt || n.createdAt);
 }
 
-  return { noteText, pinNoteToDesktop, buildNoteEl, buildMemoEl, refreshCardSearch, wireCommon, wireNoteEvents, wireMemoEvents, bringToFront, refreshFoot, cardPlainTextMap, cardRenderedSearchSources, noteSearchContentMatches };
+  return { noteText, pinNoteToDesktop, buildNoteEl, buildMemoEl, refreshBoardCards, refreshCardSearch, wireCommon, wireNoteEvents, wireMemoEvents, bringToFront, refreshFoot, cardPlainTextMap, cardRenderedSearchSources, noteSearchContentMatches };
 }));

@@ -213,44 +213,6 @@ function refreshDocPickerForeground() {
 }
 
 
-function openNoteDetail(id, trigger) {
-  if (!state.notes.some((note) => note.id === id)) return;
-  const canvas = $('#canvas');
-  const source = trigger?.closest('.note, .memo-row, .todo-line, .doc-pick-item');
-  docPickerReturn = {
-    id, mode: state.settings.viewMode, top: canvas.scrollTop, left: canvas.scrollLeft,
-    rowId: source?.dataset.item,
-    more: !!trigger?.closest('.t-more'),
-    fromRecent: !!trigger?.closest('#recentNotes'),
-  };
-  docNoteId = id;
-  renderAll();
-  canvas.scrollTo(0, 0);
-  $('#btnDocBack')?.focus({ preventScroll: true });
-}
-
-function returnFromNoteDetail(restoreFocus = true) {
-  const origin = docPickerReturn;
-  docPickerReturn = null;
-  docNoteId = null;
-  renderAll();
-  if (!origin) return;
-  $('#canvas').scrollTo(origin.left, origin.top);
-  if (!restoreFocus) return;
-  if (origin.fromRecent) {
-    $('#searchInput').focus({ preventScroll: true });
-    return;
-  }
-  const rows = { board: '#board .note', memo: '#memoList .memo-row',
-    todo: '#todoList .todo-line', doc: '#docList .doc-pick-item' };
-  const row = $$(rows[origin.mode]).find((item) =>
-    (item.dataset.id || item.dataset.note) === origin.id && item.dataset.item === origin.rowId);
-  const target = origin.mode === 'doc' ? row : row?.querySelector(
-    origin.mode === 'todo' ? '[data-goto]' : origin.more ? '.t-more' : '.note-title'
-  );
-  (target || $('#searchInput'))?.focus({ preventScroll: true });
-}
-
 function renderDocView(visible) {
   const list = $('#docList');
   if (!list) return;
@@ -353,7 +315,7 @@ function renderDocView(visible) {
         <button class="doc-fmt-btn" id="btnDocPin" title="${t('pin')}">🔝</button>
       </div>
       <div class="doc-group doc-group-export" role="group" aria-label="${t('doc_group_export')}">
-        <button class="doc-fmt-btn doc-export-btn" id="btnDocExportMd" title="${t('export_markdown')}" aria-label="${t('export_markdown')}">MD↓</button>
+        <button class="doc-fmt-btn doc-export-btn" id="btnDocExportMd" title="${t('export_markdown')}" aria-label="${t('export_markdown')}">${t('export_markdown')}</button>
       </div>
       <div class="doc-group doc-group-danger" role="group" aria-label="${t('delete')}">
         <button class="doc-fmt-btn doc-del-btn" id="btnDocDel" title="${t('delete')}" aria-label="${t('delete')}">🗑</button>
@@ -439,7 +401,12 @@ function wireDocView(n, isTodo) {
       const link = e.target.closest('a.note-link');
       if (link) { const url = link.getAttribute('data-url'); if (url) window.api.openExternal(url); return; }
       const fl = e.target.closest('.file-link');
-      if (fl) { e.stopPropagation(); window.api.openFilePath(fl.getAttribute('data-path'), fl.getAttribute('data-is-dir') === '1'); }
+      if (fl) {
+        e.stopPropagation();
+        (saveTimer ? saveNow() : Promise.resolve(true)).then((saved) => {
+          if (saved) return window.api.openFilePath(n.id, fl.dataset.fileId);
+        });
+      }
     });
     return;
   }
@@ -482,7 +449,12 @@ function wireDocView(n, isTodo) {
     const link = e.target.closest('a.note-link');
     if (link) { const url = link.getAttribute('data-url'); if (url) window.api.openExternal(url); return; }
     const fl = e.target.closest('.file-link');
-    if (fl) { e.stopPropagation(); window.api.openFilePath(fl.getAttribute('data-path'), fl.getAttribute('data-is-dir') === '1'); }
+    if (fl) {
+      e.stopPropagation();
+      (saveTimer ? saveNow() : Promise.resolve(true)).then((saved) => {
+        if (saved) return window.api.openFilePath(n.id, fl.dataset.fileId);
+      });
+    }
   });
   content.addEventListener('input', () => { n.content = readRichContent(content); n.updatedAt = Date.now(); save(); refreshDocSearch(n); });
   content.addEventListener('paste', async (e) => {
@@ -504,7 +476,7 @@ function wireDocView(n, isTodo) {
     e.preventDefault();
     e.stopPropagation();
     const files = Array.from((e.dataTransfer && e.dataTransfer.files) || []);
-    const paths = files.map((f) => window.api.getPathForFile(f)).filter((p) => p && p.length > 1);
+    const paths = (await Promise.all(files.map((f) => window.api.getPathForFile(f)))).filter(Boolean);
     if (paths.length) {
       content.focus();
       await insertPastedFilesAtCursor(n, paths);
@@ -728,5 +700,5 @@ function locateDocSearch(noteId) {
   }
 }
 
-  return { openNoteDetail, returnFromNoteDetail, renderDocView, wireDocView, refreshDocPickerForeground };
+  return { renderDocView, wireDocView, refreshDocPickerForeground };
 }));

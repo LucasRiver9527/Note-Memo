@@ -287,6 +287,8 @@ function showNoteContextMenu(e, n) {
     addSep();
 
     // —— 文本编辑：两种模式都在一级（绝对高频，且带原生/全局快捷键） ——
+    addItem('cm-export', t('export_markdown'), fnExportMd);
+    addSep();
     addItem('cm-copy', t('copy'), fnCopy, false, 'Ctrl+C');
     addItem('cm-cut', t('cut'), fnCut, false, 'Ctrl+X');
     addItem('cm-paste', t('paste'), fnPaste, false, 'Ctrl+V');
@@ -319,11 +321,9 @@ function showNoteContextMenu(e, n) {
     addItem('archive', t(n.archived ? 'note_unarchive' : 'note_archive'), fnArchive, false, null, noteHost);
     addSep();
 
-    // —— 导出：两种模式都在一级（工具栏没有该入口，且 e2e 用例依赖其可见） ——
     if (!docNoteId && ['board', 'memo'].includes(state.settings.viewMode)) {
       addItem('doc', t('open_detail'), () => openNoteDetail(n.id, e.target));
     }
-    addItem('cm-export', t('export_markdown'), fnExportMd);
     addSep();
 
     // ★ 删除：固定一级（不折叠进二级），danger 样式 + 独立分隔线

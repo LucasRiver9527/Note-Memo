@@ -15,6 +15,7 @@
   "include": [
     "types.d.ts",
     "data-io.js",
+    "note-store.js",
     "ipc-contract.js",
     "renderer/logic.js",
     "renderer/state.js",

@@ -37,8 +37,15 @@ contextBridge.exposeInMainWorld('api', {
 
   readClipboardFiles: () => ipcRenderer.invoke('clipboard:read-files'),
   statPath: (p) => ipcRenderer.invoke('path:stat', p),
-  getPathForFile: (file) => { try { return webUtils.getPathForFile(file); } catch (e) { return ''; } },
-  openFilePath: (p, isDir) => ipcRenderer.invoke('file:open', p, isDir),
+  getPathForFile: async (file) => {
+    try {
+      const filePath = webUtils.getPathForFile(file);
+      return filePath && await ipcRenderer.invoke('file:authorize-drop', filePath) ? filePath : '';
+    } catch (e) {
+      return '';
+    }
+  },
+  openFilePath: (noteId, fileId) => ipcRenderer.invoke('file:open', { id: noteId, fileId }),
   deleteNoteFromDesktop: (id) => ipcRenderer.invoke('note:delete', id),
   setFontSize: (size) => ipcRenderer.invoke('settings:set-font-size', size),
   onFontSize: (cb) => ipcRenderer.on('settings:font-size', (e, v) => cb(v)),
@@ -48,7 +55,7 @@ contextBridge.exposeInMainWorld('api', {
   close: () => ipcRenderer.send('window:close'),
   maximize: () => ipcRenderer.send('window:maximize'),
   onMaximized: (cb) => ipcRenderer.on('window:maximized', (e, flag) => cb(flag)),
-  onCloseRequest: (cb) => ipcRenderer.on('window:close-request', () => cb()),
+  onCloseRequest: (cb) => ipcRenderer.on('window:close-request', (e, intent) => cb(intent)),
   onWindowSaveFailed: (cb) => ipcRenderer.on('window:save-failed', () => cb()),
   replyCloseDecision: (decision) => ipcRenderer.send('window:close-decision', decision),
   openExternal: (url) => ipcRenderer.invoke('open-external', url),

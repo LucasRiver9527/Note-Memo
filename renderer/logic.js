@@ -13,6 +13,16 @@
 })(typeof self !== 'undefined' ? self : this, function () {
   'use strict';
 
+  const DETACHED_EDIT_FIELDS = ['title', 'content', 'items', 'images', 'files', 'tables', 'color', 'textColor', 'opacity', 'fontSize', 'fontFamily', 'updatedAt'];
+
+  function mergeDetachedEdits(baseNote, editedNote) {
+    const merged = { ...baseNote };
+    for (const field of DETACHED_EDIT_FIELDS) {
+      if (field in editedNote) merged[field] = editedNote[field];
+    }
+    return merged;
+  }
+
   function hexToRgba(hex, alpha) {
     const h = String(hex || '').replace('#', '');
     const r = parseInt(h.slice(0, 2), 16);
@@ -683,5 +693,5 @@
     return { parts, truncatedBefore: before, truncatedAfter: after };
   }
 
-  return { hexToRgba, luminance, contrastRatio, isDarkColor, autoTextColor, noteShadowCss, escapeHtml, refIdsOf, cleanupRefs, sortNotes, tableToMarkdown, noteToMarkdown, referencedMedia, parseNullSeparated, hdropString, setRenderLocale, formatInlineText, inlineImgHtml, fileLinkHtml, tableBlockHtml, renderRichContent, sanitizeCss, clampInt, clampNum, isCssNumber, findNoteSearchMatches, buildSearchSnippet };
+  return { mergeDetachedEdits, hexToRgba, luminance, contrastRatio, isDarkColor, autoTextColor, noteShadowCss, escapeHtml, refIdsOf, cleanupRefs, sortNotes, tableToMarkdown, noteToMarkdown, referencedMedia, parseNullSeparated, hdropString, setRenderLocale, formatInlineText, inlineImgHtml, fileLinkHtml, tableBlockHtml, renderRichContent, sanitizeCss, clampInt, clampNum, isCssNumber, findNoteSearchMatches, buildSearchSnippet };
 });

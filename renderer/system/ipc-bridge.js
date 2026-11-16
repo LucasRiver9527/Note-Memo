@@ -104,8 +104,8 @@ function registerIpc() {
   });
 
   // 关闭确认：主进程询问 → 弹主题化选择框 → 回传决定
-  window.api.onCloseRequest(async () => {
-    const choice = await showCloseDecisionModal();
+  window.api.onCloseRequest(async (intent) => {
+    const choice = intent === 'quit' ? 'quit' : await showCloseDecisionModal();
     // 正常退出前等待主进程确认落盘；失败时留在应用中，避免把未保存改动丢掉。
     if (choice === 'quit' && !dataReadonly && !(await saveNow())) {
       window.api.replyCloseDecision('cancel');
@@ -152,7 +152,7 @@ function registerIpc() {
   });
 
   window.api.onNoteChanged((note) => {
-    state.notes = state.notes.map((n) => (n.id === note.id ? note : n));
+    state.notes = state.notes.map((n) => (n.id === note.id ? mergeDetachedEdits(n, note) : n));
     // UX-20A：独立窗标题变化只刷新桌面便签摘要，不重渲染编辑器/焦点。
     if (typeof renderDesktopNotes === 'function') renderDesktopNotes();
   });

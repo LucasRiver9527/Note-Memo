@@ -136,7 +136,7 @@ function renderTodoView(visible, query) {
         <div class="tl-body">
           <div class="tl-text">${escapeHtml(item.text || t('empty_item'))}</div>
           <div class="tl-meta">
-            ${group ? `<span class="dot" style="background:${group.color}"></span>` : ''}
+            ${group ? `<span class="dot" style="background:${sanitizeCss(group.color)}"></span>` : ''}
             <button type="button" class="link" data-goto="${note.id}">${escapeHtml(note.title || t('untitled'))}</button>
           </div>
         </div>
@@ -158,7 +158,7 @@ function renderTodoView(visible, query) {
         <div class="tl-body">
           <div class="tl-text">${escapeHtml(note.title || t('untitled'))}</div>
           <div class="tl-meta">
-            ${group ? `<span class="dot" style="background:${group.color}"></span>` : ''}
+            ${group ? `<span class="dot" style="background:${sanitizeCss(group.color)}"></span>` : ''}
             <button type="button" class="link" data-goto="${note.id}">${t('open_note')}</button>
           </div>
         </div>

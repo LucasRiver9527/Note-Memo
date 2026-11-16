@@ -320,9 +320,7 @@ function showTableContextMenu(e, n, block) {
   });
   if (getTableById(n, block.dataset.tableId)?.columnWidths) {
     addItem('↔', t('table_auto_width'), () => {
-      const tbl = getTableById(n, block.dataset.tableId);
-      delete tbl.columnWidths;
-      refreshTableBlock(block, n);
+      resetTableColumnWidths(getTableById(n, block.dataset.tableId), () => refreshTableBlock(block, n));
     });
   }
   addItem('🗑', t('del_table'), () => {
@@ -353,60 +351,14 @@ function setActiveTable(block, n, cell) {
   }
   showTableToolbar(block);
 }
-function highlightBox(block, box) {
-  $$('td', block).forEach((td) => {
-    const r = Number(td.dataset.r), c = Number(td.dataset.c);
-    td.classList.toggle('box-selected', r >= box.r1 && r <= box.r2 && c >= box.c1 && c <= box.c2);
-  });
-}
-
 function wireTables(el, n) {
   $$('.note-table-block', el).forEach((block) => {
-    bindColumnResize(block, () => getTableById(n, block.dataset.tableId), (tbl, widths) => {
-      tbl.columnWidths = widths;
-      refreshTableBlock(block, n);
+    bindColumnResize(block, () => getTableById(n, block.dataset.tableId), () => refreshTableBlock(block, n));
+    bindTableSelection(block, (cell) => setActiveTable(block, n, cell), (box) => {
+      setActiveTable(block, n, null);
+      activeTableSelBox = box;
+      refreshToolbarEligibility();
     });
-    block.addEventListener('click', (e) => {
-      e.stopPropagation();
-      if (Date.now() - lastTableBoxTime < 150) return;
-      const td = e.target.closest('td');
-      if (td) setActiveTable(block, n, { r: Number(td.dataset.r), c: Number(td.dataset.c) });
-      else setActiveTable(block, n, null);
-    });
-
-    block.addEventListener('mousedown', (e) => {
-      if (e.button !== 0) return;
-      const td = e.target.closest('td');
-      if (!td) return;
-      e.preventDefault();
-      const startR = Number(td.dataset.r), startC = Number(td.dataset.c);
-      let box = { r1: startR, c1: startC, r2: startR, c2: startC };
-      let moved = false;
-      const onMove = (ev) => {
-        const t = document.elementFromPoint(ev.clientX, ev.clientY);
-        const tdd = t && t.closest ? t.closest('td') : null;
-        if (tdd) {
-          const rr = Number(tdd.dataset.r), cc = Number(tdd.dataset.c);
-          box = { r1: Math.min(startR, rr), c1: Math.min(startC, cc), r2: Math.max(startR, rr), c2: Math.max(startC, cc) };
-          if (box.r2 - box.r1 > 0 || box.c2 - box.c1 > 0) moved = true;
-          highlightBox(block, box);
-        }
-      };
-      const onUp = () => {
-        document.removeEventListener('mousemove', onMove);
-        document.removeEventListener('mouseup', onUp);
-        if (moved) {
-          lastTableBoxTime = Date.now();
-          setActiveTable(block, n, null);
-          activeTableSelBox = box;
-          highlightBox(block, box);
-          refreshToolbarEligibility(); // 框选后刷新合并可用性
-        }
-      };
-      document.addEventListener('mousemove', onMove);
-      document.addEventListener('mouseup', onUp);
-    });
-
     block.addEventListener('dblclick', (e) => {
       const td = e.target.closest('td');
       if (!td) return;
@@ -430,23 +382,6 @@ function wireTables(el, n) {
     });
     block.addEventListener('contextmenu', (e) => showTableContextMenu(e, n, block));
   });
-}
-
-// V128-03A：本表格块内「已渲染的普通单元格」（DOM 行序，排除斜线专用格；被合并覆盖的格本就不在 DOM）。
-function ordinaryTableCells(block) {
-  return $$('td', block).filter((td) => !td.classList.contains('diag'));
-}
-// 计算下一个/上一个普通单元格的 r/c（提交前记录，提交后重新按 r/c 找实时节点）。
-function nextOrdinaryTableRC(block, td, shift) {
-  const cells = ordinaryTableCells(block);
-  const idx = cells.indexOf(td);
-  if (idx < 0) return null;
-  const next = shift ? cells[idx - 1] : cells[idx + 1];
-  if (!next) return null;
-  return { r: Number(next.dataset.r), c: Number(next.dataset.c) };
-}
-function findOrdinaryTableCell(block, r, c) {
-  return ordinaryTableCells(block).find((td) => Number(td.dataset.r) === r && Number(td.dataset.c) === c) || null;
 }
 
 function editCell(block, td, n, tbl, r, c) {
@@ -515,5 +450,5 @@ function editCell(block, td, n, tbl, r, c) {
   };
 }
 
-  return { getTableById, insertTableAtCursor, removeTableFromNote, openTableInsertDialog, refreshTableBlock, deselectTable, hideTableToolbar, showTableToolbar, openDiagonalEditor, openTableSettingsDialog, showTableContextMenu, setActiveTable, highlightBox, wireTables, editCell };
+  return { getTableById, insertTableAtCursor, removeTableFromNote, openTableInsertDialog, refreshTableBlock, deselectTable, hideTableToolbar, showTableToolbar, openDiagonalEditor, openTableSettingsDialog, showTableContextMenu, setActiveTable, wireTables, editCell };
 }));

@@ -48,8 +48,7 @@
     activeTableNote: null,
     activeTableToolbar: null,
     activeTableSelCell: null,
-    activeTableSelBox: null,
-    lastTableBoxTime: 0
+    activeTableSelBox: null
   };
 
   // ---- 引用型状态（对象/集合，同一引用共享即可） ----

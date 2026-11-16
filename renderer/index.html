@@ -695,7 +695,15 @@
     <div id="reminderModal">
       <header><span id="reminderTitle" data-i18n="set_todo_time">设置待办时间</span></header>
       <div class="rm-body">
+        <label for="reminderInput" data-i18n="reminder_datetime">提醒日期与时间</label>
         <input type="datetime-local" id="reminderInput" />
+        <div class="reminder-presets">
+          <button type="button" class="sp-btn ghost" id="reminderInFifteen" data-i18n="reminder_in_fifteen">15 分钟后</button>
+          <button type="button" class="sp-btn ghost" id="reminderInHour" data-i18n="reminder_in_hour">一小时后</button>
+          <button type="button" class="sp-btn ghost" id="reminderTodayEvening" data-i18n="reminder_today_evening">今天 18:00</button>
+          <button type="button" class="sp-btn ghost" id="reminderTomorrow" data-i18n="reminder_tomorrow">明早 9 点</button>
+        </div>
+        <p id="reminderTimePreview" aria-live="polite"></p>
       </div>
       <footer>
         <button class="sp-btn ghost" id="btnReminderCancel" data-i18n="cancel">取消</button>
@@ -779,6 +787,7 @@
   <script src="board/note-card.js"></script>
   <script src="board/canvas-zoom.js"></script>
   <script src="editors/rich-tools.js"></script>
+  <script src="workspace-navigation.js"></script>
   <script src="editors/doc-view.js"></script>
   <script src="editors/todo-view.js"></script>
   <script src="panels/popovers.js"></script>

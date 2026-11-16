@@ -15,23 +15,57 @@
 /* ============ 待办提醒 ============ */
 // （reminderNoteId 见 core/app-state.js）
 
+let reminderEveningTimer;
+
 function openReminder(n) {
   reminderNoteId = n.id;
   $('#reminderTitle').textContent = n.title || t('set_todo_time');
   const input = $('#reminderInput');
-  if (n.reminder && n.reminder.time) {
-    const d = new Date(n.reminder.time);
-    const pad = (x) => String(x).padStart(2, '0');
-    input.value = `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())}T${pad(d.getHours())}:${pad(d.getMinutes())}`;
-  } else {
-    const d = new Date(Date.now() + 3600000);
-    const pad = (x) => String(x).padStart(2, '0');
-    input.value = `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())}T${pad(d.getHours())}:${pad(d.getMinutes())}`;
+  const preview = $('#reminderTimePreview');
+  const updatePreview = () => {
+    const date = new Date(input.value);
+    const valid = Number.isFinite(date.getTime());
+    $('#btnReminderSave').disabled = !valid;
+    preview.textContent = valid ? new Intl.DateTimeFormat(
+      state.settings.language === 'en' ? 'en' : 'zh-CN',
+      { dateStyle: 'full', timeStyle: 'short', hourCycle: 'h23' }
+    ).format(date) : '';
+  };
+  const setTime = (date) => {
+    const pad = (value) => String(value).padStart(2, '0');
+    input.value = `${date.getFullYear()}-${pad(date.getMonth()+1)}-${pad(date.getDate())}T${pad(date.getHours())}:${pad(date.getMinutes())}`;
+    updatePreview();
+  };
+  const inMinutes = (minutes) => new Date(Date.now() + minutes * 60_000);
+  const current = new Date(n.reminder?.time || NaN);
+  setTime(Number.isFinite(current.getTime()) ? current : inMinutes(60));
+  input.oninput = updatePreview;
+  $('#reminderInFifteen').onclick = () => setTime(inMinutes(15));
+  $('#reminderInHour').onclick = () => setTime(inMinutes(60));
+  const todayEvening = $('#reminderTodayEvening');
+  const cutoff = new Date();
+  cutoff.setHours(18, 0, 0, 0);
+  clearTimeout(reminderEveningTimer);
+  const remaining = cutoff.getTime() - Date.now();
+  todayEvening.hidden = remaining <= 0;
+  if (remaining > 0) {
+    reminderEveningTimer = setTimeout(() => { todayEvening.hidden = true; }, remaining);
   }
+  todayEvening.onclick = () => {
+    if (Date.now() < cutoff.getTime()) setTime(cutoff);
+    else todayEvening.hidden = true;
+  };
+  $('#reminderTomorrow').onclick = () => {
+    const tomorrow = new Date();
+    tomorrow.setDate(tomorrow.getDate() + 1);
+    tomorrow.setHours(9, 0, 0, 0);
+    setTime(tomorrow);
+  };
   $('#reminderOverlay').classList.remove('hidden');
 }
 
 function closeReminder() {
+  clearTimeout(reminderEveningTimer);
   $('#reminderOverlay').classList.add('hidden');
   reminderNoteId = null;
 }

@@ -223,7 +223,6 @@ let activeTableEl = null;
 let activeTableToolbar = null;
 let activeTableSelCell = null;
 let activeTableSelBox = null;
-let lastTableBoxTime = 0;
 
 // 表格数据纯逻辑（newTable/tableAddRow/…/tableSplit）已收归 table-logic.js（可单测），此处由全局提供。
 function getTableById(id) {
@@ -506,9 +505,7 @@ function showTableContextMenu(e, block) {
   });
   if (getTableById(block.dataset.tableId)?.columnWidths) {
     addItem('↔', tr('table_auto_width'), () => {
-      const tbl = getTableById(block.dataset.tableId);
-      delete tbl.columnWidths;
-      refreshTableBlock(block);
+      resetTableColumnWidths(getTableById(block.dataset.tableId), () => refreshTableBlock(block));
     });
   }
   addItem('🗑', tr('del_table'), () => {
@@ -539,57 +536,13 @@ function setActiveTable(block, cell) {
   showTableToolbar(block);
 }
 
-function highlightBox(block, box) {
-  $$('td', block).forEach((td) => {
-    const r = Number(td.dataset.r), c = Number(td.dataset.c);
-    td.classList.toggle('box-selected', r >= box.r1 && r <= box.r2 && c >= box.c1 && c <= box.c2);
-  });
-}
-
 function wireTables() {
   $$('.note-table-block').forEach((block) => {
-    bindColumnResize(block, () => getTableById(block.dataset.tableId), (tbl, widths) => {
-      tbl.columnWidths = widths;
-      refreshTableBlock(block);
-    });
-    block.addEventListener('click', (e) => {
-      e.stopPropagation();
-      if (Date.now() - lastTableBoxTime < 150) return;
-      const td = e.target.closest('td');
-      if (td) setActiveTable(block, { r: Number(td.dataset.r), c: Number(td.dataset.c) });
-      else setActiveTable(block, null);
-    });
-    block.addEventListener('mousedown', (e) => {
-      if (e.button !== 0) return;
-      const td = e.target.closest('td');
-      if (!td) return;
-      e.preventDefault();
-      const startR = Number(td.dataset.r), startC = Number(td.dataset.c);
-      let box = { r1: startR, c1: startC, r2: startR, c2: startC };
-      let moved = false;
-      const onMove = (ev) => {
-        const t = document.elementFromPoint(ev.clientX, ev.clientY);
-        const tdd = t && t.closest ? t.closest('td') : null;
-        if (tdd) {
-          const rr = Number(tdd.dataset.r), cc = Number(tdd.dataset.c);
-          box = { r1: Math.min(startR, rr), c1: Math.min(startC, cc), r2: Math.max(startR, rr), c2: Math.max(startC, cc) };
-          if (box.r2 - box.r1 > 0 || box.c2 - box.c1 > 0) moved = true;
-          highlightBox(block, box);
-        }
-      };
-      const onUp = () => {
-        document.removeEventListener('mousemove', onMove);
-        document.removeEventListener('mouseup', onUp);
-        if (moved) {
-          lastTableBoxTime = Date.now();
-          setActiveTable(block, null);
-          activeTableSelBox = box;
-          highlightBox(block, box);
-          refreshToolbarEligibility(block); // 框选后刷新合并可用性
-        }
-      };
-      document.addEventListener('mousemove', onMove);
-      document.addEventListener('mouseup', onUp);
+    bindColumnResize(block, () => getTableById(block.dataset.tableId), () => refreshTableBlock(block));
+    bindTableSelection(block, (cell) => setActiveTable(block, cell), (box) => {
+      setActiveTable(block, null);
+      activeTableSelBox = box;
+      refreshToolbarEligibility(block);
     });
     block.addEventListener('dblclick', (e) => {
       const td = e.target.closest('td');
@@ -613,22 +566,6 @@ function wireTables() {
     });
     block.addEventListener('contextmenu', (e) => showTableContextMenu(e, block));
   });
-}
-
-// V128-03A：本表格块内「已渲染的普通单元格」（DOM 行序，排除斜线专用格；被合并覆盖的格本就不在 DOM）。
-function ordinaryTableCells(block) {
-  return $$('td', block).filter((td) => !td.classList.contains('diag'));
-}
-function nextOrdinaryTableRC(block, td, shift) {
-  const cells = ordinaryTableCells(block);
-  const idx = cells.indexOf(td);
-  if (idx < 0) return null;
-  const next = shift ? cells[idx - 1] : cells[idx + 1];
-  if (!next) return null;
-  return { r: Number(next.dataset.r), c: Number(next.dataset.c) };
-}
-function findOrdinaryTableCell(block, r, c) {
-  return ordinaryTableCells(block).find((td) => Number(td.dataset.r) === r && Number(td.dataset.c) === c) || null;
 }
 
 function editCell(block, td, tbl, r, c) {
@@ -795,7 +732,9 @@ function renderBody() {
       const fl = e.target.closest('.file-link');
       if (fl) {
         e.stopPropagation();
-        window.api.openFilePath(fl.getAttribute('data-path'), fl.getAttribute('data-is-dir') === '1');
+        (saveTimer ? saveNow() : Promise.resolve(true)).then((saved) => {
+          if (saved) return window.api.openFilePath(note.id, fl.dataset.fileId);
+        });
         return;
       }
       const ii = e.target.closest('.inline-img');
@@ -824,7 +763,7 @@ function renderBody() {
       e.preventDefault();
       e.stopPropagation();
       const files = Array.from((e.dataTransfer && e.dataTransfer.files) || []);
-      const paths = files.map((f) => window.api.getPathForFile(f)).filter((p) => p && p.length > 1);
+      const paths = (await Promise.all(files.map((f) => window.api.getPathForFile(f)))).filter(Boolean);
       if (paths.length) {
         content.focus();
         await insertPastedFilesAtCursor(paths);

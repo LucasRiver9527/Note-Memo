@@ -1,12 +1,15 @@
-const { app, BrowserWindow, ipcMain, dialog, Notification, Tray, Menu, nativeImage, globalShortcut, screen, protocol, net, shell, clipboard } = require('electron');
+const { app, BrowserWindow, ipcMain, Notification, Tray, Menu, nativeImage, globalShortcut, protocol, net, shell, clipboard } = require('electron');
 const path = require('path');
 const fs = require('fs');
 const { pathToFileURL, fileURLToPath } = require('url');
 const logic = require('./renderer/logic.js');
 const Shortcuts = require('./renderer/shortcuts.js');
 const DataIO = require('./data-io.js');
+const { createNoteStore } = require('./note-store.js');
+const { mergeDetachedEdits } = logic;
+const { registerFileIpc } = require('./file-ipc.js');
 const MediaProtocol = require('./media-protocol.js');
-const DesktopSnap = require('./desktop-snap.js');
+const { createWindowManager } = require('./window-manager.js');
 const { autoUpdater } = require('electron-updater');
 
 const isDev = !app.isPackaged;
@@ -31,16 +34,9 @@ if (process.env.MYNOTES_USER_DATA) {
   try { app.setPath('userData', process.env.MYNOTES_USER_DATA); } catch (e) { /* ignore */ }
 }
 
-let mainWindow = null;
 let tray = null;
-let isQuitting = false;
 let reminderTimer = null;
 const recentlyFired = new Set();
-const detachedWindows = new Map();
-let desktopSnap = null;
-let desktopSnapAppearance = {};
-// 被导入替换作废的旧 WebContents；弱引用不阻止回收，同 ID 新窗口不会解除禁写状态。
-const supersededDetached = new WeakSet();
 
 // ---- P0-04 IPC 来源（provenance）校验 ----
 // 每个渲染层 → 主进程的 ipcMain.handle/on 都必须先通过来源校验再进入正文：
@@ -72,7 +68,7 @@ function classifyRendererSource(event) {
 
   let role = null, expectedPage = null, noteId = null;
   try {
-    if (mainWindow && !mainWindow.isDestroyed() && sender === mainWindow.webContents) { role = 'main'; expectedPage = APP_MAIN_PAGE; }
+    if (windows.mainWindow && !windows.mainWindow.isDestroyed() && sender === windows.mainWindow.webContents) { role = 'main'; expectedPage = APP_MAIN_PAGE; }
   } catch (e) { /* fall through to detached */ }
   if (!role) {
     try {
@@ -144,104 +140,21 @@ function guardedOn(channel, handler, opts) {
   });
 }
 
-const dataPath = () => path.join(app.getPath('userData'), 'notes-data.json');
-const recoveryPath = () => path.join(app.getPath('userData'), 'notes-recovery.json');
-let recoveryState = null;
-let recoveryToken = 0;
+const { dataPath, dataHealth, isDataLocked, readData, writeData, captureRecovery, clearRecovery, writeRecovery, recoveryCandidate } =
+  createNoteStore(() => app.getPath('userData'));
 
-function readRecovery() {
-  if (recoveryState) return recoveryState;
-  try {
-    const parsed = JSON.parse(fs.readFileSync(recoveryPath(), 'utf8'));
-    if (parsed.version !== 1 || !parsed.notes || typeof parsed.notes !== 'object' || Array.isArray(parsed.notes)) throw new Error('invalid recovery shape');
-    recoveryState = parsed;
-    recoveryToken = Math.max(0, Number(parsed.main && parsed.main.token) || 0,
-      ...Object.values(parsed.notes).map((item) => Number(item && item.token) || 0));
-  } catch (err) {
-    if (err.code !== 'ENOENT') {
-      console.error('[recovery] 草稿读取失败，原文件已保留：', err);
-      return null;
-    }
-    recoveryState = { version: 1, main: null, notes: {} };
-  }
-  return recoveryState;
-}
-
-function writeRecovery(next) {
-  const file = recoveryPath();
-  const tmp = `${file}.${process.pid}.tmp`;
-  try {
-    if (!next.main && !Object.keys(next.notes).length) fs.rmSync(file, { force: true });
-    else {
-      fs.writeFileSync(tmp, JSON.stringify(next), 'utf8');
-      fs.renameSync(tmp, file);
-    }
-    recoveryState = next;
-    return true;
-  } catch (err) {
-    console.error('[recovery] 草稿写入失败：', err);
-    try { fs.rmSync(tmp, { force: true }); } catch (_) {}
-    return false;
-  }
-}
-
-function captureRecovery(kind, value) {
-  if (kind === 'main' ? !DataIO.isValidDataShape(value) : !value || typeof value.id !== 'string') return false;
-  const current = readRecovery();
-  if (!current) return false;
-  const token = ++recoveryToken;
-  const next = { version: 1, main: current.main, notes: { ...current.notes } };
-  if (kind === 'main') next.main = { token, data: value };
-  else next.notes[value.id] = { token, note: value };
-  return writeRecovery(next) ? token : false;
-}
-
-function clearRecovery(kind, id, token, savedData) {
-  if (!token) return;
-  const current = readRecovery();
-  if (!current) return;
-  const entry = kind === 'main' ? current.main : current.notes[id];
-  if (!entry || entry.token !== token) return;
-  // 主窗口草稿仍可能包含旧版独立便签；此时保留独立草稿供恢复时覆盖。
-  if (kind === 'note' && current.main) return;
-  const next = { version: 1, main: current.main, notes: { ...current.notes } };
-  if (kind === 'main') {
-    next.main = null;
-    for (const [noteId, item] of Object.entries(next.notes)) {
-      const savedNote = (savedData.notes || []).find((note) => note.id === noteId);
-      if (savedNote && JSON.stringify(savedNote) === JSON.stringify(item.note)) delete next.notes[noteId];
-    }
-  }
-  else delete next.notes[id];
-  writeRecovery(next);
-}
-
-const DETACHED_EDIT_FIELDS = ['title', 'content', 'items', 'images', 'files', 'tables', 'color', 'textColor', 'opacity', 'fontSize', 'fontFamily', 'updatedAt'];
-
-function mergeDetachedEdits(baseNote, editedNote) {
-  const merged = { ...baseNote };
-  for (const field of DETACHED_EDIT_FIELDS) {
-    if (field in editedNote) merged[field] = editedNote[field];
-  }
-  return merged;
-}
-
-function recoveryCandidate(base) {
-  const current = readRecovery();
-  if (!current) return null;
-  const source = current.main && DataIO.isValidDataShape(current.main.data) ? current.main.data : base;
-  if (!source || !DataIO.isValidDataShape(source)) return null;
-  const entries = Object.values(current.notes).filter((item) => item && item.note && typeof item.note.id === 'string');
-  if (!current.main && !entries.length) return null;
-  const candidate = JSON.parse(JSON.stringify(source));
-  candidate.notes = candidate.notes || [];
-  for (const item of entries) {
-    const index = candidate.notes.findIndex((n) => n.id === item.note.id);
-    if (index >= 0) candidate.notes[index] = mergeDetachedEdits(candidate.notes[index], item.note);
-    else if (!(candidate.trash || []).some((entry) => entry.note?.id === item.note.id)) candidate.notes.push(item.note);
-  }
-  return candidate;
-}
+const windows = createWindowManager({
+  mainPage: APP_MAIN_PAGE,
+  notePage: APP_NOTE_PAGE,
+  readData,
+  writeData,
+  clearRecoveryAfterReplace: () => writeRecovery({ version: 1, main: null, notes: {} })
+});
+const {
+  detachedWindows, supersededDetached, createWindow, createDetachedWindow,
+  requestCloseMainWindow, handleCloseDecision, flushDetachedNote, flushDetachedNotes,
+  reconcileDetachedAfterReplace
+} = windows;
 
 function openStartupPinned(data) {
   if (!data || !Array.isArray(data.notes)) return;
@@ -300,306 +213,6 @@ function clipboardImageToDataUrl() {
   }
 }
 
-// 数据健康状态：'ok' | 'first-run' | 'recovered' | 'corrupt'（null 表示尚未读取过）
-// 一旦判定为 corrupt 就锁定写入，直到成功落盘一次才解除（data:save 可带 force 主动解锁）。
-// 缓存状态同时避免了 readData 被 17 处反复调用时重复生成留证文件、重复打日志。
-let _dataStatus = null;
-let _corruptPath = null;
-
-function dataHealth() {
-  return { status: _dataStatus || 'unknown', corruptPath: _corruptPath };
-}
-
-function isDataLocked() {
-  return _dataStatus === 'corrupt';
-}
-
-function readData() {
-  // 已判定损坏：直接返回 null，不再读盘，避免每次调用都新增一份留证
-  if (_dataStatus === 'corrupt') return null;
-  const r = DataIO.safeRead(dataPath());
-  _dataStatus = r.status;
-  _corruptPath = r.corruptPath || null;
-  if (r.status === 'recovered') {
-    console.warn('[data] 数据文件曾损坏，已从 .bak 自动恢复；损坏件留证于：', r.corruptPath);
-  }
-  return r.data;
-}
-
-// 返回 true 表示已落盘。data 损坏锁定时拒绝写入（force 可越过锁，供「导入备份」自救）。
-function writeData(data, opts) {
-  const force = !!(opts && opts.force);
-  if (_dataStatus === 'corrupt' && !force) {
-    console.error('[data] 已锁定写入：数据文件损坏且无可用 .bak，拒绝覆盖以保护用户数据');
-    return false;
-  }
-  const ok = DataIO.atomicWrite(dataPath(), data);
-  if (ok) {
-    // 成功落盘说明磁盘上已是合法 JSON，解除锁定
-    _dataStatus = 'ok';
-    _corruptPath = null;
-  }
-  return ok;
-}
-
-// ---- 窗口状态持久化：把 bounds / maximized 记到数据文件的 settings.windowState ----
-// （放在 settings 里是因为 renderer 的 data:save 只写 {settings,groups,notes,trash}，顶层键会被覆盖）
-function readWindowState() {
-  const data = readData();
-  const ws = data && data.settings && data.settings.windowState;
-  if (ws && ws.normalBounds && typeof ws.normalBounds.width === 'number') return ws;
-  return null;
-}
-
-let winStateTimer = null;
-function persistWindowState() {
-  if (!mainWindow || mainWindow.isDestroyed()) return;
-  clearTimeout(winStateTimer);
-  winStateTimer = setTimeout(() => {
-    if (!mainWindow || mainWindow.isDestroyed()) return;
-    try {
-      const normal = mainWindow.getNormalBounds();
-      const state = {
-        normalBounds: { x: normal.x, y: normal.y, width: normal.width, height: normal.height },
-        maximized: mainWindow.isMaximized()
-      };
-      // 数据不可用时直接放弃：绝不能用 {} 兜底，否则会把整个数据文件覆盖成只剩 windowState
-      const data = readData();
-      if (!data) return;
-      data.settings = data.settings || {};
-      data.settings.windowState = state;
-      writeData(data);
-    } catch (e) { /* ignore */ }
-  }, 300);
-}
-
-
-// P0-04：禁止渲染进程发起顶层导航/重定向与新窗口。应用页面从不需要用链接替换自身；
-// 合法外部链接走 open-external，本地附件走 file:open。程序化 loadFile/loadURL 不触发这些事件，故不受影响。
-function hardenWindowNavigation(win) {
-  if (!win || win.isDestroyed()) return;
-  try { win.webContents.setWindowOpenHandler(() => ({ action: 'deny' })); } catch (e) { /* ignore */ }
-  const block = (event) => { event.preventDefault(); };
-  win.webContents.on('will-navigate', block);
-  win.webContents.on('will-redirect', block);
-  // 子框架导航（Electron ≥26 支持）；旧版无此事件时注册也不会报错。
-  win.webContents.on('will-frame-navigate', block);
-}
-
-function createWindow() {
-  const { width, height } = screen.getPrimaryDisplay().workAreaSize;
-  const saved = readWindowState();
-  const nb = (saved && saved.normalBounds) || null;
-  // 用保存的普通尺寸；若之前最大化，仍先按普通尺寸创建再 restore，避免越界
-  const winW = (nb && nb.width) || 1080;
-  const winH = (nb && nb.height) || 720;
-  let startX = (nb && typeof nb.x === 'number') ? nb.x : Math.round((width - winW) / 2);
-  let startY = (nb && typeof nb.y === 'number') ? nb.y : Math.round((height - winH) / 2);
-  // 防越界：窗口至少一部分落在工作区内
-  if (startX + winW < 0 || startX > width) startX = Math.round((width - winW) / 2);
-  if (startY + winH < 0 || startY > height) startY = Math.round((height - winH) / 2);
-
-  mainWindow = new BrowserWindow({
-    width: winW,
-    height: winH,
-    minWidth: 640,
-    minHeight: 420,
-    x: startX,
-    y: startY,
-    titleBarStyle: 'hidden',
-    titleBarOverlay: {
-      color: '#00000000',
-      symbolColor: '#c8c8c8',
-      height: 50
-    },
-    backgroundColor: '#00000000',
-    resizable: true,
-    show: false,
-    icon: path.join(__dirname, 'assets', 'icon.png'),
-    webPreferences: {
-      preload: path.join(__dirname, 'preload.js'),
-      contextIsolation: true,
-      nodeIntegration: false,
-      spellcheck: true,
-      additionalArguments: ['--app-version=' + app.getVersion()]
-    }
-  });
-  hardenWindowNavigation(mainWindow);
-
-  mainWindow.on('maximize', () => { mainWindow.webContents.send('window:maximized', true); persistWindowState(); });
-  mainWindow.on('unmaximize', () => { mainWindow.webContents.send('window:maximized', false); persistWindowState(); });
-  mainWindow.on('resize', persistWindowState);
-  mainWindow.on('move', persistWindowState);
-  mainWindow.on('hide', persistWindowState);
-
-  let initialShowPending = true;
-  const showInitialWindow = () => {
-    if (!initialShowPending || !mainWindow || mainWindow.isDestroyed()) return;
-    initialShowPending = false;
-    mainWindow.show();
-    // 恢复最大化状态（还原到最大化前尺寸 max；若最大化失败则保持普通）
-    if (saved && saved.maximized) {
-      try { mainWindow.maximize(); } catch (e) { /* ignore */ }
-    }
-  };
-  mainWindow.once('ready-to-show', showInitialWindow);
-  // Windows 上透明窗口可能迟迟不触发 ready-to-show；页面加载完后兜底显示。
-  // 共用一次性门闩，避免较晚的 ready-to-show 在用户隐藏窗口后再次 show()。
-  mainWindow.webContents.once('did-finish-load', () => setTimeout(showInitialWindow, 150));
-
-  mainWindow.loadFile(path.join(__dirname, 'renderer', 'index.html'));
-
-  mainWindow.on('close', (e) => {
-    if (isQuitting) return;
-    // 弹窗询问：退出应用 还是 隐藏到任务栏（托盘常驻）
-    e.preventDefault();
-    requestCloseMainWindow();
-  });
-
-  mainWindow.on('closed', () => {
-    mainWindow = null;
-  });
-}
-
-// 关闭主窗口时的选择：请 renderer 弹主题化选择框（彻底退出 / 隐藏到任务栏 / 取消）
-// 结果经 ipc 'window:close-decision' 回传（'hide' | 'quit' | 'cancel'），避免使用系统原生对话框（与主题不符）。
-function requestCloseMainWindow() {
-  if (!mainWindow || mainWindow.isDestroyed()) return;
-  try {
-    mainWindow.webContents.send('window:close-request');
-  } catch (e) { /* ignore */ }
-}
-
-// 处理 renderer 回传的关闭决定
-async function handleCloseDecision(decision) {
-  if (decision === 'quit') {
-    if (!(await flushDetachedNotes())) {
-      if (mainWindow && !mainWindow.isDestroyed()) mainWindow.webContents.send('window:save-failed');
-      return;
-    }
-    isQuitting = true;
-    app.quit();
-  } else if (decision === 'hide') {
-    if (mainWindow && !mainWindow.isDestroyed()) mainWindow.hide();
-  }
-  // 'cancel' → 什么都不做
-}
-
-function createDetachedWindow(noteId) {
-  if (detachedWindows.has(noteId)) return detachedWindows.get(noteId);
-  const win = new BrowserWindow({
-    width: 300,
-    height: 240,
-    minWidth: 220,
-    minHeight: 150,
-    frame: false,
-    transparent: true,
-    backgroundColor: '#00000000',
-    resizable: true,
-    alwaysOnTop: true,
-    skipTaskbar: false,
-    hasShadow: true,
-    icon: path.join(__dirname, 'assets', 'icon.png'),
-    webPreferences: {
-      preload: path.join(__dirname, 'preload.js'),
-      contextIsolation: true,
-      nodeIntegration: false,
-      additionalArguments: ['--app-version=' + app.getVersion()]
-    }
-  });
-  hardenWindowNavigation(win);
-  win.noteLoadPromise = win.loadFile(path.join(__dirname, 'renderer', 'note.html'), { query: { id: noteId } });
-  win.setAlwaysOnTop(true, 'screen-saver');
-  // 桌面便签玻璃拟态：Windows 11 亚克力材质，提供背后桌面的磨砂模糊
-  if (process.platform === 'win32' && typeof win.setBackgroundMaterial === 'function') {
-    const data = readData();
-    const desktopMica = data && data.settings && data.settings.desktopMica;
-    try { win.setBackgroundMaterial(desktopMica ? 'acrylic' : 'none'); } catch (e) { /* ignore */ }
-  }
-  if (!desktopSnap) desktopSnap = DesktopSnap.createDesktopSnap({ BrowserWindow, screen });
-  const snapSettings = (readData() || {}).settings || {};
-  desktopSnap.setEnabled(desktopSnapAppearance.enabled ?? (snapSettings.desktopSnap !== false));
-  desktopSnap.setAppearance({ ...desktopSnapAppearance, radius: (desktopSnapAppearance.radius ?? snapSettings.noteRadius) === 0 ? 0 : 8 });
-  desktopSnap.attach(win);
-  win.noteCornerRadius = desktopSnapAppearance.radius ?? snapSettings.noteRadius;
-  win.updateNoteShape = () => {
-    if (process.platform !== 'win32' || win.isDestroyed()) return;
-    try { require('./desktop-snap-native.js')().applyRoundedCorners(win, win.noteCornerRadius); }
-    catch (error) { console.warn('[note-shape] Could not update rounded window:', error); }
-  };
-  let shapeUpdateQueued = false;
-  win.on('resize', () => {
-    if (shapeUpdateQueued) return;
-    shapeUpdateQueued = true;
-    setImmediate(() => { shapeUpdateQueued = false; win.updateNoteShape(); });
-  });
-  win.updateNoteShape();
-  win.on('focus', () => win.setAlwaysOnTop(true, 'screen-saver'));
-  win.on('show', () => win.setAlwaysOnTop(true, 'screen-saver'));
-  win.on('blur', () => win.setAlwaysOnTop(true, 'screen-saver'));
-  const topmostTimer = setInterval(() => {
-    if (win.isDestroyed()) { clearInterval(topmostTimer); return; }
-    win.setAlwaysOnTop(true, 'screen-saver');
-  }, 2000);
-  detachedWindows.set(noteId, win);
-  win.on('closed', () => {
-    if (detachedWindows.get(noteId) === win) detachedWindows.delete(noteId);
-    if (mainWindow && !win.notePinFailed && !win.suppressUnpin) mainWindow.webContents.send('note:unpinned', noteId);
-  });
-  return win;
-}
-
-async function flushDetachedNote(win) {
-  if (!win || win.isDestroyed()) return true;
-  try {
-    // 静态脚本，只调用独立便签暴露的本地保存函数，不插入用户内容。
-    return await win.webContents.executeJavaScript(
-      'typeof window.flushNoteForClose === "function" && window.flushNoteForClose()'
-    ) === true;
-  } catch (err) {
-    console.error('[note] 独立便签保存失败：', err);
-    return false;
-  }
-}
-
-async function flushDetachedNotes() {
-  for (const win of detachedWindows.values()) {
-    if (!(await flushDetachedNote(win))) return false;
-  }
-  return true;
-}
-
-// 显式整份替换（导入备份）成功落盘后，正在打开的独立便签仍持有被替换前的旧内容：
-// 关闭这些陈旧窗口并按存档重开仍被钉住的便签，避免旧窗口随后 note:update 覆盖导入结果。
-// 导入是整份替换，故协调所有仍在的独立窗（含被导入移除的 ID）；只在整份数据成功写入后调用，
-// 写入失败时不动窗口、不清草稿。
-async function reconcileDetachedAfterReplace(data) {
-  const previous = Array.from(detachedWindows);
-  // 先作废所有旧来源，再等待关窗；同 ID 新窗口不会解除旧来源的禁写状态。
-  for (const [, win] of previous) {
-    if (win.isDestroyed()) continue;
-    supersededDetached.add(win.webContents);
-    win.suppressUnpin = true;
-  }
-  for (const [id, win] of previous) {
-    if (win.isDestroyed()) { detachedWindows.delete(id); continue; }
-    const closed = new Promise((resolve) => win.once('closed', resolve));
-    win.close();
-    await closed;
-  }
-  // 整份替换已经落盘；旧主窗及未开窗便签的草稿也失效，不能在重启时回滚导入。
-  writeRecovery({ version: 1, main: null, notes: {} });
-  for (const n of data.notes || []) {
-    if (!n || !n.desktopPin || detachedWindows.has(n.id)) continue;
-    try {
-      const w = createDetachedWindow(n.id);
-      await w.noteLoadPromise;
-    } catch (err) {
-      console.error('[note] 导入后重开独立便签失败：', err);
-    }
-  }
-}
-
 function createTray() {
   const icon = nativeImage.createFromPath(path.join(__dirname, 'assets', 'icon.png'));
   tray = new Tray(icon.resize({ width: 16, height: 16 }));
@@ -613,7 +226,7 @@ function createTray() {
       label: '新建便签',
       click: () => {
         showWindow();
-        mainWindow.webContents.send('note:create');
+        windows.mainWindow.webContents.send('note:create');
       }
     },
     { type: 'separator' },
@@ -622,17 +235,14 @@ function createTray() {
       type: 'checkbox',
       checked: false,
       click: (item) => {
-        mainWindow.setAlwaysOnTop(item.checked);
-        mainWindow.webContents.send('window:always-on-top', item.checked);
+        windows.mainWindow.setAlwaysOnTop(item.checked);
+        windows.mainWindow.webContents.send('window:always-on-top', item.checked);
       }
     },
     { type: 'separator' },
     {
       label: '退出',
-      click: () => {
-        isQuitting = true;
-        app.quit();
-      }
+      click: () => requestCloseMainWindow('quit')
     }
   ]);
   tray.setContextMenu(menu);
@@ -640,17 +250,17 @@ function createTray() {
 }
 
 function showWindow() {
-  if (!mainWindow) return;
+  if (!windows.mainWindow) return;
   // 之前是最小化：先 restore，恢复最大化/原尺寸状态，再显示
-  if (mainWindow.isMinimized()) mainWindow.restore();
-  mainWindow.show();
-  mainWindow.focus();
+  if (windows.mainWindow.isMinimized()) windows.mainWindow.restore();
+  windows.mainWindow.show();
+  windows.mainWindow.focus();
 }
 
 function toggleWindow() {
-  if (!mainWindow) return;
-  if (mainWindow.isVisible() && mainWindow.isFocused()) {
-    mainWindow.hide();
+  if (!windows.mainWindow) return;
+  if (windows.mainWindow.isVisible() && windows.mainWindow.isFocused()) {
+    windows.mainWindow.hide();
   } else {
     showWindow();
   }
@@ -698,15 +308,15 @@ function fireReminder(note) {
     n.show();
   }
 
-  if (mainWindow) {
+  if (windows.mainWindow) {
     showWindow();
-    mainWindow.flashFrame(true);
-    setTimeout(() => mainWindow.flashFrame(false), 4000);
-    mainWindow.webContents.send('reminder:fired', note.id);
+    windows.mainWindow.flashFrame(true);
+    setTimeout(() => windows.mainWindow.flashFrame(false), 4000);
+    windows.mainWindow.webContents.send('reminder:fired', note.id);
     // 播报闹铃声音：把声音设置传给渲染进程播放（preload 监听 reminder:sound）
     const data = readData();
     const s = (data && data.settings) || {};
-    mainWindow.webContents.send('reminder:sound', {
+    windows.mainWindow.webContents.send('reminder:sound', {
       enabled: !!s.reminderSound,
       path: s.reminderSoundPath || null,
       volume: s.reminderVolume != null ? s.reminderVolume : 70
@@ -792,8 +402,12 @@ function setupIpc() {
     const replace = !!(opts && opts.replace);
     // 独立便签窗口是它自己编辑内容的唯一写入者（note:update）。显式取消钉住
     // （desktopPin:false，例如主窗发起 unpin）时不合并，仍采用主窗版本。
+    const disk = replace ? null : readData();
+    if (disk?.settings?.windowState) {
+      data.settings ||= {};
+      data.settings.windowState = disk.settings.windowState;
+    }
     if (!replace && detachedWindows.size && Array.isArray(data.notes)) {
-      const disk = readData();
       if (disk && Array.isArray(disk.notes)) {
         const diskById = new Map(disk.notes.filter(Boolean).map((n) => [n.id, n]));
         data.notes = data.notes.map((n) => {
@@ -825,217 +439,7 @@ function setupIpc() {
     return true;
   });
 
-  guardedHandle('data:export', async (e, data) => {
-    const result = await dialog.showSaveDialog(mainWindow, {
-      title: '导出便签',
-      defaultPath: `便签备份-${new Date().toISOString().slice(0, 10)}.json`,
-      filters: [
-        { name: 'JSON 备份', extensions: ['json'] },
-        { name: '文本文件', extensions: ['txt'] }
-      ]
-    });
-    if (result.canceled || !result.filePath) return { ok: false, canceled: true };
-    try {
-      if (result.filePath.endsWith('.txt')) {
-        const lines = data.notes.map((n) => {
-          const body = n.type === 'todo'
-            ? (n.items || []).map((i) => `${i.done ? '[x]' : '[ ]'} ${i.text}`).join('\n')
-            : n.content;
-          return `◆ ${n.title}\n${body}\n---`;
-        }).join('\n\n');
-        fs.writeFileSync(result.filePath, lines, 'utf-8');
-      } else {
-        fs.writeFileSync(result.filePath, JSON.stringify(data, null, 2), 'utf-8');
-      }
-      return { ok: true, path: result.filePath };
-    } catch (err) {
-      return { ok: false, error: err.message };
-    }
-  });
-
-  guardedHandle('note:export-markdown', async (e, md, suggestName) => {
-    const result = await dialog.showSaveDialog(mainWindow, {
-      title: '导出为 Markdown',
-      defaultPath: suggestName || `便签-${new Date().toISOString().slice(0, 10)}.md`,
-      filters: [
-        { name: 'Markdown', extensions: ['md', 'markdown'] },
-        { name: '文本文件', extensions: ['txt'] }
-      ]
-    });
-    if (result.canceled || !result.filePath) return { ok: false, canceled: true };
-    try {
-      fs.writeFileSync(result.filePath, md, 'utf-8');
-      return { ok: true, path: result.filePath };
-    } catch (err) {
-      return { ok: false, error: err.message };
-    }
-  });
-
-  guardedHandle('data:import', async () => {
-    const result = await dialog.showOpenDialog(mainWindow, {
-      title: '导入便签',
-      properties: ['openFile'],
-      filters: [{ name: 'JSON 备份', extensions: ['json'] }]
-    });
-    if (result.canceled || !result.filePaths.length) return { ok: false, canceled: true };
-    try {
-      const raw = fs.readFileSync(result.filePaths[0], 'utf-8');
-      const data = JSON.parse(raw);
-      return { ok: true, data };
-    } catch (err) {
-      return { ok: false, error: err.message };
-    }
-  });
-
-  guardedHandle('dialog:pick-image', async () => {
-    const result = await dialog.showOpenDialog(mainWindow, {
-      title: '选择背景图片',
-      properties: ['openFile'],
-      filters: [{ name: '图片', extensions: ['png', 'jpg', 'jpeg', 'gif', 'webp', 'bmp'] }]
-    });
-    if (result.canceled || !result.filePaths.length) return { ok: false, canceled: true };
-    try {
-      const src = result.filePaths[0];
-      const ext = (path.extname(src) || '.png').toLowerCase();
-      const bgDir = path.join(app.getPath('userData'), 'backgrounds');
-      if (!fs.existsSync(bgDir)) fs.mkdirSync(bgDir, { recursive: true });
-      const name = 'bg-' + Date.now() + ext;
-      const dest = path.join(bgDir, name);
-      fs.copyFileSync(src, dest);
-      return { ok: true, url: 'note-bg://local/' + encodeURIComponent(name) };
-    } catch (err) {
-      return { ok: false, error: err.message };
-    }
-  });
-
-  guardedHandle('note:save-image', async (e, dataUrl) => {
-    try {
-      const m = /^data:image\/(png|jpe?g|gif|webp|bmp);base64,(.+)$/.exec(String(dataUrl || ''));
-      if (!m) return { ok: false, error: 'unsupported image' };
-      const ext = m[1] === 'jpeg' ? 'jpg' : m[1];
-      const imgDir = path.join(app.getPath('userData'), 'images');
-      if (!fs.existsSync(imgDir)) fs.mkdirSync(imgDir, { recursive: true });
-      const name = 'img-' + Date.now() + '-' + Math.random().toString(36).slice(2, 8) + '.' + ext;
-      fs.writeFileSync(path.join(imgDir, name), Buffer.from(m[2], 'base64'));
-      return { ok: true, url: 'note-img://local/' + encodeURIComponent(name) };
-    } catch (err) {
-      return { ok: false, error: err.message };
-    }
-  });
-
-  guardedHandle('dialog:pick-note-image', async () => {
-    const result = await dialog.showOpenDialog(mainWindow, {
-      title: '选择图片',
-      properties: ['openFile'],
-      filters: [{ name: '图片', extensions: ['png', 'jpg', 'jpeg', 'gif', 'webp', 'bmp'] }]
-    });
-    if (result.canceled || !result.filePaths.length) return { ok: false, canceled: true };
-    try {
-      const src = result.filePaths[0];
-      const ext = (path.extname(src) || '.png').toLowerCase();
-      const imgDir = path.join(app.getPath('userData'), 'images');
-      if (!fs.existsSync(imgDir)) fs.mkdirSync(imgDir, { recursive: true });
-      const name = 'img-' + Date.now() + '-' + Math.random().toString(36).slice(2, 8) + ext;
-      fs.copyFileSync(src, path.join(imgDir, name));
-      return { ok: true, url: 'note-img://local/' + encodeURIComponent(name) };
-    } catch (err) {
-      return { ok: false, error: err.message };
-    }
-  });
-
-  guardedHandle('dialog:pick-font', async () => {
-    const result = await dialog.showOpenDialog(mainWindow, {
-      title: '选择字体文件',
-      properties: ['openFile'],
-      filters: [{ name: '字体文件', extensions: ['ttf', 'otf', 'woff', 'woff2'] }]
-    });
-    if (result.canceled || !result.filePaths.length) return { ok: false, canceled: true };
-    try {
-      const src = result.filePaths[0];
-      const ext = (path.extname(src) || '.ttf').toLowerCase();
-      const fontDir = path.join(app.getPath('userData'), 'fonts');
-      if (!fs.existsSync(fontDir)) fs.mkdirSync(fontDir, { recursive: true });
-      const id = 'cf' + Date.now().toString(36) + Math.random().toString(36).slice(2, 6);
-      const family = 'CustomFont-' + id;
-      const name = family + ext;
-      fs.copyFileSync(src, path.join(fontDir, name));
-      const baseName = path.basename(src, ext);
-      return { ok: true, id, name: baseName, family, url: 'note-font://local/' + encodeURIComponent(name) };
-    } catch (err) {
-      return { ok: false, error: err.message };
-    }
-  });
-
-  guardedHandle('dialog:choose-directory', async () => {
-    const result = await dialog.showOpenDialog(mainWindow, {
-      title: '选择备份目录',
-      properties: ['openDirectory', 'createDirectory']
-    });
-    if (result.canceled || !result.filePaths.length) return { ok: false, canceled: true };
-    return { ok: true, path: result.filePaths[0] };
-  });
-
-  guardedHandle('dialog:pick-sound', async () => {
-    const result = await dialog.showOpenDialog(mainWindow, {
-      title: '选择声音文件',
-      properties: ['openFile'],
-      filters: [{ name: '音频', extensions: ['mp3', 'wav', 'ogg', 'm4a'] }]
-    });
-    if (result.canceled || !result.filePaths.length) return { ok: false, canceled: true };
-    try {
-      const src = result.filePaths[0];
-      const ext = (path.extname(src) || '.mp3').toLowerCase();
-      const sndDir = path.join(app.getPath('userData'), 'sounds');
-      if (!fs.existsSync(sndDir)) fs.mkdirSync(sndDir, { recursive: true });
-      const name = 'snd-' + Date.now() + ext;
-      fs.copyFileSync(src, path.join(sndDir, name));
-      return { ok: true, url: 'note-sound://local/' + encodeURIComponent(name), name: path.basename(src, ext) };
-    } catch (err) {
-      return { ok: false, error: err.message };
-    }
-  });
-
-  guardedHandle('backup:export', async (e, data, dir) => {
-    try {
-      let target = dir;
-      if (!target) target = path.join(app.getPath('userData'), 'backups');
-      if (!fs.existsSync(target)) fs.mkdirSync(target, { recursive: true });
-      const stamp = new Date();
-      const pad = (x) => String(x).padStart(2, '0');
-      const name = `便签备份-${stamp.getFullYear()}${pad(stamp.getMonth() + 1)}${pad(stamp.getDate())}-${pad(stamp.getHours())}${pad(stamp.getMinutes())}${pad(stamp.getSeconds())}.json`;
-      const file = path.join(target, name);
-      fs.writeFileSync(file, JSON.stringify(data, null, 2), 'utf-8');
-      return { ok: true, path: file };
-    } catch (err) {
-      return { ok: false, error: err.message };
-    }
-  });
-
-  guardedHandle('backup:open-dir', async (e, dir) => {
-    try {
-      let target = dir;
-      if (!target) target = path.join(app.getPath('userData'), 'backups');
-      if (!fs.existsSync(target)) fs.mkdirSync(target, { recursive: true });
-      const err = await shell.openPath(target);
-      return { ok: !err, error: err || '' };
-    } catch (err) {
-      return { ok: false, error: err.message };
-    }
-  });
-
-  guardedHandle('note:add-image-file', async (e, filePath) => {
-    try {
-      const src = String(filePath || '');
-      const ext = (path.extname(src) || '.png').toLowerCase();
-      const imgDir = path.join(app.getPath('userData'), 'images');
-      if (!fs.existsSync(imgDir)) fs.mkdirSync(imgDir, { recursive: true });
-      const name = 'img-' + Date.now() + '-' + Math.random().toString(36).slice(2, 8) + ext;
-      fs.copyFileSync(src, path.join(imgDir, name));
-      return { ok: true, url: 'note-img://local/' + encodeURIComponent(name) };
-    } catch (err) {
-      return { ok: false, error: err.message };
-    }
-  });
+  registerFileIpc({ guardedHandle, getMainWindow: () => windows.mainWindow, readData });
 
   guardedHandle('clipboard:read-text', () => clipboard.readText());
   guardedHandle('clipboard:read-image', () => clipboardImageToDataUrl());
@@ -1057,51 +461,6 @@ function setupIpc() {
       return false;
     }
   });
-  guardedHandle('clipboard:read-files', () => {
-    const out = [];
-    const readBuf = (format, encoding) => {
-      try {
-        const buf = clipboard.readBuffer(format);
-        if (buf && buf.length) {
-          const str = buf.toString(encoding);
-          str.split('\0').forEach((p) => { if (p && p.length > 1 && !out.includes(p)) out.push(p); });
-        }
-      } catch (e) { /* ignore */ }
-    };
-    try {
-      const buf = clipboard.readBuffer('CF_HDROP');
-      if (buf && buf.length > 16) {
-        const pFiles = buf.readUInt32LE(0);
-        const fWide = buf.readUInt32LE(16) !== 0;
-        const list = buf.slice(pFiles);
-        const str = fWide ? list.toString('utf16le') : list.toString('latin1');
-        str.split('\0').forEach((p) => { if (p && p.length > 1 && !out.includes(p)) out.push(p); });
-      }
-    } catch (e) { /* ignore */ }
-    if (!out.length) readBuf('FileNameW', 'utf16le');
-    return out;
-  });
-
-  guardedHandle('path:stat', (e, p) => {
-    try {
-      const st = fs.statSync(String(p || ''));
-      return { exists: true, isDirectory: st.isDirectory(), isFile: st.isFile() };
-    } catch (e) {
-      return { exists: false };
-    }
-  });
-
-  guardedHandle('file:open', async (e, p, isDir) => {
-    try {
-      const target = String(p || '');
-      if (!target) return { ok: false, error: 'empty path' };
-      const err = await shell.openPath(target);
-      return { ok: !err, error: err || '' };
-    } catch (err) {
-      return { ok: false, error: err.message };
-    }
-  });
-
   // 桌面便签（独立窗口）
   guardedHandle('note:pin', async (e, id) => {
     const data = readData();
@@ -1141,14 +500,17 @@ function setupIpc() {
     // 数据不可用时返回 false，让渲染层知道未落盘，避免「显示已保存但磁盘是空的」
     const data = readData();
     if (!data) return false;
-    data.notes = (data.notes || []).map((n) => (n.id === note.id ? note : n));
+    const index = (data.notes || []).findIndex((item) => item.id === note?.id);
+    if (index < 0) return false;
+    const savedNote = mergeDetachedEdits(data.notes[index], note);
+    data.notes[index] = savedNote;
     const ok = writeData(data);
     if (!ok) return false;
     clearRecovery('note', note.id, opts && opts.draftToken);
     // 重新武装的提醒允许再次调度（稍后再响）
-    if (note && note.reminder && note.reminder.enabled && !note.reminder.fired) recentlyFired.delete(note.id);
+    if (savedNote.reminder?.enabled && !savedNote.reminder.fired) recentlyFired.delete(savedNote.id);
     scheduleReminders(data.notes);
-    if (mainWindow) mainWindow.webContents.send('note:changed', note);
+    if (windows.mainWindow) windows.mainWindow.webContents.send('note:changed', savedNote);
     return ok;
   }, { denyValue: false, noteScoped: true });
   // UX-20A：仅「显示/恢复/聚焦」已钉桌便签，绝不写盘（区别于会写 pin 状态的 note:pin）。
@@ -1197,7 +559,7 @@ function setupIpc() {
     const win = detachedWindows.get(id);
     if (!(await flushDetachedNote(win))) return false;
     if (win) win.close();
-    else if (mainWindow) mainWindow.webContents.send('note:unpinned', id);
+    else if (windows.mainWindow) windows.mainWindow.webContents.send('note:unpinned', id);
     return true;
   });
   guardedHandle('note:close-all', async () => {
@@ -1221,7 +583,7 @@ function setupIpc() {
       scheduleReminders(data.notes);
     }
     if (win) win.close();
-    if (mainWindow && !mainWindow.isDestroyed()) mainWindow.webContents.send('note:deleted', id);
+    if (windows.mainWindow && !windows.mainWindow.isDestroyed()) windows.mainWindow.webContents.send('note:deleted', id);
     return true;
   });
   guardedHandle('settings:set-font-size', (e, size) => {
@@ -1235,7 +597,7 @@ function setupIpc() {
       data.settings.fontSize = v;
       writeData(data);
     }
-    if (mainWindow && !mainWindow.isDestroyed()) mainWindow.webContents.send('settings:font-size', v);
+    if (windows.mainWindow && !windows.mainWindow.isDestroyed()) windows.mainWindow.webContents.send('settings:font-size', v);
     detachedWindows.forEach((w) => { if (w && !w.isDestroyed()) w.webContents.send('settings:font-size', v); });
     return v;
   });
@@ -1394,12 +756,12 @@ function setupIpc() {
     try {
       // 独立便签各自持有尚未写盘的编辑态；任何一个保存失败都不能销毁窗口。
       if (!(await flushDetachedNotes())) return { ok: false, error: '独立便签保存失败，请检查后重试' };
-      isQuitting = true;
+      windows.prepareToQuit();
       for (const win of detachedWindows.values()) {
         if (!win.isDestroyed()) win.destroy();
       }
       detachedWindows.clear();
-      if (mainWindow && !mainWindow.isDestroyed()) mainWindow.destroy();
+      if (windows.mainWindow && !windows.mainWindow.isDestroyed()) windows.mainWindow.destroy();
       if (tray) tray.destroy();
       autoUpdater.quitAndInstall();
       return { ok: true };
@@ -1407,28 +769,28 @@ function setupIpc() {
   });
 
   // Window controls
-  guardedOn('window:minimize', () => mainWindow && mainWindow.minimize());
+  guardedOn('window:minimize', () => windows.mainWindow && windows.mainWindow.minimize());
   guardedOn('window:maximize', () => {
-    if (!mainWindow) return;
-    if (mainWindow.isMaximized()) mainWindow.unmaximize();
-    else mainWindow.maximize();
+    if (!windows.mainWindow) return;
+    if (windows.mainWindow.isMaximized()) windows.mainWindow.unmaximize();
+    else windows.mainWindow.maximize();
   });
-  guardedOn('window:hide', () => mainWindow && mainWindow.hide());
+  guardedOn('window:hide', () => windows.mainWindow && windows.mainWindow.hide());
   guardedOn('window:close', () => requestCloseMainWindow());
   guardedOn('window:close-decision', (e, decision) => {
     handleCloseDecision(decision).catch((err) => console.error('[window] 退出失败：', err));
   });
   guardedOn('window:always-on-top', (e, flag) => {
-    if (mainWindow) mainWindow.setAlwaysOnTop(!!flag);
+    if (windows.mainWindow) windows.mainWindow.setAlwaysOnTop(!!flag);
   });
   guardedOn('window:set-opacity', (e, opacity) => {
     const v = clampFinite(opacity, 0, 1);
     if (v === null) { e.returnValue = false; return; }
-    if (mainWindow) mainWindow.setOpacity(v);
+    if (windows.mainWindow) windows.mainWindow.setOpacity(v);
   });
   // 自定义背景图/明暗变化时同步原生窗口控制按钮(─ □ ✕)的符号颜色，避免亮背景上看不清
   guardedOn('window:set-controls', (e, opts) => {
-    const win = BrowserWindow.fromWebContents(e.sender) || mainWindow;
+    const win = BrowserWindow.fromWebContents(e.sender) || windows.mainWindow;
     if (!win || !win.setTitleBarOverlay) return;
     const symbolColor = (opts && opts.symbolColor) || '#c8c8c8';
     try {
@@ -1440,7 +802,7 @@ function setupIpc() {
     if (v === null) { e.returnValue = false; return; }
     let win = null;
     try { win = BrowserWindow.fromWebContents(e.sender); } catch (err) { win = null; }
-    if (!win && mainWindow && mainWindow.webContents === e.sender) win = mainWindow;
+    if (!win && windows.mainWindow && windows.mainWindow.webContents === e.sender) win = windows.mainWindow;
     if (win && !win.isDestroyed()) win.setOpacity(v);
   });
   guardedOn('window:set-note-opacity', (e, opacity) => {
@@ -1461,16 +823,12 @@ function setupIpc() {
       data.settings.noteOpacity = v;
       writeData(data);
     }
-    if (mainWindow && !mainWindow.isDestroyed()) mainWindow.webContents.send('window:note-opacity-setting', v);
+    if (windows.mainWindow && !windows.mainWindow.isDestroyed()) windows.mainWindow.webContents.send('window:note-opacity-setting', v);
   });
   guardedOn('window:set-effects', (e, fx) => {
     const srcWin = BrowserWindow.fromWebContents(e.sender);
-    if (srcWin === mainWindow) {
-      desktopSnapAppearance = { dark: fx?.snapDark, radius: fx?.noteRadius, enabled: typeof fx?.desktopSnap === 'boolean' ? fx.desktopSnap : desktopSnapAppearance.enabled };
-      if (desktopSnap) {
-        if (typeof fx?.desktopSnap === 'boolean') desktopSnap.setEnabled(fx.desktopSnap);
-        desktopSnap.setAppearance({ dark: fx?.snapDark, radius: fx?.noteRadius === 0 ? 0 : 8 });
-      }
+    if (srcWin === windows.mainWindow) {
+      windows.setDesktopSnapAppearance(fx);
       detachedWindows.forEach((w) => {
         if (w && !w.isDestroyed()) {
           w.webContents.send('window:effects', fx);
@@ -1487,7 +845,7 @@ function setupIpc() {
   });
   guardedHandle('window:toggle', () => {
     toggleWindow();
-    return mainWindow && mainWindow.isVisible();
+    return windows.mainWindow && windows.mainWindow.isVisible();
   });
 }
 
@@ -1499,7 +857,7 @@ function registerGlobalShortcuts(settings) {
   const accels = Shortcuts.effectiveShortcuts(settings);
   const spec = [
     { id: 'toggleWindow', accel: accels.toggleWindow, cb: () => toggleWindow() },
-    { id: 'createNote', accel: accels.createNote, cb: () => { showWindow(); if (mainWindow && !mainWindow.isDestroyed()) mainWindow.webContents.send('note:create'); } }
+    { id: 'createNote', accel: accels.createNote, cb: () => { showWindow(); if (windows.mainWindow && !windows.mainWindow.isDestroyed()) windows.mainWindow.webContents.send('note:create'); } }
   ];
   // 先清掉所有旧的全局快捷键（含用户改绑过的旧加速键），避免残留旧绑定导致新注册失败
   try { globalShortcut.unregisterAll(); } catch (e) { /* ignore */ }
@@ -1553,10 +911,10 @@ function setupAutoUpdate() {
     autoUpdater.on('error', (e) => { console.error('[update] error:', e && e.message); });
     autoUpdater.on('update-available', (info) => {
       if (!acceptUpdateInfo(info)) return;
-      if (mainWindow && !mainWindow.isDestroyed()) mainWindow.webContents.send('update:available', info);
+      if (windows.mainWindow && !windows.mainWindow.isDestroyed()) windows.mainWindow.webContents.send('update:available', info);
     });
     autoUpdater.on('update-downloaded', (info) => {
-      if (mainWindow && !mainWindow.isDestroyed()) mainWindow.webContents.send('update:downloaded', info);
+      if (windows.mainWindow && !windows.mainWindow.isDestroyed()) windows.mainWindow.webContents.send('update:downloaded', info);
     });
     if (process.env.MYNOTES_UPDATE_URL) autoUpdater.setFeedURL({ provider: 'generic', url: process.env.MYNOTES_UPDATE_URL });
     autoUpdater.checkForUpdates().catch((e) => console.error('[update] check failed:', e && e.message));
@@ -1610,8 +968,8 @@ if (!gotLock) {
   });
 
   app.on('before-quit', () => {
-    isQuitting = true;
-    if (desktopSnap) desktopSnap.dispose();
+    windows.prepareToQuit();
+    windows.dispose();
     globalShortcut.unregisterAll();
   });
 }

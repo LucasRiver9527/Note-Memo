@@ -48,14 +48,13 @@ function t(key) {
   return T(key, lang);
 }
 
-// v1.3.0 用户可见更新。
+// v1.3.1 用户可见更新。
 const CHANGELOG = [
-  { zh: "全新工作区与绿色 NM 图标。主工具栏在切换视图时保持稳定，设置中心、备忘录和文档目录重新布局。", en: "A redesigned workspace and green NM icon, with a stable toolbar and refreshed settings, memo list, and document catalog." },
-  { zh: "从画布、备忘录或待办打开便签详情，返回后恢复原视图、筛选与位置。聚焦空搜索框可快速打开最近编辑的便签。", en: "Open note details from the canvas, memo list, or tasks and return to the original view, filters, and position. Focus the empty search box to open recently edited notes." },
-  { zh: "外观设置提供实时预览，新建便签底色默认跟随主题，也可改用自定义颜色。", en: "Appearance settings include a live preview. New notes follow the theme color by default and can use a custom color." },
-  { zh: "拖动轻量表格的列边界可调整列宽，右键可恢复自动列宽。", en: "Drag a table column edge to resize it. Use the table context menu to restore automatic widths." },
-  { zh: "保存失败会保留当前编辑并提供重试。恢复草稿时，主窗口的位置与分组可和桌面便签的正文编辑一起恢复。", en: "Failed saves retain current edits and offer retry. Draft recovery combines main-window positions and groups with edits from desktop notes." },
-  { zh: "统一画布横竖滚动条与便签贴边效果，减少大量便签滚动时的重复计算。", en: "Canvas scrollbars and edge fades are consistent, with less redundant work when scrolling large boards." }
+  { zh: "拖动画布便签时，靠近其他便签会显示对齐线并轻微吸附。按住 Alt 可自由拖动，多选保留组内间距。", en: "Drag notes near each other to see alignment guides and snap into place. Hold Alt for free movement. Group drags preserve spacing." },
+  { zh: "提醒新增「15 分钟后」和「今天 18:00」，原有快捷项和手动输入仍可用。", en: "Set reminders for 15 minutes from now or 18:00 today, alongside the existing presets and manual input." },
+  { zh: "Markdown 导出入口更好找，文件对话框中的应用文案随界面语言切换。", en: "Markdown export is easier to find. App-provided file dialog text follows the interface language." },
+  { zh: "桌面便签保存时保留主窗口的分组与布局。托盘退出前先保存便签，重启后可恢复最大化状态。", en: "Desktop-note saves preserve main-window groups and layout. Exiting from the tray saves notes first, and the maximized state is restored on restart." },
+  { zh: "加强备份和本地附件的路径校验。", en: "Backup folders and local attachments have stricter path checks." }
 ];
 
 const APP_VERSION = (window.api && window.api.appVersion) || '';
