@@ -5,6 +5,10 @@
 <h1 align="center">Note-Memo</h1>
 
 <p align="center">
+  <strong>中文</strong> &nbsp;·&nbsp; <a href="./README.en.md">English</a>
+</p>
+
+<p align="center">
   <strong>本地优先的 Windows 桌面便签</strong><br>
   有个想法就记下来，重要的钉到桌面，攒多了回画布整理。<br>
   Local-first sticky notes for Windows, with desktop pinning, a freeform canvas, and reminders.
@@ -29,6 +33,8 @@
 **首次安装。** 从稳定版下载页的 **Assets** 下载 `MyNotes-Setup-*.exe`，双击安装。可在安装时选择位置。 [下载 Windows 安装包](https://github.com/LucasRiver9527/Note-Memo/releases/latest)
 
 **已安装旧版。** 打开「全局设置 → 关于 → 检查更新」，按提示下载和安装。也可以从同一下载页取新版安装包覆盖安装。便签数据放在独立的用户数据目录，升级前可以先按下文导出一份备份。
+
+**Windows SmartScreen。** 1.3.2 安装包未签名，Windows 可能提示「无法识别的应用」。请从官方发布页下载。如需核对文件，可比较发布页列出的 SHA-256 校验值。 [核对 1.3.2 安装包](https://github.com/LucasRiver9527/Note-Memo/releases/tag/v1.3.2) · [微软 SmartScreen 说明](https://learn.microsoft.com/windows/apps/package-and-deploy/smartscreen-reputation)
 
 ## 快速上手
 
