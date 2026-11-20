@@ -41,6 +41,13 @@ interface Reminder {
 }
 
 // 便签（备注 + 待办共用）。字段大多可选：旧存档可能缺失，由 migrateNote 回填。
+interface CanvasStroke {
+  color: string;
+  width: number;
+  tool: 'pen' | 'marker';
+  points: [number, number][];
+}
+
 interface Note {
   id: string;
   title?: string;
@@ -62,6 +69,9 @@ interface Note {
   opacity?: number;
   z?: number | string;
   reminder?: Reminder | null;
+  links?: { targetId: string; label: string }[];
+  ink?: CanvasStroke[];
+  gadget?: { kind: "timer"; minutes: number; remaining: number; endAt: number; text?: string } | { kind: "calendar"; entries?: Record<string, { marked?: boolean; text?: string }> };
   x?: number;
   y?: number;
   positionAll?: Pos;
@@ -136,6 +146,8 @@ interface AppSettings {
   menuAcrylic?: boolean;
   menuOpacity?: number;
   boardZoom?: number;
+  showCanvasLinks?: boolean;
+  boardInk?: Record<string, CanvasStroke[]>;
   recentGroups?: string[];
   collapsedGroups?: Record<string, boolean>;
   collapseSnapshot?: Record<string, any>;

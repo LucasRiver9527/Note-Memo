@@ -210,6 +210,7 @@ function startDrag(el, n, e) {
         other.style.transform = `translate3d(${dx}px, ${dy}px, 0)`;
       });
     }
+    scheduleCanvasLinks();
   };
   const onMove = (ev) => {
     lastEv = ev;
@@ -271,6 +272,7 @@ function startDrag(el, n, e) {
     save();
     if (batch) renderAll();
     else syncBoardSize();
+    scheduleCanvasLinks();
   };
   document.addEventListener('pointermove', onMove);
   document.addEventListener('pointerup', onUp);
@@ -295,6 +297,7 @@ function startResize(el, n, e) {
     n.h = h;
     el.style.width = n.w + 'px';
     el.style.height = n.h + 'px';
+    scheduleCanvasLinks();
   };
   const onUp = () => {
     document.removeEventListener('mousemove', onMove);

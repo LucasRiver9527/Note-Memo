@@ -104,20 +104,18 @@ function renderAll() {
   mountWorkspaceView(Object.hasOwn(views, mode) ? mode : 'board', views);
   const resultCount = refreshWorkspaceContent(mode, views, visible, query, detailOpen);
 
-  updateWorkspaceGreeting();
-  $('#noteCount').textContent = visible.length;
-  const empty = state.notes.length === 0;
+  const empty = !state.notes.some(note => mode === 'board' || !note.gadget);
   const hasFilter = !!query || !!filter.archive || filter.group !== 'all' ||
     Object.values(state.settings.collapsedGroups || {}).some(Boolean);
   const group = state.groups.find((g) => g.id === filter.group);
   $('#workspaceTitle').textContent = filter.archive ? t('archive_view') :
     filter.group === 'ungrouped' ? t('ungrouped') : group?.name || t('workspace_all');
-  $('#noteCount').classList.toggle('hidden', hasFilter);
   const noMatches = !detailOpen && !empty && hasFilter && resultCount === 0;
   const showEmpty = !detailOpen && empty && mode !== 'todo';
+  updateWorkspaceGreeting();
   const emptyHint = $('#emptyHint');
   emptyHint.classList.toggle('hidden', !showEmpty && !noMatches);
-  $('.empty-icon', emptyHint).textContent = noMatches ? '⌕' : '🗒️';
+  $('#emptyHintIcon use').setAttribute('href', noMatches ? '#ui-search' : '#ui-doc');
   $('p:not(.sub)', emptyHint).textContent = t(noMatches ? 'no_matches' : 'no_notes');
   $('.sub', emptyHint).textContent = t(noMatches ? 'no_matches_sub' : 'no_notes_sub');
   $('#btnEmptyCreate').classList.toggle('hidden', !showEmpty);
@@ -132,10 +130,13 @@ function renderAll() {
   $('#btnSaveOrder').classList.toggle('hidden', empty || mode !== 'board');
   if (multiSelect) syncSelectedVisual();
 
+  syncCanvasInk();
+  syncCanvasGadgets();
   if (mode === 'board') syncBoardSize();
   if (typeof syncZoomToolbar === 'function') syncZoomToolbar();
+  syncCanvasLinks();
   if (typeof renderDesktopNotes === 'function') renderDesktopNotes();
-  if (typeof renderFilterStatus === 'function') renderFilterStatus(resultCount, mode);
+  if (typeof renderFilterStatus === 'function') renderFilterStatus(resultCount, mode, visible.some(note => note.gadget));
   // UX-30B：显式「恢复保存布局」按钮的可用性随视图/筛选/查询/保存/导入更新。
   const restoreBtn = $('#btnRestoreLayout');
   if (restoreBtn) restoreBtn.disabled = !(typeof canRestoreSavedLayout === 'function' && canRestoreSavedLayout());
@@ -262,6 +263,12 @@ function syncBoardSize() {
     if (p && typeof p.x === 'number') maxRight = Math.max(maxRight, p.x + w + L.gap);
     if (p && typeof p.y === 'number') maxBottom = Math.max(maxBottom, p.y + h + L.gap);
   });
+  for (const stroke of canvasBackgroundInk()) {
+    for (const [x, y] of stroke.points) {
+      maxRight = Math.max(maxRight, x + stroke.width / 2 + L.gap);
+      maxBottom = Math.max(maxBottom, y + stroke.width / 2 + L.gap);
+    }
+  }
   const boardW = Math.max(cw, maxRight);
   const boardH = Math.max(ch, maxBottom);
   board.dataset.uw = boardW;

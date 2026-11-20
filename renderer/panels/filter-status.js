@@ -25,8 +25,8 @@
     return Object.keys(map).filter((id) => map[id]);
   }
 
-  function countText(n, viewMode) {
-    return t(viewMode === 'todo' ? 'filter_count_todo' : 'filter_count_notes').replace('{n}', String(n));
+  function countTemplate(viewMode) {
+    return t(viewMode === 'todo' ? 'filter_count_todo' : 'filter_count_notes');
   }
 
   function makeTag(kind, id, label) {
@@ -82,7 +82,7 @@
     const s = $('#searchInput'); if (s) s.focus();
   }
 
-  function renderFilterStatus(resultCount, viewMode) {
+  function renderFilterStatus(resultCount, viewMode, includesWidgets) {
     const row = $('#filterStatus');
     if (!row) return;
     row.textContent = '';
@@ -93,7 +93,7 @@
     const tags = [];
     if (q) tags.push(makeTag('query', null, t('filter_tag_search') + ': ' + q));
     // 归档时底层分组被忽略：不显示为活动分组标签
-    if (!archived && filter.group && filter.group !== 'all') {
+    if (!archived && (q || collapsed.length) && filter.group && filter.group !== 'all') {
       const name = groupLabel(filter.group);
       tags.push(makeTag('group', null, t('filter_tag_group') + ': ' + name));
     }
@@ -105,6 +105,13 @@
 
     const has = tags.length > 0;
     row.classList.toggle('hidden', !has);
+    const headingCount = $('#workspaceCount');
+    const number = $('#noteCount');
+    const template = includesWidgets ? t("gadget_result_count") : countTemplate(viewMode);
+    const [before, after] = template.split('{n}');
+    headingCount.classList.toggle('hidden', has);
+    number.textContent = String(resultCount);
+    headingCount.replaceChildren(before, number, after);
     if (!has) return;
 
     tags.forEach((tag) => row.appendChild(tag));
@@ -125,7 +132,7 @@
 
     const count = document.createElement('span');
     count.className = 'fs-count';
-    count.textContent = countText(resultCount, viewMode);
+    count.textContent = template.replace('{n}', String(resultCount));
     row.appendChild(count);
 
     const clear = document.createElement('button');

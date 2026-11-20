@@ -33,7 +33,10 @@ function purgeTrash() {
   const cutoff = Date.now() - days * 86400000;
   const before = state.trash.length;
   state.trash = state.trash.filter((t) => t.deletedAt >= cutoff);
-  if (state.trash.length !== before) save();
+  if (state.trash.length !== before) {
+    pruneNoteLinks(state);
+    save();
+  }
 }
 
 function restoreTrashItem(id) {
@@ -52,12 +55,14 @@ function restoreTrashItem(id) {
 
 function deleteTrashItem(id) {
   state.trash = state.trash.filter((t) => t.note.id !== id);
+  pruneNoteLinks(state);
   save();
   renderTrashPanel();
 }
 
 function emptyTrash() {
   state.trash = [];
+  pruneNoteLinks(state);
   save();
   renderTrashPanel();
   toast(t('toast_trash_empty'));

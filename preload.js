@@ -77,6 +77,7 @@ contextBridge.exposeInMainWorld('api', {
   onCreateNote: (cb) => ipcRenderer.on('note:create', () => cb()),
   onAlwaysOnTop: (cb) => ipcRenderer.on('window:always-on-top', (e, flag) => cb(flag)),
   onReminderFired: (cb) => ipcRenderer.on('reminder:fired', (e, id) => cb(id)),
+  onReminderOpen: (cb) => ipcRenderer.on('reminder:open', (e, id) => cb(id)),
   onReminderSound: (cb) => ipcRenderer.on('reminder:sound', (e, info) => cb(info)),
   onNoteDeleted: (cb) => ipcRenderer.on('note:deleted', (e, id) => cb(id)),
 

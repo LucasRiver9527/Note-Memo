@@ -67,20 +67,26 @@ function confirmModal(title, message) {
 
 /* ============ 关闭确认弹窗（主题化三个选择） ============ */
 // （closeDecisionResolve 见 core/app-state.js）
+let closeModalOpener = null;
+
 function showCloseDecisionModal() {
   return new Promise((resolve) => {
     // 若已有弹窗在等待，先关闭上一个
     if (closeDecisionResolve) { const r = closeDecisionResolve; closeDecisionResolve = null; r('cancel'); }
-    closeDecisionResolve = resolve;
     const overlay = $('#closeOverlay');
     if (!overlay) { resolve('cancel'); return; }
+    closeDecisionResolve = resolve;
+    closeModalOpener = document.activeElement;
     overlay.classList.remove('hidden');
+    $('#btnCloseCancel').focus({ preventScroll: true });
   });
 }
 
 function hideCloseDecisionModal() {
   const overlay = $('#closeOverlay');
   if (overlay) overlay.classList.add('hidden');
+  if (closeModalOpener?.isConnected) closeModalOpener.focus({ preventScroll: true });
+  closeModalOpener = null;
 }
 
 function closeDecision(choice) {

@@ -68,6 +68,7 @@
     menuAcrylic: true,
     menuOpacity: 88,
     boardZoom: 1,
+    showCanvasLinks: true,
     recentGroups: [],
     collapsedGroups: {},
     collapseSnapshot: {},
@@ -98,6 +99,22 @@
     return s[key];
   }
 
+  /** @param {unknown} value @returns {CanvasStroke[]} */
+  function normalizeInk(value) {
+    if (!Array.isArray(value)) return [];
+    const strokes = [];
+    for (const stroke of value) {
+      if (!stroke || !['pen', 'marker'].includes(stroke.tool) ||
+          (stroke.color !== 'auto' && (typeof stroke.color !== 'string' || !/^#[0-9a-f]{6}$/i.test(stroke.color))) ||
+          !Number.isFinite(stroke.width) || stroke.width < 1 || stroke.width > 20 ||
+          !Array.isArray(stroke.points)) continue;
+      const points = stroke.points.slice(0, 4096).filter(point =>
+        Array.isArray(point) && point.length === 2 && point.every(coord => Number.isFinite(coord) && Math.abs(coord) <= 1000000));
+      if (points.length) strokes.push({ tool: stroke.tool, color: stroke.color, width: stroke.width, points });
+    }
+    return strokes;
+  }
+
   // 便签对象补齐默认字段 + 图片迁移（旧版便签图片未写入内容标记，补到末尾保持可见）
   /** @param {Note} n @param {(prefix?: string) => string} [uid] @returns {Note} */
   function migrateNote(n, uid) {
@@ -110,6 +127,31 @@
     if (typeof n.archived !== 'boolean') n.archived = false;
     if (typeof n.preview !== 'boolean') n.preview = false;
     if (typeof n.opacity !== 'number') n.opacity = 100;
+    if (n.gadget?.kind === 'timer') {
+      const minutes = Math.round(Math.max(1, Math.min(180, Number(n.gadget.minutes) || 25)));
+      const limit = minutes * 60000;
+      const remaining = Number.isFinite(n.gadget.remaining) ? Math.max(0, Math.min(limit, n.gadget.remaining)) : limit;
+      const endAt = Number.isFinite(n.gadget.endAt) ? Math.max(0, Math.min(Date.now() + limit, n.gadget.endAt)) : 0;
+      const text = typeof n.gadget.text === 'string' ? n.gadget.text.slice(0, 2000) : '';
+      n.gadget = { kind: 'timer', minutes, remaining, endAt, text };
+      if (n.h === 180 || n.h === 190 || !n.h) n.h = 230;
+    } else if (n.gadget?.kind === 'calendar') {
+      const rawEntries = n.gadget.entries;
+      /** @type {NonNullable<Extract<Note["gadget"], {kind: "calendar"}>["entries"]>} */
+      const entries = {};
+      if (rawEntries && typeof rawEntries === 'object' && !Array.isArray(rawEntries)) {
+        for (const [key, entry] of Object.entries(rawEntries)) {
+          if (!/^\d{4}-\d{2}-\d{2}$/.test(key) || !entry || typeof entry !== 'object') continue;
+          const date = new Date(key + 'T00:00:00Z');
+          if (!Number.isFinite(+date) || date.toISOString().slice(0, 10) !== key) continue;
+          const marked = entry.marked === true;
+          const text = typeof entry.text === 'string' ? entry.text.slice(0, 2000) : '';
+          if (marked || text) entries[key] = { marked, text };
+        }
+      }
+      n.gadget = { kind: 'calendar', entries };
+    } else if (n.gadget) delete n.gadget;
+    if (Object.hasOwn(n, 'ink')) n.ink = normalizeInk(n.ink);
     const content = n.content || '';
     const missing = (n.images || []).filter((im) => im && content.indexOf('[[img:' + im.id + ']]') === -1);
     if (missing.length) n.content = content + (content ? '\n' : '') + missing.map((im) => '[[img:' + im.id + ']]').join('');
@@ -124,6 +166,12 @@
     settings.version = settings.version || CURRENT_VERSION;
     // 未来版本迁移示例：if (settings.version < 3) { ...; settings.version = 3; }
     settings.version = CURRENT_VERSION;
+    if (Object.hasOwn(settings, 'boardInk')) {
+      const scopes = ['_all', '_ungrouped', ...(d.groups || []).map(group => group?.id)];
+      settings.boardInk = Object.fromEntries(scopes
+        .filter(key => typeof key === 'string' && key !== '__proto__' && Object.hasOwn(settings.boardInk || {}, key))
+        .map(key => [key, normalizeInk(settings.boardInk[key])]));
+    }
 
     const notes = (d.notes || []).map((n) => migrateNote(n, uid));
     const trash = (d.trash || []).map((t) => {
@@ -134,7 +182,31 @@
       return t;
     });
 
-    return { settings, groups: d.groups || [], notes, trash };
+    const migrated = { settings, groups: d.groups || [], notes, trash };
+    pruneNoteLinks(migrated);
+    return migrated;
+  }
+
+  // Both endpoints remain valid while in the recycle bin. Only permanent removal breaks the link.
+  /** @param {Pick<AppData, "notes" | "trash">} data */
+  function pruneNoteLinks(data) {
+    const allNotes = [...data.notes, ...data.trash.map(entry => entry?.note)].filter(Boolean);
+    if (!allNotes.some(note => Object.hasOwn(note, "links"))) return;
+    const knownIds = new Set(allNotes.map(note => note.id));
+    for (const note of allNotes) {
+      if (!Object.hasOwn(note, "links")) continue;
+      const links = [];
+      const seen = new Set();
+      for (const link of Array.isArray(note.links) ? note.links : []) {
+        const targetId = link?.targetId;
+        if (typeof targetId !== "string" || !targetId || targetId === note.id ||
+            !knownIds.has(targetId) || seen.has(targetId)) continue;
+        seen.add(targetId);
+        links.push({ targetId, label: typeof link.label === "string" ? link.label.trim() : "" });
+      }
+      if (links.length) note.links = links;
+      else delete note.links;
+    }
   }
 
   return {
@@ -144,6 +216,7 @@
     CURRENT_VERSION,
     getSetting,
     migrateNote,
-    migrateData
+    migrateData,
+    pruneNoteLinks
   };
 }));

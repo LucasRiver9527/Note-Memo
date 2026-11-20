@@ -7,7 +7,7 @@ const ACCENTS = ['#6c5ce7', '#e84393', '#00b894', '#0984e3', '#e17055', '#fdcb6e
 const HIGHLIGHT_COLORS = ['#fff59d', '#ffd54f', '#ffb3c1', '#a8e6cf', '#a0d8ff', '#d0b3ff', '#ffd8a8', '#ff8a80', '#b2ff59', '#80d8ff'];
 
 const PRESETS = [
-  { id: 'mint', name: '薄荷', en: 'Mint', light: true, bg: '#eafaf1', accent: '#00b894', mini: ['#00b894', '#a8e6cf'] },
+  { id: 'mint', name: '薄荷', en: 'Mint', light: true, bg: '#f7f7f1', accent: '#00b894', mini: ['#00b894', '#d4efdf'] },
   { id: 'dark', name: '深夜', en: 'Midnight', light: false, bg: '#1e1f26', accent: '#6c5ce7', mini: ['#6c5ce7', '#f7d65a'] },
   { id: 'light', name: '纯净', en: 'Clean', light: true, bg: '#f4f5fa', accent: '#6c5ce7', mini: ['#6c5ce7', '#ffd8a8'] },
   { id: 'midnight', name: '午夜蓝', en: 'Navy', light: false, bg: '#131726', accent: '#5b8cff', mini: ['#5b8cff', '#00cec9'] },
@@ -48,13 +48,13 @@ function t(key) {
   return T(key, lang);
 }
 
-// v1.3.1 用户可见更新。
+// v1.3.2 用户可见更新。
 const CHANGELOG = [
-  { zh: "拖动画布便签时，靠近其他便签会显示对齐线并轻微吸附。按住 Alt 可自由拖动，多选保留组内间距。", en: "Drag notes near each other to see alignment guides and snap into place. Hold Alt for free movement. Group drags preserve spacing." },
-  { zh: "提醒新增「15 分钟后」和「今天 18:00」，原有快捷项和手动输入仍可用。", en: "Set reminders for 15 minutes from now or 18:00 today, alongside the existing presets and manual input." },
-  { zh: "Markdown 导出入口更好找，文件对话框中的应用文案随界面语言切换。", en: "Markdown export is easier to find. App-provided file dialog text follows the interface language." },
-  { zh: "桌面便签保存时保留主窗口的分组与布局。托盘退出前先保存便签，重启后可恢复最大化状态。", en: "Desktop-note saves preserve main-window groups and layout. Exiting from the tray saves notes first, and the maximized state is restored on restart." },
-  { zh: "加强备份和本地附件的路径校验。", en: "Backup folders and local attachments have stricter path checks." }
+  { zh: "在画布上关联便签，可添加关系标签、区分双向连接，并选择是否始终显示关联线。", en: "Link notes on the canvas, label relationships, distinguish links in both directions, and choose when to show them." },
+  { zh: "在画布或便签上涂鸦。便签上的笔迹随卡片移动，画笔和擦除操作支持撤销。", en: "Draw on the canvas or on notes. Note annotations move with their cards, and drawing and erasing can be undone." },
+  { zh: "新增专注计时和日历，可写专注备注、标记日期和记录当天的事。两种组件均可钉到桌面，并与工作区同步。", en: "Add focus timers and calendars with focus notes, date markers, and daily entries. Both widgets can be pinned to the desktop and stay in sync with the workspace." },
+  { zh: "调整主界面布局与缩放入口，统一文档工具栏、批量操作和时间待办图标。", en: "Refined the workspace layout and zoom controls, and aligned the icons in document, batch, and timed-task controls." },
+  { zh: "Windows 通知精简长标题和待办预览，点击可打开对应便签。任务栏显示 Note-Memo 名称和图标，关闭主窗口前会询问。", en: "Windows reminders show shorter titles and task previews. Select a notification to open its note. The taskbar displays the Note-Memo name and icon, and closing the main window asks for confirmation." }
 ];
 
 const APP_VERSION = (window.api && window.api.appVersion) || '';
@@ -103,7 +103,7 @@ function noteFingerprint(n) {
     n.id, n.title || '', n.content || '',
     n.color || '', n.textColor || '', n.fontSize || '', n.fontFamily || '',
     n.pinned ? 1 : 0, n.groupId || '', n.type || '',
-    n.archived ? 1 : 0, n.preview ? 1 : 0,
+    n.archived ? 1 : 0, n.preview ? 1 : 0, n.desktopPin ? 1 : 0,
     p.x || 0, p.y || 0, n.w || 0, n.h || 0, n.z || 0,
     n.reminder ? (n.reminder.time || '') + '/' + (n.reminder.fired ? 1 : 0) : '',
     // 工具栏全局外观：变化时需重建卡片才能反映显隐/精简（否则增量渲染会复用旧 DOM）
@@ -131,6 +131,7 @@ function applySnapshot(snap) {
   // UX-30D：旧快照可能缺 sortMode/orderLayouts —— 缺键保留当前设置；存在（含空对象）按快照恢复。
   if (Object.prototype.hasOwnProperty.call(orders, 'sortMode')) state.settings.sortMode = orders.sortMode;
   if (Object.prototype.hasOwnProperty.call(orders, 'orderLayouts')) state.settings.orderLayouts = orders.orderLayouts || {};
+  state.settings.boardInk = orders.boardInk;
   ensureOrder();
   if (typeof clearSelection === 'function') clearSelection();
   save();
@@ -338,6 +339,9 @@ function switchTab(name) {
 /* ============ 事件绑定（薄壳调度器） ============ */
 // 各域绑定已拆分到 bind/*（board / batch / settings / appearance），此处仅按域聚合。
 function bindUI() {
+  bindCanvasGadgets();
+  bindCanvasInk();
+  bindCanvasLinks();
   bindBoard();
   bindBatch();
   bindSettings();

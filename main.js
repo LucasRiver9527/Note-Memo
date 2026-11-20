@@ -6,13 +6,22 @@ const logic = require('./renderer/logic.js');
 const Shortcuts = require('./renderer/shortcuts.js');
 const DataIO = require('./data-io.js');
 const { createNoteStore } = require('./note-store.js');
-const { mergeDetachedEdits } = logic;
+const { mergeDetachedEdits, applyGadgetAction } = logic;
 const { registerFileIpc } = require('./file-ipc.js');
 const MediaProtocol = require('./media-protocol.js');
 const { createWindowManager } = require('./window-manager.js');
 const { autoUpdater } = require('electron-updater');
 
 const isDev = !app.isPackaged;
+
+// 安装版沿用快捷方式的 ID，开发版使用独立标识，避免固定到任务栏时互相替代。
+const taskbarDetails = process.platform === 'win32' ? {
+  appId: isDev ? 'com.mynotes.app.Development' : 'com.mynotes.app',
+  relaunchDisplayName: 'Note-Memo',
+  relaunchCommand: '"' + process.execPath + '"' + (isDev ? ' "' + __dirname + '"' : ''),
+  appIconPath: isDev ? path.join(__dirname, 'assets', 'icon.ico') : process.execPath
+} : null;
+if (taskbarDetails) app.setAppUserModelId(taskbarDetails.appId);
 
 // dev 下启动即校验 IPC 契约：renderer 用到的 channel 在 main 是否都有实现，缺一直接抛错，避免静默失效。
 // ipc-contract.js 是开发专用模块，不随安装包分发（build files 不含它），故只在 dev / 显式开启时 require，避免打包后找不到模块。
@@ -146,6 +155,7 @@ const { dataPath, dataHealth, isDataLocked, readData, writeData, captureRecovery
 const windows = createWindowManager({
   mainPage: APP_MAIN_PAGE,
   notePage: APP_NOTE_PAGE,
+  taskbarDetails,
   readData,
   writeData,
   clearRecoveryAfterReplace: () => writeRecovery({ version: 1, main: null, notes: {} })
@@ -290,22 +300,52 @@ function scheduleReminders(notes) {
   }, delay);
 }
 
+const reminderTextSegments = new Intl.Segmenter();
+
+function reminderPreview(text, limit) {
+  const plain = String(text ?? '')
+    .replace(/\[\[[^\]\r\n]*\]\]/g, ' ')
+    .replace(/\[([^\]]+)\]\([^)]*\)/g, '$1')
+    .replace(/\*\*|`/g, '')
+    .replace(/\s+/g, ' ')
+    .trim();
+  const chars = [];
+  for (const { segment } of reminderTextSegments.segment(plain)) {
+    if (chars.length === limit) return chars.join('') + '…';
+    chars.push(segment);
+  }
+  return chars.join('');
+}
+
 function fireReminder(note) {
   recentlyFired.add(note.id);
-  const title = note.title ? note.title : '便签提醒';
-  const body = note.type === 'todo'
-    ? (note.items || []).filter((i) => !i.done).map((i) => i.text).join('\n')
-    : (note.content || '').slice(0, 200);
+  const settings = readData()?.settings || {};
+  const english = settings.language === 'en';
+  const title = reminderPreview(note.title, 32) || (english ? 'Note reminder' : '便签提醒');
+  let body = reminderPreview(note.content, 64);
+  if (note.type === 'todo') {
+    const pending = (note.items || []).filter((item) => !item.done)
+      .map((item) => reminderPreview(item.text, 28)).filter(Boolean);
+    const lines = pending.slice(0, 2);
+    if (pending.length > lines.length) {
+      const remaining = pending.length - lines.length;
+      lines[1] += english ? ` · +${remaining} more` : ` · 另有 ${remaining} 项`;
+    }
+    body = lines.join('\n');
+  }
 
   if (Notification.isSupported()) {
-    const n = new Notification({
-      title: `⏰ ${title}`,
-      body: body || '到时间了！',
+    const notification = new Notification({
+      title,
+      body: body || (english ? 'It’s time for your reminder.' : '到时间了！'),
       icon: path.join(__dirname, 'assets', 'icon.png'),
       silent: false
     });
-    n.on('click', () => showWindow());
-    n.show();
+    notification.on('click', () => {
+      showWindow();
+      windows.mainWindow?.webContents.send('reminder:open', note.id);
+    });
+    notification.show();
   }
 
   if (windows.mainWindow) {
@@ -317,9 +357,9 @@ function fireReminder(note) {
     const data = readData();
     const s = (data && data.settings) || {};
     windows.mainWindow.webContents.send('reminder:sound', {
-      enabled: !!s.reminderSound,
-      path: s.reminderSoundPath || null,
-      volume: s.reminderVolume != null ? s.reminderVolume : 70
+      enabled: !!settings.reminderSound,
+      path: settings.reminderSoundPath || null,
+      volume: settings.reminderVolume ?? 70
     });
   }
 
@@ -414,6 +454,7 @@ function setupIpc() {
           if (!n || !detachedWindows.has(n.id) || n.desktopPin === false) return n;
           const diskNote = diskById.get(n.id);
           if (!diskNote) return n;
+          if (n.gadget && diskNote.gadget?.kind === n.gadget.kind) return { ...n, gadget: diskNote.gadget };
           return mergeDetachedEdits(n, diskNote);
         });
       }
@@ -423,6 +464,12 @@ function setupIpc() {
       throw new Error(isDataLocked() ? '数据文件损坏且无可用备份，已锁定写入' : '数据写入失败');
     }
     clearRecovery('main', null, opts && opts.draftToken, data);
+    if (!replace && detachedWindows.size && Array.isArray(data.notes)) {
+      for (const note of data.notes) {
+        const win = note?.gadget && detachedWindows.get(note.id);
+        if (win && !win.isDestroyed()) win.webContents.send('note:changed', note);
+      }
+    }
     if (replace) await reconcileDetachedAfterReplace(data);
     if (Array.isArray(data.notes)) {
       // 重新武装的提醒（fired=false 且启用的便签）允许再次调度——解除最近触发标记（「稍后再响」依赖此机制）。
@@ -502,7 +549,17 @@ function setupIpc() {
     if (!data) return false;
     const index = (data.notes || []).findIndex((item) => item.id === note?.id);
     if (index < 0) return false;
-    const savedNote = mergeDetachedEdits(data.notes[index], note);
+    const current = data.notes[index];
+    if (opts?.gadgetAction) {
+      if (!current.desktopPin || !applyGadgetAction(current.gadget, opts.gadgetAction)) return false;
+      if (!writeData(data)) return false;
+      const win = detachedWindows.get(current.id);
+      if (win && !win.isDestroyed()) win.webContents.send('note:changed', current);
+      if (windows.mainWindow && !windows.mainWindow.isDestroyed()) windows.mainWindow.webContents.send('note:changed', current);
+      return true;
+    }
+    if (current.gadget) return true; // Widgets write by action so a close-time note snapshot cannot replace shared data.
+    const savedNote = mergeDetachedEdits(current, note);
     data.notes[index] = savedNote;
     const ok = writeData(data);
     if (!ok) return false;

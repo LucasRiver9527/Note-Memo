@@ -88,7 +88,9 @@ function applyNoteAppearance(s) {
 
   // 阴影强度：0=默认，1~3 逐级加深（纯逻辑在 logic.noteShadowCss）
   const shadow = (s.noteShadow != null ? s.noteShadow : 0);
-  const sh = noteShadowCss(shadow);
+  const sh = shadow === 0 && s.themeId === DEFAULT_THEME_ID && isLightTheme()
+    ? { base: '0 3px 10px rgba(28, 43, 35, 0.12)', hover: '0 5px 16px rgba(28, 43, 35, 0.18)' }
+    : noteShadowCss(shadow);
   root.style.setProperty('--note-shadow', sh.base);
   root.style.setProperty('--note-shadow-hover', sh.hover);
 
@@ -166,7 +168,7 @@ function applyBackground() {
     !s.canvasColor && !s.backgroundImage;
   document.body.classList.toggle('workspace-warm', warmWorkspace);
   document.body.classList.toggle('workspace-wallpaper', !!s.backgroundImage);
-  const borderBase = s.topBarColor || (warmWorkspace ? '#f8f8f3' : currentBg());
+  const borderBase = s.topBarColor || (warmWorkspace ? '#f1f3ed' : currentBg());
   let borderAlpha = (s.topBarOpacity != null ? s.topBarOpacity : 100) / 100;
   if (s.topBarAcrylic) borderAlpha = 0.12 + borderAlpha * 0.88;
   const bc = hexToRgba(borderBase, borderAlpha);

@@ -15,6 +15,9 @@
 /* ============ 批量选中 ============ */
 function toggleMultiSelect() {
   multiSelect = !multiSelect;
+  syncCanvasLinks();
+  syncCanvasInk();
+  syncCanvasGadgets();
   document.body.classList.toggle('multi-select', multiSelect);
   const toggle = $('#btnBatchToggle');
   if (toggle) toggle.classList.toggle('active', multiSelect);

@@ -81,7 +81,7 @@ function setBoardScaledSize() {
   board.style.transformOrigin = '0 0';
 }
 
-// 更新缩放控件显示：把当前缩放值写到画布右下角工具栏（可见/不可见跟随画布视图；设置面板打开时隐藏避免遮挡）
+// 页头缩放入口只在便签画布显示。
 function syncZoomToolbar() {
   const wrap = $('#canvasToolbar');
   if (!wrap) return;
@@ -89,14 +89,16 @@ function syncZoomToolbar() {
   const boardView = state.settings.viewMode === 'board';
   const show = boardView && !settingsOpen && !docPickerReturn;
   wrap.classList.toggle('hidden', !show);
-  if (!show) {
-    // 收起时让展开态复位，下次显示回归小圆钮
-    wrap.classList.remove('expanded');
-    const exp = $('#ctExpand');
-    if (exp) { exp.textContent = '⤢'; exp.title = t('canvas_zoom_toggle'); }
-  }
-  const label = $('#zoomLabel');
-  if (label) label.textContent = Math.round(boardZoom() * 100) + '%';
+  if (!show) wrap.classList.remove('expanded');
+  const expanded = wrap.classList.contains('expanded');
+  $('#ctGroup').inert = !expanded;
+  const ratio = Math.round(boardZoom() * 100) + '%';
+  const toggle = $('#ctExpand');
+  const action = t(expanded ? 'canvas_zoom_toggle_close' : 'canvas_zoom_toggle');
+  $('#zoomLabel').textContent = ratio;
+  toggle.title = action;
+  toggle.setAttribute('aria-expanded', String(expanded));
+  toggle.setAttribute('aria-label', action + ' · ' + ratio);
 }
 
 // 调整缩放。anchor：{ mode: 'cursor'|'center'|'reset', x, y }。
@@ -122,6 +124,7 @@ function applyBoardZoomRatio(newRatio, anchor) {
   canvas.scrollLeft = Math.max(0, cRect.left + refX * newZ - refScreenX);
   canvas.scrollTop = Math.max(0, cRect.top + refY * newZ - refScreenY);
   syncZoomToolbar();
+  scheduleCanvasLinks();
   save();
 }
 
@@ -144,6 +147,7 @@ function zoomReset() {
   canvas.scrollLeft = Math.max(0, cRect.left + refX * 1 - (cRect.left + cRect.width / 2));
   canvas.scrollTop = Math.max(0, cRect.top + refY * 1 - (cRect.top + cRect.height / 2));
   syncZoomToolbar();
+  scheduleCanvasLinks();
   save();
 }
 
@@ -187,7 +191,7 @@ function nextAllPosition() {
   return BoardLayout.nextGridPosition(occupied, maxX, {}, LAYOUT.defaultW, LAYOUT.newH);
 }
 
-function createNote(x, y) {
+function createNote(x, y, gadget = null) {
   prepareNewNoteVisibility();
   pushUndo();
   const pos = (x != null && y != null) ? { x, y } : nextGridPosition();
@@ -195,7 +199,8 @@ function createNote(x, y) {
   const allPos = (filter.group === 'all') ? pos : nextAllPosition();
   const n = {
     id: uid(),
-    title: '',
+    title: gadget ? t('gadget_' + gadget.kind) : '',
+    ...(gadget ? { gadget } : {}),
     content: '',
     type: 'note',
     items: [],
@@ -212,8 +217,8 @@ function createNote(x, y) {
     x: pos.x,
     y: pos.y,
     positionAll: { x: allPos.x, y: allPos.y },
-    w: LAYOUT.defaultW,
-    h: LAYOUT.newH,
+    w: gadget ? 262 : LAYOUT.defaultW,
+    h: gadget ? (gadget.kind === 'calendar' ? 378 : 230) : LAYOUT.newH,
     createdAt: Date.now(),
     updatedAt: Date.now()
   };
@@ -228,7 +233,7 @@ function createNote(x, y) {
 function focusNewNote(id) {
   const el = document.querySelector('[data-id="' + id + '"]');
   if (el) {
-    const target = $('.note-content', el) || $('.note-title', el);
+    const target = $('.note-content', el) || $('.note-title', el) || $('.gadget-body button', el);
     if (target) target.focus();
     el.scrollIntoView({ behavior: 'smooth', block: 'nearest' });
   }
@@ -237,7 +242,8 @@ function focusNewNote(id) {
 function visibleNotes() {
   const query = filter.query.trim().toLowerCase();
   return state.notes.filter((n) => {
-    if (n.desktopPin) return false;
+    if (n.desktopPin && !n.gadget) return false;
+    if (n.gadget && (state.settings.viewMode !== 'board' || docPickerReturn)) return false;
     if (!!n.archived !== !!filter.archive) return false;
     if (isGroupCollapsed(n.groupId)) return false;
     if (!filter.archive) {
@@ -249,7 +255,8 @@ function visibleNotes() {
       // V128-01E1/E2：title/group 各自独立匹配；正文用可见渲染文本助手（按单元匹配，避免隐藏/跨单元假命中）。
       const titleMatch = (n.title || '').toLowerCase().includes(query);
       const groupMatch = g ? g.name.toLowerCase().includes(query) : false;
-      if (!titleMatch && !groupMatch && !noteSearchContentMatches(n, query)) return false;
+      const focusMatch = n.gadget?.kind === 'timer' && n.gadget.text?.toLowerCase().includes(query);
+      if (!titleMatch && !groupMatch && !focusMatch && !noteSearchContentMatches(n, query)) return false;
     }
     return true;
   });
@@ -377,6 +384,7 @@ function showBoardContextMenu(e) {
     button.querySelector('.cm-label').textContent = label;
     button.onclick = () => { closePops(); onClick(); };
     pop.appendChild(button);
+    return button;
   };
 
   addItem('plus', t('board_new_note'), () => createNote(Math.round(bx), Math.round(by)));
@@ -394,6 +402,16 @@ function showBoardContextMenu(e) {
   separator.className = 'cm-separator';
   pop.appendChild(separator);
   addItem('arrange', t('board_arrange'), () => arrangeNotes());
+  if (!dataReadonly) {
+    const always = state.settings.showCanvasLinks !== false;
+    const toggle = addItem('eye', t('canvas_link_show_always'), () => {
+      state.settings.showCanvasLinks = !always;
+      scheduleCanvasLinks();
+      save();
+    });
+    toggle.setAttribute('aria-pressed', String(always));
+    if (always) toggle.insertAdjacentHTML('beforeend', '<svg class="ui-icon cm-icon" aria-hidden="true"><use href="#ui-check"/></svg>');
+  }
   // 仅在存在可恢复的已保存布局（当前作用域、当前可见）时显示「恢复保存布局」。
   if (typeof canRestoreSavedLayout === 'function' && canRestoreSavedLayout()) {
     addItem('undo', t('restore_layout'), () => restoreSavedLayout());

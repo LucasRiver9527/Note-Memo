@@ -307,7 +307,7 @@ test('窄窗搜索铺满整行，中窗工具保持同排，宽窗搜索限宽',
         const controls = document.querySelector('.workspace-actions').getBoundingClientRect();
         const heading = document.querySelector('.workspace-heading').getBoundingClientRect();
         return { width: window.innerWidth, search: { left: search.left, right: search.right, top: search.top },
-          inputWidth: input.width, searchWidth: search.width, controlsTop: controls.top, controlsRight: controls.right, headingRight: heading.right, toolbarLeft: toolbar.left, add: { bottom: add.bottom } };
+          inputWidth: input.width, searchWidth: search.width, controlsTop: controls.top, controlsRight: controls.right, headingBottom: heading.bottom, toolbarLeft: toolbar.left, add: { bottom: add.bottom } };
       });
       expect(Math.abs(bounds.width - width)).toBeLessThanOrEqual(2);
       inputWidths[width] = bounds.inputWidth;
@@ -317,10 +317,10 @@ test('窄窗搜索铺满整行，中窗工具保持同排，宽窗搜索限宽',
         expect(bounds.search.top).toBeGreaterThanOrEqual(bounds.add.bottom);
       } else {
         expect(bounds.inputWidth).toBeGreaterThan(110);
-        expect(bounds.searchWidth).toBeLessThanOrEqual(bounds.width >= 1320 ? 681 : 461);
+        expect(bounds.searchWidth).toBeLessThanOrEqual(bounds.width >= 1320 ? 951 : 461);
         expect(Math.abs(bounds.controlsTop - bounds.search.top)).toBeLessThan(6);
         if (bounds.width >= 1320) {
-          expect(bounds.search.left).toBeGreaterThan(bounds.headingRight);
+          expect(bounds.search.top).toBeGreaterThanOrEqual(bounds.headingBottom);
           expect(bounds.controlsRight).toBeCloseTo(bounds.width - 16, 0);
         } else {
           expect(bounds.search.left).toBeGreaterThan(bounds.toolbarLeft);
@@ -328,6 +328,27 @@ test('窄窗搜索铺满整行，中窗工具保持同排，宽窗搜索限宽',
       }
     }
     expect(inputWidths[1600] - inputWidths[1320]).toBeGreaterThan(100);
+    for (const width of [640, 1080, 1600]) {
+      await ctx.electronApp.evaluate(({ BrowserWindow }, w) => BrowserWindow.getAllWindows()[0].setSize(w, 700), width);
+      await expect.poll(() => ctx.win.evaluate(() => innerWidth)).toBe(width);
+      for (const id of ['viewMemo', 'viewTodo', 'viewDoc']) {
+        await ctx.win.locator('#' + id).click();
+        const layout = await ctx.win.locator('.workspace-toolbar').evaluate(toolbar => {
+          const rect = selector => toolbar.querySelector(selector).getBoundingClientRect();
+          const [views, batch, sort, undo, redo] = ['.view-toggle', '#btnBatchToggle', '#btnToolbarMore', '#btnUndo', '#btnRedo'].map(rect);
+          const maxGap = Math.max(batch.left - views.right, sort.left - batch.right, undo.left - sort.right, redo.left - undo.right);
+          return {
+            compact: maxGap <= 10,
+            quickArrangeHidden: getComputedStyle(toolbar.querySelector('#btnQuickArrange')).visibility === 'hidden',
+            rightAligned: Math.abs(rect('.workspace-actions').right - (toolbar.getBoundingClientRect().right - 16)) <= 1,
+            searchAboveActions: rect('.search-box').bottom <= views.top,
+            sortLabelVisible: rect('.standalone-layout-label').width > 0
+          };
+        });
+        expect(layout).toEqual({ compact: true, quickArrangeHidden: true, rightAligned: true,
+          searchAboveActions: width <= 820, sortLabelVisible: width > 1120 });
+      }
+    }
   } finally { await closeApp(ctx); }
 });
 
@@ -527,7 +548,7 @@ test('钉窗保存失败时取消置顶被阻止并显示警告', async () => {
     });
     await noteWin.locator('#dnTitle').fill('未保存的标题');
     await stableClick(noteWin.locator('#dnUnpin'));
-    await expect(noteWin.locator('#dnUnpin')).toHaveText('⚠');
+    await expect(noteWin.locator('#dnUnpin use')).toHaveAttribute('href', '#ui-warning');
     await expect(noteWin.locator('#dnTitle')).toHaveValue('未保存的标题');
   } finally { await closeApp(ctx); }
 });
@@ -546,7 +567,7 @@ test('主窗口发起取消置顶时，独立便签保存失败则不关闭', as
       ipcMain.handle('note:update', () => false);
     });
     expect(await ctx.win.evaluate((noteId) => window.api.unpinFromDesktop(noteId), id)).toBe(false);
-    await expect(noteWin.locator('#dnUnpin')).toHaveText('⚠');
+    await expect(noteWin.locator('#dnUnpin use')).toHaveAttribute('href', '#ui-warning');
   } finally { await closeApp(ctx); }
 });
 
@@ -776,7 +797,7 @@ test('UX-01 独立便签保存抛错时可见警告保留脏内容，恢复后�
     });
     await noteWin.locator('#dnTitle').fill('重试后标题');
     await stableClick(noteWin.locator('#dnUnpin'));
-    await expect(noteWin.locator('#dnUnpin')).toHaveText('⚠');
+    await expect(noteWin.locator('#dnUnpin use')).toHaveAttribute('href', '#ui-warning');
     await expect(noteWin.locator('#dnUnpin')).toHaveAttribute('title', '保存失败，请检查磁盘/权限');
     await expect(noteWin.locator('#dnTitle')).toHaveValue('重试后标题');
     expect(await ctx.electronApp.evaluate(({ BrowserWindow }) => BrowserWindow.getAllWindows().length)).toBe(2);
@@ -2274,6 +2295,11 @@ test('UX-19A 文档工具栏：可访问命名分组、键盘预览焦点、宽�
       };
     });
     expect(todo).toEqual({ format: false, preview: false, export: true, del: true });
+    await expect(ctx.win.locator("#btnDocRemind use")).toHaveAttribute("href", "#ui-clock");
+    await stableClick(ctx.win.locator("#viewTodo"));
+    const emptyReminder = ctx.win.locator(".todo-empty").filter({ hasText: "No time todos yet" });
+    await expect(emptyReminder).toBeVisible();
+    await expect(emptyReminder.locator("use")).toHaveAttribute("href", "#ui-clock");
   } finally { await closeApp(ctx); }
 });
 
@@ -2477,7 +2503,7 @@ test('UX-20A 唤起缺失窗口安全重建；非钉桌/未知 id 与独立窗�
       ipcMain.handle('note:update', () => { throw new Error('模拟保存失败'); });
     });
     await w2.locator('#dnTitle').fill('失败中的编辑');
-    await expect(w2.locator('#dnUnpin')).toHaveText('⚠');
+    await expect(w2.locator('#dnUnpin use')).toHaveAttribute('href', '#ui-warning');
     await ctx.win.evaluate((id) => window.api.showDesktopNote(id), noteId);
     await ctx.win.waitForTimeout(300);
     expect(await ids()).toEqual([w2id]);
@@ -2594,8 +2620,9 @@ test('UX-22A 条件行：分组/搜索/归档/折叠逐个移除与全部清除�
 
     // 分组条件（带恶意名）：普通点击 + 安全文本，无注入元素
     await ctx.win.evaluate((id) => setFilter('group', id), groupId);
-    await expect(ctx.win.locator('#filterStatus')).not.toHaveClass(/hidden/);
-    await expect(ctx.win.locator('#filterStatus .fs-tag-label')).toContainText('A" ><b id="fs-pwn"></b>');
+    await expect(ctx.win.locator('#filterStatus')).toHaveClass(/hidden/);
+    await expect(ctx.win.locator('#workspaceCount')).toHaveText('2 条便签');
+    await expect(ctx.win.locator('#workspaceTitle')).toContainText('A" ><b id="fs-pwn"></b>');
     expect(await ctx.win.evaluate(() => !!document.getElementById('fs-pwn'))).toBe(false);
 
     // 搜索条件（键盘输入），行内显示安全查询
@@ -2606,8 +2633,8 @@ test('UX-22A 条件行：分组/搜索/归档/折叠逐个移除与全部清除�
 
     // 移除搜索条件：其它状态（分组）保留，焦点回到搜索框
     await ctx.win.locator('#filterStatus .fs-tag', { hasText: '搜索' }).locator('.fs-tag-x').click();
-    await expect.poll(() => ctx.win.locator('#filterStatus .fs-tag').count()).toBe(1);
-    await expect(ctx.win.locator('#filterStatus')).toContainText('分组');
+    await expect(ctx.win.locator('#filterStatus')).toHaveClass(/hidden/);
+    await expect(ctx.win.locator('#workspaceCount')).toHaveText('2 条便签');
     await expect(ctx.win.locator('#searchInput')).toBeFocused();
     expect(await ctx.win.evaluate(() => filter.group)).toBe(groupId);
 
@@ -2621,7 +2648,7 @@ test('UX-22A 条件行：分组/搜索/归档/折叠逐个移除与全部清除�
     // 折叠便签视图计数单位（任务与提醒项）
     await stableClick(ctx.win.locator('#viewTodo'));
     await ctx.win.evaluate((id) => setFilter('group', id), groupId);
-    await expect(ctx.win.locator('.fs-count')).toHaveText('2 个任务与提醒项');
+    await expect(ctx.win.locator('#workspaceCount')).toHaveText('2 个任务与提醒项');
     await stableClick(ctx.win.locator('#viewBoard'));
 
     // 归档：忽略底层分组，不显示为活动分组标签；有忽略说明；归档条件可移除
@@ -2635,9 +2662,11 @@ test('UX-22A 条件行：分组/搜索/归档/折叠逐个移除与全部清除�
 
     // 长英文分组名：文本保留、省略号不溢出
     await ctx.win.evaluate(() => setFilter('group', 'g2'));
+    await ctx.win.locator('#searchInput').fill('Beta');
+    await expect(ctx.win.locator('#filterStatus .fs-tag')).toHaveCount(2);
     const ell = await ctx.win.evaluate(() => {
-      const lab = document.querySelector('#filterStatus .fs-tag-label');
-      const x = document.querySelector('#filterStatus .fs-tag-x');
+      const lab = document.querySelector('#filterStatus .fs-tag:nth-child(2) .fs-tag-label');
+      const x = document.querySelector('#filterStatus .fs-tag:nth-child(2) .fs-tag-x');
       return {
         text: lab.textContent,
         clipped: lab.scrollWidth > lab.clientWidth + 1,
@@ -2651,14 +2680,18 @@ test('UX-22A 条件行：分组/搜索/归档/折叠逐个移除与全部清除�
     expect(ell.xAria).toContain(longEn);
 
     // 键盘到达标签并移除（不强制点击）
-    await ctx.win.locator('#filterStatus .fs-tag-x').first().focus();
+    await ctx.win.locator('#filterStatus .fs-tag', { hasText: '分组' }).locator('.fs-tag-x').focus();
     await ctx.win.keyboard.press('Enter');
+    await expect(ctx.win.locator('#filterStatus .fs-tag')).toHaveCount(1);
+    await expect(ctx.win.locator('#filterStatus')).toContainText('搜索: Beta');
+    await ctx.win.locator('#searchInput').fill('');
     await expect(ctx.win.locator('#filterStatus')).toHaveClass(/hidden/);
 
     // 未分组条件行本地化（中文 -> 未分组；不是原始英文 ID）
     await ctx.win.evaluate(() => setFilter('group', 'ungrouped'));
-    await expect(ctx.win.locator('#filterStatus .fs-tag-label')).toContainText('未分组');
-    expect(await ctx.win.evaluate(() => document.querySelector('#filterStatus .fs-tag-label').textContent)).not.toContain('ungrouped');
+    await expect(ctx.win.locator('#workspaceTitle')).toHaveText('未分组');
+    await expect(ctx.win.locator('#filterStatus')).toHaveClass(/hidden/);
+    await ctx.win.screenshot({ path: test.info().outputPath('compact-workspace-heading.png') });
 
     // 备忘录/文档视图：查询 + 分组下正确计数（Alpha 属于恶意分组 groupId）
     await ctx.win.evaluate((id) => setFilter('group', id), groupId);
@@ -3885,7 +3918,7 @@ test('工作区工具栏：四个视图切换时控件位置固定，画布命�
     const menu = win.locator('#toolbarMoreMenu');
     const positions = () => win.evaluate(() => [
       '#searchInput', '#viewBoard', '#viewMemo', '#viewTodo', '#viewDoc',
-      '#btnBatchToggle', '#btnUndo', '#btnRedo', '#btnToolbarMore'
+      '#btnBatchToggle', '#btnUndo', '#btnRedo', '.workspace-layout-actions'
     ].map(id => {
       const { x, y, width, height } = document.querySelector(id).getBoundingClientRect();
       return [x, y, width, height];
@@ -3897,6 +3930,18 @@ test('工作区工具栏：四个视图切换时控件位置固定，画布命�
       await expect.poll(() => win.evaluate(() => innerWidth)).toBe(width);
       await win.locator('#viewBoard').click();
       const baseline = await positions();
+      if (width === 640) {
+        for (const id of ['#btnBatchToggle', '#btnQuickArrange']) {
+          const offset = await win.locator(id).evaluate(button => {
+            const frame = button.getBoundingClientRect();
+            const icon = button.querySelector('.ui-icon').getBoundingClientRect();
+            return { x: icon.x + icon.width / 2 - (frame.x + frame.width / 2),
+              y: icon.y + icon.height / 2 - (frame.y + frame.height / 2) };
+          });
+          expect(Math.abs(offset.x)).toBeLessThan(0.5);
+          expect(Math.abs(offset.y)).toBeLessThan(0.5);
+        }
+      }
       for (const view of ['Memo', 'Todo', 'Doc', 'Board']) {
         await win.locator('#view' + view).click();
         await expect(win.locator('#view' + view)).toHaveAttribute('aria-pressed', 'true');
@@ -4213,7 +4258,7 @@ test('更新安装前独立便签保存失败则保留窗口', async () => {
     });
     const result = await ctx.win.evaluate(() => window.api.quitAndInstall());
     expect(result.ok).toBe(false);
-    await expect(noteWin.locator('#dnUnpin')).toHaveText('⚠');
+    await expect(noteWin.locator('#dnUnpin use')).toHaveAttribute('href', '#ui-warning');
     expect(await ctx.electronApp.evaluate(({ BrowserWindow }) =>
       BrowserWindow.getAllWindows().filter((win) => !win.isDestroyed()).length
     )).toBeGreaterThan(0);
@@ -4516,6 +4561,46 @@ test('退出应用前也会保存独立便签最后一次编辑', async () => {
   } finally { await closeApp(ctx); }
 });
 
+test('任务栏关闭：原生关闭请求唤回最小化窗口并要求确认', async () => {
+  const ctx = await openApp({ seed: searchViewSeed() });
+  const { electronApp, win } = ctx;
+  try {
+    const overlay = win.locator('#closeOverlay');
+    const cancel = win.locator('#btnCloseCancel');
+    await electronApp.evaluate(({ BrowserWindow }) => {
+      const main = BrowserWindow.getAllWindows()[0];
+      main.minimize();
+      main.close();
+    });
+    await expect(overlay).toBeVisible();
+    await expect.poll(() => electronApp.evaluate(({ BrowserWindow }) => {
+      const main = BrowserWindow.getAllWindows()[0];
+      return main.isVisible() && !main.isMinimized();
+    })).toBe(true);
+    await expect(cancel).toBeFocused();
+    await electronApp.evaluate(({ BrowserWindow }) => BrowserWindow.getAllWindows()[0].close());
+    await expect(cancel).toBeFocused();
+    await win.keyboard.press('Tab');
+    await expect(win.locator('#btnCloseHide')).toBeFocused();
+    await win.keyboard.press('Shift+Tab');
+    await expect(cancel).toBeFocused();
+    await win.screenshot({ path: test.info().outputPath('native-close-confirmation.png') });
+    await win.keyboard.press('Escape');
+    await expect(overlay).toBeHidden();
+    await expect(win.locator('#board')).toBeVisible();
+
+    await electronApp.evaluate(({ BrowserWindow }) => {
+      const main = BrowserWindow.getAllWindows()[0];
+      main.hide();
+      main.close();
+    });
+    await expect(overlay).toBeVisible();
+    await expect(cancel).toBeFocused();
+    await cancel.click();
+    await expect(overlay).toBeHidden();
+  } finally { await closeApp(ctx); }
+});
+
 test('关闭确认：触发关闭弹主题化确认框，取消则窗口保持', async () => {
   const ctx = await openApp();
   try {
@@ -4589,7 +4674,8 @@ test('工作区侧栏：长分组可滚动选择，窄窗可用键盘打开与�
     const last = win.locator('#groupChips button').getByText('一个特别长的分组名字测试23', { exact: true });
     await last.click();
     await expect(win.locator('#workspaceTitle')).toHaveText('一个特别长的分组名字测试23');
-    expect(await sidebar.evaluate((node) => node.scrollTop)).toBeGreaterThan(0);
+    expect(await sidebar.locator('.workspace-nav-items').evaluate((node) => node.scrollTop)).toBeGreaterThan(0);
+    await expect(sidebar.getByRole('button', { name: '外观', exact: true })).toHaveCount(0);
     await expect(win.locator('#viewDoc')).toBeInViewport();
 
     await resize(640);
@@ -4609,6 +4695,13 @@ test('工作区侧栏：长分组可滚动选择，窄窗可用键盘打开与�
     await expect(sidebar).toBeHidden();
     await expect(win.locator('#workspaceTitle')).toHaveText('全部便签');
     await expect(win.locator('#btnAdd')).toBeInViewport();
+    const settings = win.locator('#btnSettings');
+    await settings.focus();
+    await win.keyboard.press('Enter');
+    await expect(win.locator('.sp-nav-item[data-tab="appearance"]')).toHaveClass(/active/);
+    await expect(win.locator('#settingsPanel')).toBeVisible();
+    await win.locator('#btnCloseSettings').click();
+    await expect(settings).toBeFocused();
   } finally { await closeApp(ctx); }
 });
 
@@ -4698,6 +4791,39 @@ test('画布滚动条：内容超出视口时出现', async () => {
   } finally {
     await closeApp(ctx);
   }
+});
+
+test('窄便签底栏保留长分组、提醒与更新时间，编辑沿用自定义圆角', async () => {
+  const seed = searchViewSeed();
+  const name = '跨分组项目的超长分组名称'.repeat(4);
+  seed.groups[0].name = name;
+  seed.notes = [Object.assign(seed.notes[0], { w: 160, reminder: {
+    enabled: true, fired: true, time: new Date(2026, 11, 9, 20, 15).toISOString()
+  } })];
+  seed.settings.noteRadius = 19;
+  const ctx = await openApp({ seed });
+  const { win } = ctx;
+  try {
+    const card = win.locator('#board .note');
+    await card.locator('.note-title').focus();
+    await expect(card).toHaveCSS('border-top-left-radius', '19px');
+    await expect(card.locator('.group-tag')).toHaveAttribute('title', name);
+    await expect(card.locator('.reminder-chip use')).toHaveAttribute('href', '#ui-clock');
+    const footer = await card.locator('.note-foot').evaluate(el => {
+      const items = [...el.children].map(item => item.getBoundingClientRect());
+      const label = el.querySelector('.group-tag .note-foot-label');
+      const handle = el.nextElementSibling.getBoundingClientRect();
+      const overlaps = (a, b) => a.right > b.left && a.left < b.right && a.bottom > b.top && a.top < b.bottom;
+      const reminderLabel = el.querySelector(".reminder-chip .note-foot-label");
+      return {
+        truncated: label.scrollWidth > label.clientWidth,
+        reminderFits: reminderLabel.scrollWidth === reminderLabel.clientWidth,
+        separated: items.every((item, index) => !items.slice(0, index).some(other => overlaps(item, other))),
+        clearOfHandle: items.every(item => !overlaps(item, handle))
+      };
+    });
+    expect(footer).toEqual({ truncated: true, reminderFits: true, separated: true, clearOfHandle: true });
+  } finally { await closeApp(ctx); }
 });
 
 // —— 阶段 B：便签外观自定义（圆角/阴影/边框/图案）实时生效 ——
@@ -4812,8 +4938,33 @@ test('画布缩放：工具栏按钮改变缩放并持久化，重置恢复 100%
   try {
     // 初始 100%
     await expect(ctx.win.locator('#canvasToolbar')).toBeVisible();
-    expect(await ctx.win.locator('#zoomLabel').textContent()).toBe('100%');
+    await expect(ctx.win.locator('#zoomLabel')).toHaveText('100%');
+    await expect(ctx.win.locator('#zoomLabel')).toBeVisible();
+    await expect(ctx.win.locator('#ctExpand')).toHaveAttribute('aria-expanded', 'false');
     expect(await ctx.win.evaluate(() => state.settings.boardZoom)).toBe(1);
+    const zoom = ctx.win.locator('#ctExpand');
+    for (const width of [640, 1080, 1480]) {
+      await ctx.electronApp.evaluate(({ BrowserWindow }, size) => BrowserWindow.getAllWindows()[0].setSize(size, 700), width);
+      await expect.poll(() => ctx.win.evaluate(() => innerWidth)).toBe(width);
+      if (width > 820) await expect(ctx.win.locator('#workspaceGreeting')).toBeVisible();
+      const actions = ctx.win.locator('.workspace-actions');
+      const original = await actions.boundingBox();
+      await zoom.click();
+      await expect(ctx.win.locator('#btnZoomOut')).toBeVisible();
+      await expect.poll(() => ctx.win.evaluate(() => {
+        const clip = document.querySelector('#ctGroup').getBoundingClientRect();
+        const toggle = document.querySelector('#ctExpand').getBoundingClientRect();
+        const row = document.querySelector('.workspace-toolbar').getBoundingClientRect();
+        return clip.width >= 119 && clip.right <= toggle.left + 1 && clip.bottom < row.top;
+      })).toBe(true);
+      expect(await actions.boundingBox()).toEqual(original);
+      await ctx.win.screenshot({ path: test.info().outputPath('zoom-left-' + width + '.png') });
+      await ctx.win.locator('#btnZoomOut').focus();
+      await ctx.win.keyboard.press('Escape');
+      await expect(zoom).toBeFocused();
+      await expect(zoom).toHaveAttribute('aria-expanded', 'false');
+      await expect(ctx.win.locator('#ctGroup')).toHaveAttribute('inert', '');
+    }
     // 展开工具栏显示全部缩放按钮
     await stableClick(ctx.win.locator('#ctExpand'));
     await expect(ctx.win.locator('#canvasToolbar')).toHaveClass(/expanded/);
@@ -4838,6 +4989,11 @@ test('画布缩放：工具栏按钮改变缩放并持久化，重置恢复 100%
     await ctx.win.waitForTimeout(700);
     const data = JSON.parse(await fs.readFile(path.join(ctx.userDataDir, 'notes-data.json'), 'utf-8'));
     expect(data.settings.boardZoom).toBe(1.1);
+    await stableClick(ctx.win.locator('#ctExpand'));
+    await expect(ctx.win.locator('#ctExpand')).toHaveAttribute('aria-expanded', 'false');
+    await expect(ctx.win.locator('#zoomLabel')).toBeVisible();
+    await expect(ctx.win.locator('#zoomLabel')).toHaveText('110%');
+    await ctx.win.screenshot({ path: test.info().outputPath('canvas-zoom-compact.png') });
   } finally {
     await closeApp(ctx);
   }
@@ -4861,6 +5017,22 @@ test('画布平移：按住空格拖过便签、中键拖动均移动视口，�
     // 自定义悬停提示会将 title 暂存到 data-tip-text，文案应在两处保持一致。
     const panHint = await win.locator('#btnZoomPan').evaluate((el) => el.getAttribute('title') || el.getAttribute('data-tip-text'));
     expect(panHint).toMatch(/空格键＋鼠标左键拖动.*鼠标中键拖动.*单按空格不会移动/);
+    const pan = win.locator('#btnZoomPan');
+    await expect(pan.locator('use')).toHaveAttribute('href', '#ui-pan');
+    await expect(pan.locator('.ui-icon')).toHaveCSS('stroke-width', '1.35px');
+    await expect(win.locator('#ctExpand use')).toHaveAttribute('href', '#ui-cm-chevron');
+    await expect(win.locator('#ctExpand .ui-icon')).toHaveCSS('transform', 'none');
+    await pan.hover();
+    const tip = win.locator('#tooltip.visible');
+    await expect(tip).toHaveText(panHint);
+    expect(await tip.evaluate(el => {
+      const bounds = el.getBoundingClientRect();
+      const lineHeight = parseFloat(getComputedStyle(el).lineHeight);
+      return bounds.left >= 0 && bounds.right <= innerWidth &&
+        el.scrollWidth <= el.clientWidth && el.scrollHeight <= el.clientHeight &&
+        el.clientHeight >= 2 * lineHeight;
+    })).toBe(true);
+    await tip.screenshot({ path: test.info().outputPath('canvas-pan-tooltip.png') });
     await win.evaluate(() => { const c = document.querySelector('#canvas'); c.scrollLeft = 180; c.scrollTop = 160; });
     const head = win.locator('#board .note[data-id="pan-note"] .note-head');
     const rect = await head.boundingBox();
@@ -6176,27 +6348,6 @@ async function v128TopNoteAt(win, x, y) {
   }, { x, y });
 }
 
-// 诊断：某点「第一个」命中元素是否属于工具栏；并返回最上层元素信息。
-async function v128TopElAt(win, x, y) {
-  return win.evaluate(({ x, y }) => {
-    const els = document.elementsFromPoint(x, y);
-    const first = els[0];
-    return {
-      firstTag: first ? first.tagName : null,
-      firstInToolbar: !!(first && first.closest && first.closest("#canvasToolbar")),
-      stack: els.slice(0, 5).map((e) => (e.id ? "#" + e.id : (e.className || e.tagName)))
-    };
-  }, { x, y });
-}
-
-// 卡片矩形是否包含某点（用于证明拖动后的卡确实盖住工具栏中心）。
-async function v128RectContains(win, id, x, y) {
-  return win.evaluate(({ id, x, y }) => {
-    const r = document.querySelector(".note[data-id=\"" + id + "\"]").getBoundingClientRect();
-    return x >= r.left && x <= r.right && y >= r.top && y <= r.bottom;
-  }, { id, x, y });
-}
-
 test("V128-11 单卡拖动：低层便签拖到高层（pinned）便签之上时抬升，松手后精确还原（含 !important 优先级）", async ({}, testInfo) => {
   // a 低 z（内联 1 !important）在上、b 高 z（5000）在下；起点互不遮挡，a 的 head 左侧可真实按下
   const seed = { version: 2, settings: { viewMode: "board", lastSeenVersion: EXPECTED_VERSION }, groups: [], trash: [],
@@ -6228,16 +6379,15 @@ test("V128-11 单卡拖动：低层便签拖到高层（pinned）便签之上时
     // 抓一张「整卡与 b 重叠」的截图（testInfo.outputPath：可移植，落在测试输出目录）
     await win.screenshot({ path: testInfo.outputPath("v128-11-overlap.png") });
 
-    // 把 a 真实拖到工具栏中心，使其矩形覆盖该点；断言该点第一命中仍属于工具栏（#board isolation 生效）
-    const tb = await win.evaluate(() => { const t = document.getElementById("canvasToolbar"); const r = t.getBoundingClientRect(); return { x: r.left + r.width / 2, y: r.top + r.height / 2, visible: !t.classList.contains("hidden") }; });
-    expect(tb.visible).toBe(true);
-    await win.mouse.move(tb.x, tb.y, { steps: 6 });
-    await expect.poll(() => v128RectContains(win, "a", tb.x, tb.y)).toBe(true);
-    const overlay = await v128TopElAt(win, tb.x, tb.y);
-    expect(overlay.firstInToolbar).toBe(true);
-
-    // 拖动中再抓一张隔离截图（合成便签，无私有数据），落在测试输出目录供目视
-    await win.screenshot({ path: testInfo.outputPath("v128-11-drag.png") });
+    // 页头缩放位于画布外，拖动中的卡片不遮挡入口。
+    const zoomOutsideCanvas = await win.evaluate(() => {
+      const control = document.querySelector("#workspaceHeader #ctExpand");
+      const rect = control.getBoundingClientRect();
+      const canvasTop = document.querySelector("#canvas").getBoundingClientRect().top;
+      const hit = document.elementFromPoint(rect.x + rect.width / 2, rect.y + rect.height / 2);
+      return rect.height > 0 && rect.bottom <= canvasTop && control.contains(hit);
+    });
+    expect(zoomOutsideCanvas).toBe(true);
 
     await win.mouse.up();
     // 精确还原：inline z 值 + 优先级原样、类/transform 清理、body 类移除
@@ -7990,14 +8140,24 @@ async function v128BatchBarFits(win) {
       const a = rects[i], b = rects[j];
       if (a.left < b.right - 1 && a.right > b.left + 1 && a.top < b.bottom - 1 && a.bottom > b.top + 1) overlaps++;
     }
+    const iconsCentered = Array.from(bar.querySelectorAll('.batch-btn > .ui-icon')).every((icon) => {
+      const button = icon.parentElement;
+      if (button.classList.contains('hidden')) return true;
+      const centerY = (element) => {
+        const rect = element.getBoundingClientRect();
+        return rect.top + rect.height / 2;
+      };
+      return Math.abs(centerY(icon) - centerY(button)) <= 0.5 &&
+        Math.abs(centerY(icon) - centerY(button.querySelector('span'))) <= 0.5;
+    });
     const feedback = document.querySelector('#toast');
     const toastClear = feedback.classList.contains('hidden') || feedback.getBoundingClientRect().bottom <= box.top - 6;
     const controls = document.querySelector('#canvasToolbar');
     const c = controls.getBoundingClientRect();
     const canvasClear = controls.classList.contains('hidden') || c.width === 0 || c.height === 0 || box.right <= c.left || box.left >= c.right || box.bottom <= c.top || box.top >= c.bottom;
     return { inside: box.left >= 0 && box.right <= innerWidth && box.top >= 0 && box.bottom <= innerHeight,
-      childrenInside: rects.every((r) => r.left >= box.left && r.right <= box.right && r.top >= box.top && r.bottom <= box.bottom), overlaps, toastClear, canvasClear };
-  })).toEqual({ inside: true, childrenInside: true, overlaps: 0, toastClear: true, canvasClear: true });
+      childrenInside: rects.every((r) => r.left >= box.left && r.right <= box.right && r.top >= box.top && r.bottom <= box.bottom), overlaps, toastClear, canvasClear, iconsCentered };
+  })).toEqual({ inside: true, childrenInside: true, overlaps: 0, toastClear: true, canvasClear: true, iconsCentered: true });
 }
 
 test('V128-06 selected arrange uses real batch UI, preserves fixed and hidden notes, saves and undoes once', async ({}, testInfo) => {
@@ -8030,7 +8190,7 @@ test('V128-06 selected arrange uses real batch UI, preserves fixed and hidden no
     for (const id of ['a', 'b']) await win.locator('#board .note[data-id="' + id + '"] .note-content').click();
     await expect(win.locator('#batchCount')).toHaveText('已选 2 项');
     await expect(arrange).toBeEnabled();
-    await expect(arrange).toHaveAccessibleName('⚡ 整理选中');
+    await expect(arrange).toHaveAccessibleName('整理选中');
     await arrange.click();
     const after = await notes();
     const expected = JSON.parse(JSON.stringify(before));
@@ -8089,7 +8249,7 @@ test('V128-06 group selected arrange keeps all-view positions and fits narrow En
     await testInfo.attach('batch-entry-state', { body: JSON.stringify(entryState), contentType: 'application/json' });
     await win.locator('#btnBatchToggle').click();
     const arrange = win.locator('#btnBatchArrange');
-    await expect(arrange).toHaveAccessibleName('⚡ Arrange selected');
+    await expect(arrange).toHaveAccessibleName('Arrange selected');
     await expect(arrange).toBeDisabled();
     await win.locator('#btnBatchSelectAll').click();
     await win.locator('#board .note[data-id="fixed"] .note-content').click();
@@ -8184,6 +8344,11 @@ test('壁纸主题同步，且新建便签可切换跟随主题与记住的自�
     const colorOf = (selector, prop) => win.locator(selector).evaluate((el, key) => getComputedStyle(el)[key], prop);
     const before = await colorOf('#titlebar', 'backgroundColor');
     const buttonBefore = await colorOf('#btnAdd', 'backgroundColor');
+    const mintNote = await win.evaluate(() => {
+      document.getElementById('btnAdd').click();
+      return state.notes.find(note => note.color === '#d4efdf')?.id;
+    });
+    expect(mintNote).toBeTruthy();
     await win.locator('#btnSettings').click();
     await win.locator('#themeGrid .theme-card', { hasText: '羊皮纸' }).click();
     await win.locator('[data-app-module="note"]').click();
@@ -8211,6 +8376,7 @@ test('壁纸主题同步，且新建便签可切换跟随主题与记住的自�
     const colors = await win.evaluate(id => ({ previous: state.notes.find(note => note.id === id).color,
       themed: state.notes.some(note => note.color === '#f7d65a'), savedCustom: state.settings.noteColor }), created);
     expect(colors).toEqual({ previous: '#fa8072', themed: true, savedCustom: '#fa8072' });
+    expect(await win.evaluate(id => state.notes.find(note => note.id === id)?.color, mintNote)).toBe('#d4efdf');
     await win.evaluate(() => saveNow());
     expect((await ux01ReadData(ctx.userDataDir)).settings.noteColorFollowsTheme).toBe(true);
   } finally { await closeApp(ctx); }
@@ -8747,5 +8913,723 @@ test('提醒快捷项可设 15 分钟后与今天 18:00，到点只隐藏当天�
     await win.locator('#btnReminderCancel').click();
     await win.evaluate(() => openReminder(state.notes[0]));
     await expect(win.locator('#reminderTodayEvening')).toBeHidden();
+  } finally { await closeApp(ctx); }
+});
+
+test('备忘录长标题与更新时间在窄窗保持独立，完整工具仍可从更多打开', async () => {
+  const seed = searchViewSeed();
+  seed.settings.viewMode = 'memo';
+  seed.settings.noteToolbarCompact = false;
+  const longTitle = '这是一条用来检查窄窗口布局的很长很长的备忘录标题'.repeat(3);
+  seed.notes[0].title = longTitle;
+  seed.notes[0].reminder = { enabled: true, time: '2030-01-01T06:00:00.000Z', fired: false };
+  const ctx = await openApp({ seed });
+  try {
+    const { win } = ctx;
+    await ctx.electronApp.evaluate(({ BrowserWindow }) => BrowserWindow.getAllWindows()[0].setSize(640, 620));
+    await expect.poll(() => win.evaluate(() => innerWidth)).toBe(640);
+    const row = win.locator('#memoList .memo-row[data-id="home"]');
+    const title = row.locator('.memo-head .note-title');
+    const more = row.locator('.memo-head .t-more');
+    await expect(title).toHaveValue(longTitle);
+    await expect(row.locator('.memo-foot .date')).toBeVisible();
+    await expect(row.locator('.memo-foot .reminder-chip')).toBeVisible();
+    await expect(row.locator('.memo-foot .reminder-chip use')).toHaveAttribute('href', '#ui-clock');
+    await expect(row.locator('.memo-full-tools')).toBeHidden();
+    const [titleBox, moreBox] = await Promise.all([title.boundingBox(), more.boundingBox()]);
+    expect(Math.abs(titleBox.y + titleBox.height / 2 - moreBox.y - moreBox.height / 2)).toBeLessThan(2);
+    expect(titleBox.x + titleBox.width).toBeLessThanOrEqual(moreBox.x);
+    await row.screenshot({ path: test.info().outputPath('memo-narrow-title.png') });
+    await more.press('Enter');
+    await expect(win.locator('.ctx-menu')).toBeVisible();
+    await win.keyboard.press('Escape');
+    await title.focus();
+    await expect(more).toBeHidden();
+    await expect(title).toHaveValue(longTitle);
+  } finally { await closeApp(ctx); }
+});
+
+test('系统提醒截短长标题、概括未完成任务，点击打开对应便签', async () => {
+  const seed = searchViewSeed();
+  const fullTitle = '很长的提醒标题'.repeat(10);
+  seed.notes[0].title = fullTitle;
+  seed.notes[0].items = [
+    { id: 'done', text: '已经完成', done: true },
+    { id: 'one', text: '**买牛奶**', done: false },
+    { id: 'two', text: '寄快递 [[file:attachment]]', done: false },
+    { id: 'three', text: '准备晚饭', done: false }
+  ];
+  const ctx = await openApp({ seed });
+  try {
+    await ctx.electronApp.evaluate(({ Notification }) => {
+      Notification.isSupported = () => true;
+      Notification.prototype.show = function () {
+        globalThis.capturedReminder = this;
+      };
+    });
+    expect(await ctx.win.evaluate(() => {
+      state.notes[0].reminder = { enabled: true, fired: false, time: new Date(Date.now() + 1250).toISOString() };
+      return saveNow();
+    })).toBe(true);
+    await expect(ctx.win.locator('#alarmOverlay')).toBeVisible();
+    const notification = await ctx.electronApp.evaluate(() => ({
+      title: globalThis.capturedReminder.title,
+      body: globalThis.capturedReminder.body
+    }));
+    expect(notification.title).toBe(fullTitle.slice(0, 32) + '…');
+    expect(notification.body).toBe('买牛奶\n寄快递 · 另有 1 项');
+    await ctx.electronApp.evaluate(() => globalThis.capturedReminder.emit('click'));
+    await expect(ctx.win.locator('#alarmOverlay')).toBeHidden();
+    await expect(ctx.win.locator('#docTitle')).toHaveValue(fullTitle);
+    await expect(ctx.win.locator('#btnDocBack')).toBeFocused();
+  } finally { await closeApp(ctx); }
+});
+
+test('关联便签数据：回收站、撤销重做、JSON 备份和重启', async () => {
+  const seed = searchViewSeed();
+  const [source, target] = seed.notes;
+  const sourceId = source.id;
+  const targetId = target.id;
+  const links = [{ targetId, label: '项目参考' }];
+  source.links = links;
+  const ctx = await openApp({ seed });
+  let reopened;
+  try {
+    const { win } = ctx;
+    const readLinks = () => win.evaluate(id => state.notes.find(note => note.id === id)?.links, sourceId);
+    await win.evaluate(id => deleteNote(id), targetId);
+    expect(await readLinks()).toEqual(links);
+    expect(await win.evaluate(id => state.trash.some(entry => entry.note.id === id), targetId)).toBe(true);
+    await win.evaluate(() => undo());
+    await expect(win.locator('#board .note[data-id="' + targetId + '"]')).toBeVisible();
+    await win.evaluate(() => redo());
+    await expect(win.locator('#board .note[data-id="' + targetId + '"]')).toHaveCount(0);
+    expect(await readLinks()).toEqual(links);
+    const backup = await win.evaluate(() => window.api.backupExport(state, null));
+    expect(backup.ok).toBe(true);
+    await ctx.electronApp.evaluate(({ dialog }, file) => {
+      dialog.showOpenDialog = async () => ({ canceled: false, filePaths: [file] });
+    }, backup.path);
+    const imported = await win.evaluate(async id => {
+      const result = await window.api.importData();
+      return result.ok ? migrateData(result.data).notes.find(note => note.id === id)?.links : null;
+    }, sourceId);
+    expect(imported).toEqual(links);
+    await win.evaluate(id => restoreTrashItem(id), targetId);
+    expect(await readLinks()).toEqual(links);
+    expect(await win.evaluate(() => saveNow())).toBe(true);
+    await ctx.electronApp.close();
+    reopened = await openApp({ userDataDir: ctx.userDataDir });
+    const restored = reopened.win;
+    expect(await restored.evaluate(id => state.notes.find(note => note.id === id)?.links, sourceId)).toEqual(links);
+    await restored.evaluate(id => { deleteNote(id); deleteTrashItem(id); }, targetId);
+    expect(await restored.evaluate(id => state.notes.find(note => note.id === id)?.links, sourceId)).toBeUndefined();
+  } finally {
+    if (reopened) await closeApp(reopened);
+    else await closeApp(ctx);
+  }
+});
+
+test('画布关联：侧栏按需进入、预览吸附、拖动跟随并按筛选隐藏连线', async () => {
+  const seed = searchViewSeed();
+  seed.notes = seed.notes.slice(0, 2);
+  seed.notes[1].x = 385; seed.notes[1].y = 110; seed.notes[1].positionAll = { x: 385, y: 110 };
+  const ctx = await openApp({ seed });
+  const { win } = ctx;
+  try {
+    const source = win.locator('.note[data-id="home"]');
+    const target = win.locator('.note[data-id="work"]');
+    const prompt = win.locator('#canvasLinkPrompt');
+    const curve = win.locator('#canvasLinks .note-link-line');
+    const begin = async () => {
+      await win.locator('#btnCanvasLink').click();
+      await expect(prompt).toBeVisible();
+    };
+    await expect(prompt).toBeHidden();
+    await expect(win.locator('#workspaceHeader #zoomLabel')).toHaveText('100%');
+    await win.locator('#btnQuickArrange').hover();
+    await expect(win.locator('#tooltip.visible')).toHaveText('一键整理');
+    await win.screenshot({ path: test.info().outputPath('arrange-plain-tooltip.png') });
+    await begin();
+    await source.click();
+    await expect(prompt).toContainText('选择目标便签');
+    await target.hover();
+    await expect(win.locator('#canvasLinks .link-preview')).toHaveCount(1);
+    await win.screenshot({ path: test.info().outputPath('canvas-link-active.png') });
+    await win.keyboard.press('Escape');
+    await expect(prompt).toBeHidden();
+    await expect(curve).toHaveCount(0);
+    await source.locator('.note-title').click({ button: 'right' });
+    await win.getByRole('button', { name: '关联便签', exact: true }).click();
+    await expect(source).toHaveClass(/link-source/);
+    await expect(prompt).toContainText('选择目标便签');
+    await target.click();
+    await expect(prompt).toBeHidden();
+    await expect(curve).toHaveCount(1);
+    const before = await curve.getAttribute('d');
+    const grip = await target.locator('.note-grip').boundingBox();
+    await win.mouse.move(grip.x + grip.width / 2, grip.y + grip.height / 2);
+    await win.mouse.down();
+    await win.mouse.move(grip.x + 40, grip.y + 43, { steps: 6 });
+    await expect(curve).not.toHaveAttribute('d', before);
+    await win.mouse.up();
+    await win.locator('#searchInput').fill('生活清单');
+    await expect(target).toHaveCount(0);
+    await source.hover();
+    await expect(curve).toHaveCount(0);
+    await win.locator('#searchInput').fill('');
+    await expect(target).toBeVisible();
+    await source.hover();
+    await expect(curve).toHaveCount(1);
+  } finally { await closeApp(ctx); }
+});
+
+test('画布涂鸦：侧栏入口、笔迹归属、撤销、橡皮擦与重启', async () => {
+  const seed = searchViewSeed();
+  seed.notes = seed.notes.slice(0, 2);
+  Object.assign(seed.notes[1], { x: 350, y: 30, positionAll: { x: 350, y: 30 } });
+  const ctx = await openApp({ seed });
+  const { win } = ctx;
+  const host = win.locator('#board');
+  const card = host.locator('.note[data-id="home"]');
+  const backgroundInk = page => page.locator('#board > .canvas-ink path');
+  const noteInk = page => page.locator('#board .note[data-id="home"] > .canvas-ink path');
+  const tools = win.locator('#canvasInkTools');
+  const draw = async (box, x, y) => {
+    await win.mouse.move(box.x + x, box.y + y);
+    await win.mouse.down();
+    await win.mouse.move(box.x + x + 60, box.y + y, { steps: 8 });
+    await win.mouse.up();
+  };
+  let reopened;
+  try {
+    await ctx.electronApp.evaluate(({ BrowserWindow }) => {
+      BrowserWindow.getAllWindows()[0].setSize(1080, 720);
+    });
+    await expect(tools).toBeHidden();
+    await win.locator('#btnCanvasDraw').click();
+    await expect(tools).toBeVisible();
+    const boardBox = await host.boundingBox();
+    const hitId = await win.evaluate(({ x, y }) => document.elementFromPoint(x + 35, y + 330)?.id, boardBox);
+    expect(hitId).toBe('board');
+    await draw(boardBox, 35, 330);
+    await expect(backgroundInk(win)).toHaveCount(1);
+
+    await tools.getByRole('button', { name: '马克笔' }).click();
+    await tools.getByRole('button', { name: '砖红' }).click();
+    await draw(await card.boundingBox(), 42, 95);
+    await expect(noteInk(win)).toHaveClass('ink-marker');
+    await expect(noteInk(win)).toHaveAttribute('stroke', '#b73735');
+    await expect(noteInk(win)).toHaveAttribute('stroke-width', '10');
+    await win.screenshot({ path: test.info().outputPath('canvas-ink-tools.png') });
+
+    await win.keyboard.press('Escape');
+    await expect(tools).toBeHidden();
+    await expect(win.locator('#btnCanvasDraw')).toBeFocused();
+    const before = await noteInk(win).boundingBox();
+    const grip = await card.locator('.note-grip').boundingBox();
+    await win.mouse.move(grip.x + grip.width / 2, grip.y + grip.height / 2);
+    await win.mouse.down();
+    await win.mouse.move(grip.x + 75, grip.y + 14, { steps: 6 });
+    await win.mouse.up();
+    expect((await noteInk(win).boundingBox()).x).toBeGreaterThan(before.x + 25);
+
+    const strokePath = await noteInk(win).getAttribute('d');
+    await win.locator('#ctExpand').click();
+    await win.locator('#btnZoomIn').click();
+    await expect(win.locator('#zoomLabel')).toHaveText('110%');
+    expect((await noteInk(win).boundingBox()).width).toBeGreaterThan(before.width);
+    await win.locator('#btnZoomReset').click();
+    await win.locator('#btnQuickArrange').click();
+    await expect(noteInk(win)).toHaveAttribute('d', strokePath);
+    await win.locator('#groupChips').getByRole('button', { name: '家庭' }).click();
+    await expect(noteInk(win)).toHaveCount(1);
+    await expect(backgroundInk(win)).toHaveCount(0);
+    await win.locator('#filterbar [data-group="all"]').click();
+    await expect(backgroundInk(win)).toHaveCount(1);
+
+    await win.locator('#btnCanvasDraw').click();
+    await tools.getByRole('button', { name: '橡皮擦' }).click();
+    const hit = await noteInk(win).boundingBox();
+    await win.mouse.click(hit.x + hit.width / 2, hit.y);
+    await expect(noteInk(win)).toHaveCount(0);
+    await win.keyboard.press('Control+z');
+    await expect(noteInk(win)).toHaveCount(1);
+    await win.keyboard.press('Control+Shift+z');
+    await expect(noteInk(win)).toHaveCount(0);
+    await win.keyboard.press('Control+z');
+
+    await win.locator('#btnCanvasLink').click();
+    await expect(tools).toBeHidden();
+    await expect(win.locator('#canvasLinkPrompt')).toBeVisible();
+    await win.keyboard.press('Escape');
+    await win.locator('#viewTodo').click();
+    await expect(win.locator('#canvasShortcuts')).toBeHidden();
+    await win.locator('#viewBoard').click();
+    await expect(win.locator('#canvasShortcuts')).toBeVisible();
+    await expect(backgroundInk(win)).toHaveCount(1);
+    await expect(noteInk(win)).toHaveCount(1);
+    await win.evaluate(() => saveNow());
+
+    await ctx.electronApp.close();
+    reopened = await openApp({ userDataDir: ctx.userDataDir });
+    await expect(backgroundInk(reopened.win)).toHaveAttribute('stroke', 'currentColor');
+    await expect(noteInk(reopened.win)).toHaveAttribute('stroke', '#b73735');
+    const narrowTools = reopened.win.locator('#canvasInkTools');
+    await expect(narrowTools).toBeHidden();
+    await reopened.electronApp.evaluate(({ BrowserWindow }) => {
+      BrowserWindow.getAllWindows()[0].setSize(640, 680);
+    });
+    await reopened.win.evaluate(() => {
+      state.settings.appearanceMode = 'dark';
+      applyTheme();
+    });
+    await reopened.win.locator('#btnWorkspaceNav').click();
+    await reopened.win.locator('#btnCanvasDraw').click();
+    await expect(narrowTools).toBeVisible();
+    await expect(reopened.win.locator('#filterbar')).toBeHidden();
+    await expect(narrowTools.locator('[data-ink-tool="pen"]')).toBeFocused();
+    await reopened.win.screenshot({ path: test.info().outputPath('canvas-ink-narrow-dark.png') });
+    await reopened.win.keyboard.press('Escape');
+    await expect(narrowTools).toBeHidden();
+    await expect(reopened.win.locator('#btnWorkspaceNav')).toBeFocused();
+  } finally {
+    await closeApp(reopened || ctx);
+  }
+});
+
+test('画布关联线：默认常驻，关闭后按需显示并记住选择', async () => {
+  const seed = searchViewSeed();
+  seed.notes = seed.notes.slice(0, 2);
+  const [source, target] = seed.notes;
+  source.links = [{ targetId: target.id, label: '参考' }];
+  Object.assign(target, { x: 510, y: 110, positionAll: { x: 510, y: 110 } });
+  const ctx = await openApp({ seed });
+  const { win } = ctx;
+  const line = page => page.locator('#canvasLinks .note-link-line');
+  const openToggle = async page => {
+    await page.locator('#board').click({ button: 'right', position: { x: 16, y: 335 } });
+    return page.getByRole('button', { name: '始终显示关联线', exact: true });
+  };
+  let reopened;
+  try {
+    await expect(line(win)).toHaveCount(1);
+    await win.locator('#btnSettings').click();
+    await expect(line(win)).toHaveCount(0);
+    await win.keyboard.press('Escape');
+    await expect(line(win)).toHaveCount(1);
+
+    const toggle = await openToggle(win);
+    await expect(toggle).toHaveAttribute('aria-pressed', 'true');
+    await win.screenshot({ path: test.info().outputPath('canvas-link-toggle.png') });
+    await toggle.click();
+    await expect(line(win)).toHaveCount(0);
+    await win.locator('.note[data-id="home"]').hover();
+    await expect(line(win)).toHaveCount(1);
+    await win.locator('#board').hover({ position: { x: 16, y: 335 } });
+    await expect(line(win)).toHaveCount(0);
+    await win.evaluate(() => saveNow());
+
+    await ctx.electronApp.close();
+    reopened = await openApp({ userDataDir: ctx.userDataDir });
+    const restoredToggle = await openToggle(reopened.win);
+    await expect(restoredToggle).toHaveAttribute('aria-pressed', 'false');
+    await expect(line(reopened.win)).toHaveCount(0);
+    await restoredToggle.click();
+    await expect(line(reopened.win)).toHaveCount(1);
+  } finally {
+    await closeApp(reopened || ctx);
+  }
+});
+
+test('画布组件：键盘新建计时、拖放日历、提醒跳转和重启恢复', async () => {
+  const seed = searchViewSeed();
+  seed.notes = seed.notes.slice(0, 1);
+  seed.notes[0].reminder = { enabled: true, fired: true, time: new Date().setHours(23, 59, 59, 999) };
+  const ctx = await openApp({ seed });
+  const { win } = ctx;
+  let reopened;
+  try {
+    await ctx.electronApp.evaluate(({ BrowserWindow }) => BrowserWindow.getAllWindows()[0].setSize(1080, 780));
+    const timerEntry = win.getByRole('button', { name: '专注计时', exact: true });
+    await timerEntry.focus();
+    await win.keyboard.press('Enter');
+    const timer = win.locator('#board .gadget-timer');
+    const display = timer.locator('.gadget-time');
+    await expect(display).toHaveText('25:00');
+    await expect(timer.getByRole('status')).toHaveText('待开始');
+    await expect(timer.locator('progress')).toHaveJSProperty('value', 0);
+    await timer.getByRole('button', { name: '25 分钟', exact: true }).click();
+    const minutes = timer.getByRole('spinbutton', { name: '分钟' });
+    await minutes.fill('180');
+    await expect(display).toHaveText('3:00:00');
+    await expect(timer.getByRole('status')).toHaveText('3 小时');
+    const timerBody = timer.locator('.gadget-body');
+    const bodyBox = await timerBody.boundingBox();
+    const timeBox = await display.boundingBox();
+    expect(timeBox.y).toBeGreaterThanOrEqual(bodyBox.y);
+    await expect(timerBody).toHaveJSProperty('scrollTop', 0);
+    await win.screenshot({ path: test.info().outputPath('timer-duration.png') });
+    await minutes.press('Enter');
+    await expect(timer.getByRole('button', { name: '3 小时', exact: true })).toBeVisible();
+    await timer.getByRole('button', { name: '3 小时', exact: true }).click();
+    await minutes.fill('90');
+    await expect(display).toHaveText('1:30:00');
+    await expect(timer.getByRole('status')).toHaveText('1 小时 30 分钟');
+    await minutes.press('Escape');
+    await expect(display).toHaveText('3:00:00');
+    await timer.getByRole('button', { name: '3 小时', exact: true }).click();
+    await minutes.fill('5');
+    await timer.getByRole('button', { name: '保存', exact: true }).click();
+    await expect(display).toHaveText('05:00');
+    const start = timer.getByRole('button', { name: '开始' });
+    const totalDuration = timer.getByRole('button', { name: '5 分钟' });
+    const [startBox, durationBox, controlsBox] = await Promise.all([
+      start.boundingBox(), totalDuration.boundingBox(), timer.locator('.gadget-controls').boundingBox()
+    ]);
+    expect(Math.abs(startBox.x + startBox.width / 2 - controlsBox.x - controlsBox.width / 2)).toBeLessThan(1);
+    expect(durationBox.x).toBeGreaterThan(startBox.x + startBox.width);
+    const resetBox = await timer.getByRole('button', { name: '重置' }).boundingBox();
+    expect(Math.abs(resetBox.width - durationBox.width)).toBeLessThan(1);
+    await start.click();
+    await expect(timer.getByRole('button', { name: '暂停' })).toBeVisible();
+    await expect(totalDuration).toBeVisible();
+    await expect(totalDuration).toBeDisabled();
+    await expect(timer.getByRole('status')).toHaveText('专注中');
+    await expect.poll(() => timer.locator('progress').evaluate(el => el.value)).toBeGreaterThan(0);
+    const focusNote = timer.getByRole('textbox', { name: '专注备注' });
+    await expect(focusNote).toBeInViewport();
+    await focusNote.fill('整理这一轮的计划\n写完再检查');
+    await expect(timer.getByRole('status')).toHaveText('专注中');
+    await win.screenshot({ path: test.info().outputPath('focus-note-workspace.png') });
+
+    const calendarEntry = win.getByRole('button', { name: '日历', exact: true });
+    await calendarEntry.hover();
+    const boardBounds = await win.locator('#board').boundingBox();
+    await win.mouse.down();
+    await win.mouse.move(boardBounds.x + 360, boardBounds.y + 294, { steps: 12 });
+    await win.mouse.move(boardBounds.x + 360, boardBounds.y + 295);
+    await win.mouse.up();
+    const calendar = win.locator('#board .gadget-calendar');
+    await expect(calendar).toHaveCount(1);
+    await expect(calendar).toHaveCSS('left', '360px');
+    await expect(win.locator('#workspaceCount')).toHaveText('3 项');
+    const handle = calendar.locator('.note-grip');
+    await handle.hover();
+    const grip = await handle.boundingBox();
+    await win.mouse.down();
+    await expect(calendar).toHaveClass(/dragging/);
+    await win.keyboard.down('Alt');
+    try {
+      await win.mouse.move(grip.x + 75, grip.y + 12, { steps: 8 });
+      await win.mouse.up();
+    } finally {
+      await win.keyboard.up('Alt');
+    }
+    await expect(calendar).not.toHaveCSS('left', '360px');
+    const today = calendar.locator('[aria-current="date"]');
+    await expect(today).toHaveClass('gadget-has-reminders');
+    const month = calendar.locator('.gadget-month');
+    const initialMonth = await month.textContent();
+    await calendar.getByRole('button', { name: '下个月' }).click();
+    await expect(month).not.toHaveText(initialMonth);
+    await calendar.getByRole('button', { name: '上个月' }).click();
+    await today.click();
+    const editor = calendar.getByRole('textbox', { name: '当天记录' });
+    const mark = calendar.getByRole('button', { name: '标记日期' });
+    await editor.fill('整理本周计划');
+    await mark.click();
+    await expect(mark).toHaveAttribute('aria-pressed', 'true');
+    await expect(today).toHaveClass(/gadget-day-marked/);
+    const anotherDay = calendar.locator('.gadget-days button:not([aria-current])').first();
+    await anotherDay.click();
+    await expect(editor).toHaveValue('');
+    await editor.fill('准备下次会议');
+    await expect(mark).toHaveAttribute('aria-pressed', 'false');
+    await today.click();
+    await expect(editor).toHaveValue('整理本周计划');
+
+    await ctx.electronApp.evaluate(({ BrowserWindow }) => BrowserWindow.getAllWindows()[0].setSize(1480, 850));
+    const viewToggle = win.locator('#workspaceHeader .view-toggle');
+    const actions = win.locator('#workspaceHeader .workspace-actions');
+    await expect.poll(async () => {
+      const [views, batch] = await Promise.all([viewToggle.boundingBox(), actions.locator('#btnBatchToggle').boundingBox()]);
+      return batch.x - views.x - views.width;
+    }).toBeLessThan(16);
+    await win.screenshot({ path: test.info().outputPath('canvas-widgets.png') });
+    await calendar.getByRole('button', { name: '生活清单' }).click();
+    await expect(win.locator('#btnDocBack')).toBeVisible();
+    await win.locator('#btnDocBack').click();
+    await expect(calendar).toBeVisible();
+    await win.locator('#viewTodo').click();
+    await expect(win.locator('#canvasGadgetEntries')).toBeHidden();
+    await expect(win.locator('#todoList')).not.toContainText('专注计时');
+    await win.locator('#viewBoard').click();
+    await expect(timer.getByRole('button', { name: '暂停' })).toBeVisible();
+    await win.locator('#btnBatchToggle').click();
+    await win.locator('#board .gadget-timer .gadget-title').click();
+    await expect(timer).toHaveClass(/selected/);
+    await win.locator('#btnBatchToggle').click();
+
+    await win.evaluate(() => saveNow());
+    await ctx.electronApp.close();
+    reopened = await openApp({ userDataDir: ctx.userDataDir });
+    const restoredTimer = reopened.win.locator('#board .gadget-timer');
+    await expect(restoredTimer.getByRole('button', { name: '暂停' })).toBeVisible();
+    await restoredTimer.getByRole('button', { name: '暂停' }).click();
+    await restoredTimer.getByRole('button', { name: '重置' }).click();
+    await expect(restoredTimer.locator('.gadget-time')).toHaveText('05:00');
+    await expect(restoredTimer.getByRole('textbox', { name: '专注备注' })).toHaveValue('整理这一轮的计划\n写完再检查');
+    const restoredCalendar = reopened.win.locator('#board .gadget-calendar');
+    const restoredToday = restoredCalendar.locator('[aria-current="date"]');
+    const restoredEditor = restoredCalendar.getByRole('textbox', { name: '当天记录' });
+    const restoredMark = restoredCalendar.getByRole('button', { name: '标记日期' });
+    await expect(restoredToday).toHaveClass(/gadget-has-reminders/);
+    await expect(restoredToday).toHaveClass(/gadget-day-marked/);
+    await expect(restoredEditor).toHaveValue('整理本周计划');
+    await restoredMark.click();
+    await expect(restoredToday).not.toHaveClass(/gadget-day-marked/);
+    await expect(restoredEditor).toHaveValue('整理本周计划');
+    await restoredCalendar.locator('.gadget-days button:not([aria-current])').first().click();
+    await expect(restoredEditor).toHaveValue('准备下次会议');
+    await restoredToday.click();
+    await reopened.win.evaluate(() => {
+      state.settings.appearanceMode = 'dark';
+      applyTheme();
+    });
+    await reopened.win.screenshot({ path: test.info().outputPath('canvas-widgets-dark.png') });
+  } finally { await closeApp(reopened || ctx); }
+});
+
+test('画布组件验收：磁吸、备份往返与窄窗壁纸', async () => {
+  const seed = searchViewSeed();
+  const now = new Date();
+  const day = [now.getFullYear(), String(now.getMonth() + 1).padStart(2, '0'), String(now.getDate()).padStart(2, '0')].join('-');
+  const deadline = Date.now() + 10 * 60000;
+  seed.notes = [
+    { ...v128Note('focus-widget', 80, 100, 1), w: 262, h: 230, gadget: {
+      kind: 'timer', minutes: 25, remaining: 1500000, endAt: deadline, text: '复核本轮文档'
+    } },
+    v128Note('target', 450, 140, 2),
+    { ...v128Note('calendar-widget', 80, 380, 3), w: 262, h: 378, gadget: {
+      kind: 'calendar', entries: { [day]: { marked: true, text: '周会记录' } }
+    } }
+  ];
+  const wallpaper = '<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 840 620"><defs><linearGradient id="b" x2="0.8" y2="1"><stop stop-color="#111c37"/><stop offset="1" stop-color="#b75e52"/></linearGradient></defs><path fill="url(#b)" d="M0 0h840v620H0z"/><circle cx="610" cy="230" r="114" fill="#ffa268"/><path fill="#303954" d="M0 540 200 380 310 465 485 320 670 440 840 340v280H0z"/><path fill="#1a233f" d="m0 530 218-74 188 77 143-85 291 74v98H0z"/></svg>';
+  Object.assign(seed.settings, {
+    appearanceMode: 'dark', topBarAcrylic: true, topBarOpacity: 55, backgroundReadability: true,
+    backgroundImage: 'data:image/svg+xml;base64,' + Buffer.from(wallpaper).toString('base64')
+  });
+  const ctx = await openApp({ seed });
+  const { win, electronApp } = ctx;
+  try {
+    const timer = win.locator('#board .gadget-timer');
+    const calendar = win.locator('#board .gadget-calendar');
+    const grip = timer.locator('.note-grip');
+    await grip.hover();
+    const point = await grip.boundingBox();
+    await win.mouse.down();
+    await expect(timer).toHaveClass(/dragging/);
+    await win.mouse.move(point.x + point.width / 2, point.y + point.height / 2 + 37, { steps: 5 });
+    await expect(win.locator('#board .note-align-guide[data-axis="y"]')).toBeVisible();
+    await win.mouse.up();
+    await expect(timer).toHaveCSS('top', '140px');
+
+    const backup = path.join(ctx.userDataDir, 'canvas-backup.json');
+    await electronApp.evaluate(({ dialog }, file) => {
+      dialog.showSaveDialog = async () => ({ canceled: false, filePath: file });
+      dialog.showOpenDialog = async () => ({ canceled: false, filePaths: [file] });
+    }, backup);
+    const openBackupSettings = async () => {
+      await win.locator('#btnSettings').click();
+      await win.locator('.sp-nav-item[data-tab="backup"]').click();
+    };
+    await openBackupSettings();
+    await win.locator('#btnExport').click();
+    await expect.poll(() => fs.readFile(backup, 'utf8').then(() => true, () => false)).toBe(true);
+    const exported = JSON.parse(await fs.readFile(backup, 'utf8'));
+    expect(exported.notes.find(item => item.id === 'focus-widget')).toMatchObject({
+      positionAll: { x: 80, y: 140 }, gadget: { endAt: deadline, text: '复核本轮文档' }
+    });
+    expect(exported.notes.find(item => item.id === 'calendar-widget').gadget.entries[day]).toEqual({ marked: true, text: '周会记录' });
+    await win.locator('#btnCloseSettings').click();
+    await timer.getByRole('textbox', { name: '专注备注' }).fill('导入前临时修改');
+    await calendar.getByRole('textbox', { name: '当天记录' }).fill('临时替换');
+    await calendar.getByRole('button', { name: '标记日期' }).click();
+
+    await openBackupSettings();
+    await win.locator('#btnImport').click();
+    await win.locator('#cmOk').click();
+    await expect(win.locator('.sp-nav-item[data-tab="appearance"]')).toHaveClass(/active/);
+    await win.locator('#btnCloseSettings').click();
+    await expect(timer.getByRole('textbox', { name: '专注备注' })).toHaveValue('复核本轮文档');
+    await expect(timer.getByRole('button', { name: '暂停' })).toBeVisible();
+    await expect(calendar.getByRole('textbox', { name: '当天记录' })).toHaveValue('周会记录');
+    await expect(calendar.getByRole('button', { name: '标记日期' })).toHaveAttribute('aria-pressed', 'true');
+
+    await electronApp.evaluate(({ BrowserWindow }) => BrowserWindow.getAllWindows()[0].setSize(640, 790));
+    await expect(win.locator('body')).toHaveClass(/workspace-wallpaper/);
+    await expect(win.locator('body')).toHaveClass(/topbar-acrylic/);
+    await win.locator('#btnWorkspaceNav').click();
+    await expect(win.locator('#canvasGadgetEntries').getByRole('button', { name: '日历', exact: true })).toBeVisible();
+    await win.screenshot({ path: test.info().outputPath('widgets-wallpaper-sidebar.png') });
+    await win.keyboard.press('Escape');
+    await expect(win.locator('#filterbar')).toBeHidden();
+    await timer.scrollIntoViewIfNeeded();
+    await expect(timer.getByRole('textbox', { name: '专注备注' })).toBeInViewport({ ratio: 1 });
+    await win.screenshot({ path: test.info().outputPath('widgets-wallpaper-timer.png') });
+    await calendar.scrollIntoViewIfNeeded();
+    await expect(calendar.getByRole('textbox', { name: '当天记录' })).toBeInViewport({ ratio: 1 });
+    await win.screenshot({ path: test.info().outputPath('widgets-wallpaper-calendar.png') });
+  } finally { await closeApp(ctx); }
+});
+
+test('桌面画布组件：复用卡片工具并双向同步计时与日历', async () => {
+  const seed = searchViewSeed();
+  seed.notes = seed.notes.slice(0, 1);
+  const ctx = await openApp({ seed });
+  const { win, electronApp } = ctx;
+  const desktopFor = id => electronApp.windows().find(page => page.url().includes('/note.html?id=' + id));
+  try {
+    await win.locator('[data-gadget="timer"]').click();
+    const timer = win.locator('#board .gadget-timer');
+    await timer.hover();
+    await timer.locator('.t-group').click();
+    await win.locator('.color-pop').getByRole('button', { name: '家庭', exact: true }).last().click();
+    await expect(timer.locator('.note-foot-label')).toHaveText('家庭');
+    await timer.hover();
+    await timer.locator('.t-color').click();
+    const previousColor = await timer.evaluate(el => el.style.backgroundColor);
+    await win.locator('.color-pop .swatch').first().click();
+    await expect.poll(() => timer.evaluate(el => el.style.backgroundColor)).not.toBe(previousColor);
+    await win.locator('#workspaceTitle').click();
+    await timer.hover();
+    await timer.locator('.t-more').click();
+    await expect(win.locator('.ctx-menu').getByRole('button', { name: '归档', exact: true })).toBeVisible();
+    await win.locator('.ctx-menu').getByRole('button', { name: '钉在桌面' }).click();
+    const timerId = await timer.getAttribute('data-id');
+    await expect.poll(() => !!desktopFor(timerId)).toBe(true);
+    const timerWindow = desktopFor(timerId);
+    await expect(timerWindow.locator('.gadget-time')).toHaveText('25:00');
+    await timerWindow.getByRole('button', { name: '25 分钟', exact: true }).click();
+    const desktopMinutes = timerWindow.getByRole('spinbutton', { name: '分钟' });
+    await desktopMinutes.fill('180');
+    await expect(timerWindow.locator('.gadget-time')).toHaveText('3:00:00');
+    await timerWindow.screenshot({ path: test.info().outputPath('desktop-duration.png') });
+    await desktopMinutes.press('Enter');
+    await expect(timer.getByRole('button', { name: '3 小时', exact: true })).toBeVisible();
+    await timerWindow.getByRole('button', { name: '开始', exact: true }).click();
+    await expect(timer.getByRole('button', { name: '暂停', exact: true })).toBeVisible();
+    await expect(timerWindow.getByRole('button', { name: '3 小时', exact: true })).toBeDisabled();
+    const boardFocusNote = timer.getByRole('textbox', { name: '专注备注' });
+    const desktopFocusNote = timerWindow.getByRole('textbox', { name: '专注备注' });
+    await boardFocusNote.fill('从工作区编辑');
+    await expect(desktopFocusNote).toHaveValue('从工作区编辑');
+    await timer.getByRole('status').click();
+    await desktopFocusNote.fill('从桌面继续编辑');
+    await expect(boardFocusNote).toHaveValue('从桌面继续编辑');
+    await timerWindow.screenshot({ path: test.info().outputPath('desktop-timer-controls.png') });
+    await timer.getByRole('button', { name: '暂停', exact: true }).click();
+    await expect(timerWindow.getByRole('button', { name: '继续', exact: true })).toBeVisible();
+    await win.screenshot({ path: test.info().outputPath('shared-focus-card.png') });
+
+    await win.locator('[data-gadget="calendar"]').click();
+    const calendar = win.locator('#board .gadget-calendar');
+    await calendar.hover();
+    await calendar.locator('.t-desktop').click();
+    const calendarId = await calendar.getAttribute('data-id');
+    await expect.poll(() => !!desktopFor(calendarId)).toBe(true);
+    const calendarWindow = desktopFor(calendarId);
+    await calendarWindow.getByRole('textbox', { name: '当天记录' }).fill('桌面写下的计划');
+    await expect(calendar.getByRole('textbox', { name: '当天记录' })).toHaveValue('桌面写下的计划');
+    await calendar.getByRole('button', { name: '标记日期' }).click();
+    await expect(calendarWindow.getByRole('button', { name: '标记日期' })).toHaveAttribute('aria-pressed', 'true');
+    await calendarWindow.locator('#dnUnpin').click();
+    await expect.poll(() => !desktopFor(calendarId)).toBe(true);
+    await expect(calendar.getByRole('textbox', { name: '当天记录' })).toHaveValue('桌面写下的计划');
+  } finally { await closeApp(ctx); }
+});
+
+test('画布关联方向：双向曲线分开，缩放后保留方向标识', async () => {
+  const seed = searchViewSeed();
+  seed.notes = seed.notes.slice(0, 2);
+  const [from, to] = seed.notes;
+  from.links = [{ targetId: to.id, label: '参考' }];
+  to.links = [{ targetId: from.id, label: '补充' }];
+  Object.assign(to, { x: 465, y: 95, positionAll: { x: 465, y: 95 } });
+  const ctx = await openApp({ seed });
+  const { win } = ctx;
+  try {
+    const curves = win.locator('.note-link-line');
+    const arrows = win.locator('.note-link-arrow');
+    await expect(curves).toHaveCount(2);
+    await expect(arrows).toHaveCount(2);
+    const ends = await curves.evaluateAll(paths => paths.map(path => path.getAttribute('d').split(' ').slice(-2)));
+    const tips = await arrows.evaluateAll(paths => paths.map(path => path.getAttribute('d').split(' ').slice(4, 6)));
+    expect(tips).toEqual(ends);
+    const midpoints = await curves.evaluateAll(paths => paths.map(path => {
+      const point = path.getPointAtLength(path.getTotalLength() / 2);
+      return point.y;
+    }));
+    expect(Math.abs(midpoints[0] - midpoints[1])).toBeGreaterThan(15);
+    const [labelBox, drawBox, linkBox] = await Promise.all([
+      win.locator('#btnAdd .ui-icon-label').boundingBox(),
+      win.locator('#btnCanvasDraw').boundingBox(),
+      win.locator('#btnCanvasLink').boundingBox()
+    ]);
+    const offset = labelBox.x + labelBox.width / 2 - (drawBox.x + drawBox.width + linkBox.x) / 2;
+    expect(offset).toBeCloseTo(4, 0);
+    await win.screenshot({ path: test.info().outputPath('canvas-link-directions.png') });
+    const beforeZoom = await arrows.first().getAttribute('d');
+    await win.locator('#ctExpand').click();
+    await win.locator('#btnZoomIn').click();
+    await expect(arrows.first()).not.toHaveAttribute('d', beforeZoom);
+    await expect(arrows).toHaveCount(2);
+  } finally { await closeApp(ctx); }
+});
+
+test('画布关联管理：编辑入向关系标签、取消和解除均可撤销', async () => {
+  const seed = searchViewSeed();
+  seed.notes = seed.notes.slice(0, 2);
+  seed.notes[0].links = [{ targetId: seed.notes[1].id, label: "" }];
+  seed.notes[1].x = 385; seed.notes[1].y = 110; seed.notes[1].positionAll = { x: 385, y: 110 };
+  const ctx = await openApp({ seed });
+  const { win } = ctx;
+  try {
+    const target = win.locator('.note[data-id="work"]');
+    const editor = win.getByRole('dialog', { name: '管理关联' });
+    const curve = win.locator('#canvasLinks .note-link-line');
+    const label = win.locator('#canvasLinks .note-link-label');
+    const open = async () => {
+      await target.locator('.note-title').click({ button: 'right' });
+      await win.getByRole('button', { name: '管理关联', exact: true }).click();
+      await expect(editor).toBeVisible();
+    };
+    await open();
+    await expect(editor.locator('.relation-pair')).toHaveText('生活清单 → 工作清单');
+    await editor.getByRole('textbox').fill('临时标签');
+    await win.keyboard.press('Escape');
+    await expect(editor).toBeHidden();
+    await open();
+    await expect(editor.getByRole('textbox')).toHaveValue('');
+    await editor.getByRole('textbox').fill('参考 <资料>');
+    await win.screenshot({ path: test.info().outputPath('manage-canvas-links.png') });
+    await editor.getByRole('button', { name: '保存关联' }).click();
+    await target.hover();
+    await expect(label).toHaveText('参考 <资料>');
+    await win.screenshot({ path: test.info().outputPath('canvas-link-label.png') });
+    await open();
+    await editor.getByRole('button', { name: '解除' }).click();
+    await expect(editor.getByRole('textbox')).toBeDisabled();
+    await editor.getByRole('button', { name: '保存关联' }).click();
+    await target.hover();
+    await expect(curve).toHaveCount(0);
+    await win.evaluate(() => undo());
+    await target.hover();
+    await expect(label).toHaveText('参考 <资料>');
+    await win.evaluate(() => undo());
+    await target.hover();
+    await expect(curve).toHaveCount(1);
+    await expect(label).toHaveCount(0);
   } finally { await closeApp(ctx); }
 });

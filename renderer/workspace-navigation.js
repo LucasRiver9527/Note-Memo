@@ -2,7 +2,7 @@
 
 // 工作区视图切换、详情导航及来源视图的位置和焦点恢复。
 function openNoteDetail(id, trigger) {
-  if (!state.notes.some((note) => note.id === id)) return;
+  if (!state.notes.some((note) => note.id === id && !note.gadget)) return;
   const canvas = $('#canvas');
   const source = trigger?.closest('.note, .memo-row, .todo-line, .doc-pick-item');
   docPickerReturn = {

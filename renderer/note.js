@@ -18,6 +18,8 @@ let savedSelText = '';
 let savedImageSrc = null;
 let copiedImage = null;
 
+const t = key => tr(key);
+
 function tr(key) {
   return T(key, lang, I18N_MERGED);
 }
@@ -125,6 +127,7 @@ async function saveNow(pendingToken) {
   clearTimeout(saveTimer);
   saveTimer = null;
   if (!note) return true; // 尚未加载出便签时没有本窗口的待保存编辑
+  if (note.gadget) return true;
   cleanupRefs();
   const draftToken = pendingToken || window.api.captureNoteDraft(note);
   if (!draftToken) console.error('[note] 恢复草稿写入失败');
@@ -141,8 +144,9 @@ async function saveNow(pendingToken) {
   retry.onclick = () => saveNow();
   const unpinBtn = $('#dnUnpin');
   if (unpinBtn) {
-    unpinBtn.textContent = ok ? '📌' : '⚠';
+    $('use', unpinBtn).setAttribute('href', ok ? '#ui-pin' : '#ui-warning');
     unpinBtn.title = ok ? tr('unpin') : tr('toast_save_failed');
+    unpinBtn.setAttribute('aria-label', unpinBtn.title);
   }
   return ok;
 }
@@ -1140,6 +1144,35 @@ async function init() {
   });
 
   const title = $('#dnTitle');
+  if (note.gadget) {
+    wrap.classList.add('desktop-gadget');
+    const label = document.createElement('span');
+    label.className = 'gadget-title';
+    label.textContent = tr('gadget_' + note.gadget.kind);
+    title.replaceWith(label);
+    const unpin = $('#dnUnpin');
+    unpin.title = tr('unpin');
+    unpin.setAttribute('aria-label', unpin.title);
+    unpin.onclick = () => window.api.unpinFromDesktop(noteId);
+    mountGadgetContent(wrap, $('#dnBody'), note, {
+      canEdit: () => true,
+      dispatch: action => sendGadgetAction(noteId, action),
+      notes: () => [],
+      language: lang
+    });
+    window.api.onNoteChanged(updated => {
+      if (updated.id !== noteId || updated.gadget?.kind !== note.gadget.kind) return;
+      note.color = updated.color;
+      note.textColor = updated.textColor;
+      Object.assign(note.gadget, updated.gadget);
+      applyNoteStyle();
+      wrap.__refreshGadget();
+    });
+    if (note.gadget.kind === 'timer') setInterval(() => {
+      if (wrap.hasAttribute('data-running')) wrap.__refreshGadget();
+    }, 250);
+    return;
+  }
   title.value = note.title || '';
   title.placeholder = tr('note_title');
   title.addEventListener('input', () => { note.title = title.value; save(); });
@@ -1148,6 +1181,7 @@ async function init() {
 
   const unpinBtn = $('#dnUnpin');
   unpinBtn.title = tr('unpin');
+  unpinBtn.setAttribute('aria-label', unpinBtn.title);
   unpinBtn.onclick = async () => {
     // 取消置顶会立即关闭窗口，先等最后一次编辑得到落盘确认。
     if (await saveNow()) await window.api.unpinFromDesktop(noteId);

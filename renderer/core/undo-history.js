@@ -104,7 +104,8 @@
         groupOrders: cloneFlatObj(s.groupOrders || {}),
         // UX-30D：排序模式与布局快照也纳入撤销（深拷，避免共享嵌套 map/位置引用）。
         sortMode: s.sortMode,
-        orderLayouts: safeAny(s.orderLayouts || {})
+        orderLayouts: safeAny(s.orderLayouts || {}),
+        boardInk: safeAny(s.boardInk || {})
       }
     };
   }

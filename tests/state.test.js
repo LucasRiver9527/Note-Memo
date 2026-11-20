@@ -76,3 +76,17 @@ test('migrateData 空数据返回结构完整', () => {
   assert.deepStrictEqual(out.trash, []);
   assert.ok(out.settings);
 });
+
+test("migrateData retains valid directed links across active notes and trash", () => {
+  const link = (targetId, label) => ({ targetId, label });
+  const data = migrateData({
+    notes: [{ id: "source", links: [null, link("source", "self"), link("missing", "orphan"),
+      link("in-trash", " Reference "), link("in-trash", "duplicate"), link("active", 42)] },
+    { id: "active", links: "invalid" }, { id: "legacy" }],
+    trash: [{ note: { id: "in-trash", links: [link("source", "Reciprocal")] } }]
+  });
+  assert.deepStrictEqual(data.notes[0].links, [link("in-trash", "Reference"), link("active", "")]);
+  assert.deepStrictEqual(data.trash[0].note.links, [link("source", "Reciprocal")]);
+  assert.strictEqual(data.notes[1].links, undefined);
+  assert.strictEqual(data.notes[2].links, undefined);
+});

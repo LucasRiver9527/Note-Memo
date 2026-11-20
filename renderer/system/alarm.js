@@ -170,7 +170,7 @@ function showAlarmModal(n) {
   const body = n.type === 'todo'
     ? (n.items || []).filter((i) => !i.done).map((i) => i.text).join('\n')
     : (n.content || '').replace(/\[\[(?:img|file):[a-zA-Z0-9_-]+\]\]/g, '');
-  $('#alarmTitle').textContent = '⏰ ' + title;
+  $('#alarmTitle').textContent = title;
   $('#alarmBody').textContent = (body || '').slice(0, 400);
   $('#alarmOverlay').classList.remove('hidden');
 }

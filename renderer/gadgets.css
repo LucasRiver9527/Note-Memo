@@ -1,0 +1,112 @@
+.desktop-gadget .ct-btn {
+  display: inline-flex; align-items: center; justify-content: center; border: 0;
+  border-radius: 7px; background: transparent; color: inherit; font: inherit; cursor: pointer;
+}
+.gadget-title { flex: 1; min-width: 0; font-weight: 650; font-size: 13px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.canvas-gadget .ct-btn, .gadget-days button, .gadget-reminders button { color: inherit; }
+.gadget-body { flex: 1; min-height: 0; padding: 0 14px 12px; overflow: auto; }
+.gadget-timer .gadget-body { display: flex; flex-direction: column; align-items: center; gap: 4px; }
+.gadget-timer .gadget-body > * { flex-shrink: 0; }
+.gadget-time { font-size: 36px; font-weight: 650; font-variant-numeric: tabular-nums; line-height: 1.08; }
+.gadget-timer-status { color: inherit; opacity: .74; font-size: 11px; line-height: 22px; }
+.gadget-progress {
+  display: flex; align-items: center; gap: 7px; width: 100%; max-width: 240px; margin-block: 5px 2px;
+  font-size: 10px; font-variant-numeric: tabular-nums;
+}
+.gadget-progress progress { appearance: none; min-width: 0; flex: 1; height: 3px; }
+.gadget-progress progress::-webkit-progress-bar {
+  background: color-mix(in srgb, currentColor 15%, transparent); border-radius: 3px;
+}
+.gadget-progress progress::-webkit-progress-value {
+  background: color-mix(in srgb, currentColor 72%, transparent); border-radius: 3px;
+}
+.gadget-controls {
+  display: grid; grid-template-columns: minmax(0, 1fr) minmax(58px, auto) minmax(0, 1fr);
+  align-items: stretch; gap: 6px; width: 100%; max-width: 202px;
+}
+.gadget-controls .ct-btn {
+  min-width: 0; min-height: 28px; padding: 2px 4px; gap: 4px; font-size: 11px; line-height: 1.2;
+  background: color-mix(in srgb, currentColor 8%, transparent);
+}
+.gadget-controls .ct-btn .ui-icon { width: 14px; height: 14px; flex: none; }
+.gadget-controls .gadget-start {
+  padding-inline: 7px; background: color-mix(in srgb, currentColor 16%, transparent);
+}
+.gadget-controls .ct-btn:enabled:hover { background: color-mix(in srgb, currentColor 23%, transparent); }
+.gadget-controls .gadget-duration-toggle { text-wrap: balance; word-break: keep-all; }
+.gadget-controls .gadget-duration-toggle:disabled { opacity: .72; cursor: default; }
+.gadget-focus-text { margin-top: 4px; }
+.gadget-duration-editor { display: flex; align-items: center; justify-content: center; gap: 8px; flex-wrap: wrap; }
+.gadget-duration-value {
+  display: flex; align-items: center; gap: 5px; padding: 0 6px;
+  border: 1px solid color-mix(in srgb, currentColor 18%, transparent); border-radius: 7px;
+  background: color-mix(in srgb, currentColor 6%, transparent); font-size: 12px; white-space: nowrap;
+}
+.gadget-duration-value input {
+  width: 35px; padding: 4px 0; border: 0; appearance: textfield;
+  color: inherit; background: transparent; font: inherit; font-variant-numeric: tabular-nums;
+}
+.gadget-duration-value input::-webkit-inner-spin-button { appearance: none; }
+.gadget-duration-value:focus-within { outline: 1px solid currentColor; }
+.gadget-duration-value input:focus { outline: 0; }
+.gadget-duration-actions { display: flex; align-items: center; }
+.gadget-duration-actions .ct-btn { min-height: 26px; padding: 0 6px; font-size: 12px; }
+.gadget-duration-save.ct-btn { background: color-mix(in srgb, currentColor 14%, transparent); }
+.gadget-duration-save:disabled { opacity: .5; cursor: default; }
+.gadget-calendar .gadget-body { scrollbar-width: thin; }
+.gadget-calendar-nav { display: flex; justify-content: space-between; align-items: center; margin-bottom: 4px; }
+.gadget-month { font-size: 13px; font-weight: 650; }
+.gadget-calendar-nav .ct-btn { min-height: 25px; font-size: 18px; }
+.gadget-weekdays, .gadget-days { display: grid; grid-template-columns: repeat(7, minmax(0, 1fr)); text-align: center; gap: 2px; }
+.gadget-weekdays { font-size: 10px; opacity: .72; margin-bottom: 4px; }
+.gadget-days button, .gadget-reminders button {
+  border: 1px solid transparent; border-radius: 6px; background: transparent; font: inherit; cursor: pointer;
+}
+.gadget-days button { position: relative; padding: 0 0 2px; height: 23px; font-size: 12px; }
+.gadget-days button[aria-current="date"] { border-color: color-mix(in srgb, currentColor 42%, transparent); font-weight: 700; }
+.gadget-days button[aria-pressed="true"], .gadget-days button:hover, .gadget-reminders button:hover {
+  background: color-mix(in srgb, currentColor 12%, transparent);
+}
+.gadget-has-reminders::after {
+  content: ""; position: absolute; bottom: 1px; left: calc(50% - 1.5px);
+  width: 3px; height: 3px; border-radius: 50%; background: currentColor;
+}
+.gadget-day-marked::before {
+  content: ""; position: absolute; right: 2px; top: 2px; width: 6px; height: 6px;
+  border-radius: 1px; background: currentColor;
+  clip-path: polygon(0 0, 100% 0, 100% 100%, 50% 70%, 0 100%);
+}
+.gadget-day-panel {
+  margin-top: 6px; padding-top: 5px; border-top: 1px solid color-mix(in srgb, currentColor 15%, transparent);
+}
+.gadget-day-header { display: flex; justify-content: space-between; align-items: center; margin-bottom: 3px; }
+.gadget-day-date { font-size: 12px; font-weight: 650; }
+.gadget-day-mark.ct-btn { min-height: 24px; padding: 0 5px; }
+.gadget-day-mark .ui-icon { width: 14px; height: 14px; }
+.gadget-day-mark[aria-pressed="true"] { background: color-mix(in srgb, currentColor 14%, transparent); }
+.gadget-day-mark[aria-pressed="true"] .ui-icon { fill: currentColor; }
+:is(.gadget-day-text, .gadget-focus-text) {
+  display: block; width: 100%; min-height: 35px; box-sizing: border-box; resize: none;
+  padding: 4px 6px; border: 1px solid transparent;
+  border-radius: 6px; background: transparent;
+  color: inherit; font: inherit; font-size: 12px; line-height: 1.3;
+}
+:is(.gadget-day-text, .gadget-focus-text)::placeholder { color: inherit; opacity: .62; }
+:is(.gadget-day-text, .gadget-focus-text):focus {
+  border-color: currentColor;
+  background: color-mix(in srgb, currentColor 6%, transparent);
+  outline: none;
+}
+.gadget-reminders:not(:empty) { border-top: 1px solid color-mix(in srgb, currentColor 18%, transparent); margin-top: 6px; padding-top: 4px; }
+.gadget-reminders button { width: 100%; overflow: hidden; white-space: nowrap; text-overflow: ellipsis; text-align: left; font-size: 12px; }
+
+.desktop-gadget .ui-icon {
+  width: 15px; height: 15px; fill: none; stroke: currentColor; stroke-width: 1.6;
+  stroke-linecap: round; stroke-linejoin: round; pointer-events: none;
+}
+.desktop-gadget .gadget-day-mark[aria-pressed="true"] .ui-icon { fill: currentColor; }
+.desktop-gadget .gadget-start { background: color-mix(in srgb, currentColor 13%, transparent); }
+.desktop-gadget .gadget-title { padding: 3px 2px; }
+.desktop-gadget .gadget-body { -webkit-app-region: no-drag; }
+.canvas-gadget .gadget-body { padding-bottom: 2px; }
+.canvas-gadget .note-foot { flex: none; }

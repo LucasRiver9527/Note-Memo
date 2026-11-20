@@ -21,7 +21,7 @@ function bindRecentNotes(search) {
   function show() {
     hide();
     if (search.value.trim() || docPickerReturn || multiSelect) return;
-    const notes = visibleNotes().sort((a, b) =>
+    const notes = visibleNotes().filter(note => !note.gadget).sort((a, b) =>
       (b.updatedAt || b.createdAt || 0) - (a.updatedAt || a.createdAt || 0)).slice(0, 6);
     if (!notes.length) return;
     const groups = new Map(state.groups.map((group) => [group.id, group.name]));
@@ -148,9 +148,23 @@ function bindBoard() {
   const ctExpand = $('#ctExpand');
   if (ctExpand) ctExpand.addEventListener('click', () => {
     const tb = $('#canvasToolbar');
-    const expanded = tb.classList.toggle('expanded');
-    ctExpand.textContent = expanded ? '✕' : '⤢';
-    ctExpand.title = expanded ? t('canvas_zoom_toggle_close') : t('canvas_zoom_toggle');
+    tb.classList.toggle('expanded');
+    syncZoomToolbar();
+  });
+  const zoomToolbar = $('#canvasToolbar');
+  document.addEventListener('pointerdown', event => {
+    if (!zoomToolbar.contains(event.target) && zoomToolbar.classList.contains('expanded')) {
+      zoomToolbar.classList.remove('expanded');
+      syncZoomToolbar();
+    }
+  });
+  zoomToolbar.addEventListener('keydown', event => {
+    if (event.key !== 'Escape' || !zoomToolbar.classList.contains('expanded')) return;
+    event.preventDefault();
+    event.stopPropagation();
+    zoomToolbar.classList.remove('expanded');
+    syncZoomToolbar();
+    ctExpand.focus();
   });
   syncZoomToolbar();
 }

@@ -23,6 +23,42 @@
     return merged;
   }
 
+  function applyGadgetAction(gadget, action, now = Date.now()) {
+    if (!gadget || !action || typeof action !== 'object') return false;
+    if (gadget.kind === 'timer') {
+      if (action.type === 'text' && typeof action.text === 'string') {
+        gadget.text = action.text.slice(0, 2000);
+        return true;
+      }
+      const total = gadget.minutes * 60000;
+      if (action.type === 'toggle') {
+        const remaining = gadget.endAt ? Math.max(0, Math.min(total, gadget.endAt - now)) : gadget.remaining;
+        if (gadget.endAt && remaining > 0) {
+          gadget.remaining = remaining;
+          gadget.endAt = 0;
+        } else gadget.endAt = now + (remaining || total);
+      } else if (action.type === 'reset' || (action.type === 'duration' && Number.isInteger(action.minutes) &&
+          action.minutes >= 1 && action.minutes <= 180 && gadget.endAt <= now)) {
+        if (action.type === 'duration') gadget.minutes = action.minutes;
+        gadget.remaining = gadget.minutes * 60000;
+        gadget.endAt = 0;
+      } else return false;
+      return true;
+    }
+    const key = action.date;
+    if (gadget.kind !== 'calendar' || typeof key !== 'string' || !/^\d{4}-\d{2}-\d{2}$/.test(key)) return false;
+    const date = new Date(key + 'T00:00:00Z');
+    if (!Number.isFinite(+date) || date.toISOString().slice(0, 10) !== key) return false;
+    const entries = gadget.entries ||= {};
+    const entry = { marked: false, text: '', ...entries[key] };
+    if (action.type === 'mark' && typeof action.marked === 'boolean') entry.marked = action.marked;
+    else if (action.type === 'text' && typeof action.text === 'string') entry.text = action.text.slice(0, 2000);
+    else return false;
+    if (entry.marked || entry.text) entries[key] = entry;
+    else delete entries[key];
+    return true;
+  }
+
   function hexToRgba(hex, alpha) {
     const h = String(hex || '').replace('#', '');
     const r = parseInt(h.slice(0, 2), 16);
@@ -693,5 +729,5 @@
     return { parts, truncatedBefore: before, truncatedAfter: after };
   }
 
-  return { mergeDetachedEdits, hexToRgba, luminance, contrastRatio, isDarkColor, autoTextColor, noteShadowCss, escapeHtml, refIdsOf, cleanupRefs, sortNotes, tableToMarkdown, noteToMarkdown, referencedMedia, parseNullSeparated, hdropString, setRenderLocale, formatInlineText, inlineImgHtml, fileLinkHtml, tableBlockHtml, renderRichContent, sanitizeCss, clampInt, clampNum, isCssNumber, findNoteSearchMatches, buildSearchSnippet };
+  return { mergeDetachedEdits, applyGadgetAction, hexToRgba, luminance, contrastRatio, isDarkColor, autoTextColor, noteShadowCss, escapeHtml, refIdsOf, cleanupRefs, sortNotes, tableToMarkdown, noteToMarkdown, referencedMedia, parseNullSeparated, hdropString, setRenderLocale, formatInlineText, inlineImgHtml, fileLinkHtml, tableBlockHtml, renderRichContent, sanitizeCss, clampInt, clampNum, isCssNumber, findNoteSearchMatches, buildSearchSnippet };
 });

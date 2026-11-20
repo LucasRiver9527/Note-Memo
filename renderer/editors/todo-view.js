@@ -149,7 +149,7 @@ function renderTodoView(visible, query) {
 
   html += `<div class="todo-section remind"><h4>${t('time_todos')}（${remindEntries.length}）</h4>`;
   if (remindEntries.length === 0) {
-    html += `<div class="todo-empty">${t('no_reminders')}</div>`;
+    html += `<div class="todo-empty">${escapeHtml(t('no_reminders')).replace('{icon}', '<svg class="ui-icon" aria-hidden="true" focusable="false"><use href="#ui-clock"/></svg>')}</div>`;
   } else {
     remindEntries.forEach((note) => {
       const overdue = !note.reminder.fired && new Date(note.reminder.time).getTime() < Date.now();

@@ -152,7 +152,8 @@ function bindBatch() {
     if (open) (nav.querySelector('.chip.active') || nav.querySelector('.chip')).focus();
   };
   document.addEventListener('pointerdown', (event) => {
-    if (!nav.contains(event.target) && !navToggle.contains(event.target)) setNav(false);
+    if ($('#settingsPanel').classList.contains('hidden') &&
+        !nav.contains(event.target) && !navToggle.contains(event.target)) setNav(false);
   });
   document.addEventListener('keydown', (event) => {
     if (!event.defaultPrevented && event.key === 'Escape' && nav.classList.contains('workspace-nav-open') && navToggle.offsetWidth && $('#settingsPanel').classList.contains('hidden')) {
@@ -161,7 +162,7 @@ function bindBatch() {
     }
   });
   nav.addEventListener('click', (event) => {
-    if (event.composedPath().some((el) => el instanceof Element && el.matches('.filter-scope .chip, #groupChips .chip'))) {
+    if (event.composedPath().some((el) => el instanceof Element && el.matches('.filter-scope .chip, #groupChips .chip, #canvasShortcuts .ct-btn, #canvasGadgetEntries .chip'))) {
       if (nav.classList.contains('workspace-nav-open') && navToggle.offsetWidth) navToggle.focus();
       setNav(false);
     }

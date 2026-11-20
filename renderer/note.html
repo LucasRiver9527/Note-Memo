@@ -5,13 +5,22 @@
   <meta http-equiv="Content-Security-Policy" content="default-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' data: note-img:; media-src 'self' data: note-sound:;" />
   <title>便签</title>
   <link rel="stylesheet" href="note.css" />
+  <link rel="stylesheet" href="gadgets.css" />
 </head>
 <body>
+  <svg aria-hidden="true" width="0" height="0" style="position:absolute">
+    <symbol id="ui-pin" viewBox="0 0 24 24"><path d="m15 4 5 5-3 1-3 4v3l-3-3-5-5h3l4-3 1-3m-3 11-6 6"/></symbol>
+    <symbol id="ui-warning" viewBox="0 0 24 24"><path d="m12 4 9 16H3zM12 10v4m0 3h.1"/></symbol>
+    <symbol id="ui-play" viewBox="0 0 24 24"><path d="m8 5 11 7-11 7z"/></symbol>
+    <symbol id="ui-pause" viewBox="0 0 24 24"><path d="M9 5v14m6-14v14"/></symbol>
+    <symbol id="ui-flag" viewBox="0 0 24 24"><path d="M5 21V4m0 1c5-4 9 4 14 0v10c-5 4-9-4-14 0"/></symbol>
+    <symbol id="ui-reset" viewBox="0 0 24 24"><path d="M20 4v5h-5m5 0a8 8 0 1 0 0 6"/></symbol>
+  </svg>
   <div id="note">
     <div class="dn-head">
       <span class="dn-grip">⠿</span>
       <input id="dnTitle" class="dn-title" placeholder="标题" />
-      <button id="dnUnpin" class="dn-btn" title="取消钉住（回到列表）">📌</button>
+      <button id="dnUnpin" class="dn-btn" title="取消钉住（回到列表）"><svg class="ui-icon" aria-hidden="true" focusable="false"><use href="#ui-pin"/></svg></button>
     </div>
     <div id="noteSaveWarning" class="save-warning hidden"><span role="status" data-i18n="save_pending">尚未保存</span><button type="button" data-i18n="save_retry">重试保存</button></div>
     <div id="dnBody" class="dn-body"></div>
@@ -23,6 +32,7 @@
   <script src="state.js"></script>
   <script src="rich-content.js"></script>
   <script src="table-logic.js"></script>
+  <script src="board/canvas-gadgets.js"></script>
   <script src="note.js"></script>
 </body>
 </html>

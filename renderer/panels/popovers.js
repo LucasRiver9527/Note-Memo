@@ -321,6 +321,12 @@ function showNoteContextMenu(e, n) {
     addItem('archive', t(n.archived ? 'note_unarchive' : 'note_archive'), fnArchive, false, null, noteHost);
     addSep();
 
+    if (canLinkCanvasNotes() && boardEls.has(n.id)) {
+      addItem('link', t('canvas_link'), () => startCanvasLink(n.id));
+    }
+    if (!dataReadonly && canvasRelationsFor(n.id).length) {
+      addItem('link', t('canvas_link_manage'), () => openCanvasRelations(n.id, e.currentTarget || e.target));
+    }
     if (!docNoteId && ['board', 'memo'].includes(state.settings.viewMode)) {
       addItem('doc', t('open_detail'), () => openNoteDetail(n.id, e.target));
     }
@@ -335,7 +341,18 @@ function showNoteContextMenu(e, n) {
 
   document.body.appendChild(pop);
   activeColorPop = pop;
-  buildMenu(state.settings.ctxMenuMode === 'full' ? 'full' : 'compact');
+  if (n.gadget) {
+    addItem('pin', t(n.desktopPin ? 'unpin' : 'desktop'), () => {
+      if (n.desktopPin) window.api.unpinFromDesktop(n.id);
+      else fnDesktop();
+    });
+    addItem('folder', t('add_to_group'), () => openGroupPop(noteAnchor(n), n));
+    addItem('color', t('color'), fnColor);
+    addItem('archive', t(n.archived ? 'note_unarchive' : 'note_archive'), fnArchive);
+    addSep();
+    addItem('trash', t('delete'), fnDelete, true);
+    positionMenu();
+  } else buildMenu(state.settings.ctxMenuMode === 'full' ? 'full' : 'compact');
   setTimeout(() => document.addEventListener('mousedown', closePopsOnce), 0);
 }
 
@@ -600,6 +617,7 @@ function openGroupEditPop(anchorEl, g) {
       if (ok) {
         pushUndo();
         state.groups = state.groups.filter((x) => x.id !== g.id);
+        if (state.settings.boardInk) delete state.settings.boardInk[g.id];
         state.notes.forEach((n) => { if (n.groupId === g.id) n.groupId = null; });
         if (filter.group === g.id) filter.group = 'all';
         save();

@@ -290,35 +290,35 @@ function renderDocView(visible) {
   list.innerHTML = `
     <div class="doc-toolbar" style="--note-color:${sanitizeCss(n.color)};color:${sanitizeCss(textColor)}">
       <div class="doc-group doc-group-nav" role="group" aria-label="${t('doc_group_nav')}">
-        <button class="doc-back" id="btnDocBack">${t('doc_back')}</button>
-        ${!isTodo ? `<button class="doc-fmt-btn doc-preview-btn" id="btnDocPreview" title="${t(n.preview ? 'note_preview_off' : 'note_preview')}" aria-label="${t(n.preview ? 'note_preview_off' : 'note_preview')}" aria-pressed="${n.preview ? 'true' : 'false'}">👁<span class="doc-btn-label">${t(n.preview ? 'note_preview_off' : 'note_preview')}</span></button>` : ''}
+        <button class="doc-back" id="btnDocBack"><svg class="ui-icon" aria-hidden="true" focusable="false"><use href="#ui-back"/></svg><span class="doc-btn-label">${t('doc_back')}</span></button>
+        ${!isTodo ? `<button class="doc-fmt-btn doc-preview-btn" id="btnDocPreview" title="${t(n.preview ? 'note_preview_off' : 'note_preview')}" aria-label="${t(n.preview ? 'note_preview_off' : 'note_preview')}" aria-pressed="${n.preview ? 'true' : 'false'}"><svg class="ui-icon" aria-hidden="true" focusable="false"><use href="#ui-eye"/></svg><span class="doc-btn-label">${t(n.preview ? 'note_preview_off' : 'note_preview')}</span></button>` : ''}
       </div>
       ${!isTodo ? `<div class="doc-group doc-group-format" role="group" aria-label="${t('doc_group_format')}">
-        <button class="doc-fmt-btn" id="btnDocBold" title="${t('bold')}"><b>B</b></button>
-        <button class="doc-fmt-btn" id="btnDocHighlight" title="${t('highlight')}">🖍</button>
+        <button class="doc-fmt-btn" id="btnDocBold" title="${t('bold')}"><svg class="ui-icon" aria-hidden="true" focusable="false"><use href="#ui-cm-bold"/></svg></button>
+        <button class="doc-fmt-btn" id="btnDocHighlight" title="${t('highlight')}"><svg class="ui-icon" aria-hidden="true" focusable="false"><use href="#ui-cm-highlight"/></svg></button>
         <input type="color" id="btnDocHlColor" class="doc-hl-color" title="${t('highlight_color')}" value="${sanitizeCss(highlightColor())}" />
         <span class="doc-tb-sep"></span>
-        <button class="doc-fmt-btn" id="btnDocAlignLeft" title="${t('align_left')}">⇤</button>
-        <button class="doc-fmt-btn" id="btnDocAlignCenter" title="${t('align_center')}">⇹</button>
-        <button class="doc-fmt-btn" id="btnDocAlignRight" title="${t('align_right')}">⇥</button>
+        <button class="doc-fmt-btn" id="btnDocAlignLeft" title="${t('align_left')}"><svg class="ui-icon" aria-hidden="true" focusable="false"><use href="#ui-cm-align-left"/></svg></button>
+        <button class="doc-fmt-btn" id="btnDocAlignCenter" title="${t('align_center')}"><svg class="ui-icon" aria-hidden="true" focusable="false"><use href="#ui-cm-align-center"/></svg></button>
+        <button class="doc-fmt-btn" id="btnDocAlignRight" title="${t('align_right')}"><svg class="ui-icon" aria-hidden="true" focusable="false"><use href="#ui-cm-align-right"/></svg></button>
       </div>` : ''}
       <div class="doc-group doc-group-insert" role="group" aria-label="${t('doc_group_insert')}">
-        <button class="doc-fmt-btn" id="btnDocImage" title="${t('insert_image')}">🖼️</button>
-        <button class="doc-fmt-btn" id="btnDocTable" title="${t('insert_table')}">▦</button>
+        <button class="doc-fmt-btn" id="btnDocImage" title="${t('insert_image')}"><svg class="ui-icon" aria-hidden="true" focusable="false"><use href="#ui-image"/></svg></button>
+        <button class="doc-fmt-btn" id="btnDocTable" title="${t('insert_table')}"><svg class="ui-icon" aria-hidden="true" focusable="false"><use href="#ui-cm-table"/></svg></button>
       </div>
       <div class="doc-group doc-group-manage" role="group" aria-label="${t('doc_group_manage')}">
-        <button class="doc-fmt-btn" id="btnDocDesktop" title="${t('desktop')}">📌</button>
-        <button class="doc-fmt-btn" id="btnDocTodo" title="${t('todo_mode')}">☑</button>
-        <button class="doc-fmt-btn" id="btnDocGroup" title="${t('add_to_group')}">🏷</button>
-        <button class="doc-fmt-btn" id="btnDocRemind" title="${t('todo_remind')}">⏰</button>
-        <button class="doc-fmt-btn" id="btnDocColor" title="${t('color')}">🎨</button>
-        <button class="doc-fmt-btn" id="btnDocPin" title="${t('pin')}">🔝</button>
+        <button class="doc-fmt-btn" id="btnDocDesktop" title="${t('desktop')}"><svg class="ui-icon" aria-hidden="true" focusable="false"><use href="#ui-pin"/></svg></button>
+        <button class="doc-fmt-btn" id="btnDocTodo" title="${t('todo_mode')}"><svg class="ui-icon" aria-hidden="true" focusable="false"><use href="#ui-todo"/></svg></button>
+        <button class="doc-fmt-btn" id="btnDocGroup" title="${t('add_to_group')}"><svg class="ui-icon" aria-hidden="true" focusable="false"><use href="#ui-folder"/></svg></button>
+        <button class="doc-fmt-btn" id="btnDocRemind" title="${t('todo_remind')}"><svg class="ui-icon" aria-hidden="true" focusable="false"><use href="#ui-clock"/></svg></button>
+        <button class="doc-fmt-btn" id="btnDocColor" title="${t('color')}"><svg class="ui-icon" aria-hidden="true" focusable="false"><use href="#ui-color"/></svg></button>
+        <button class="doc-fmt-btn" id="btnDocPin" title="${t('pin')}"><svg class="ui-icon" aria-hidden="true" focusable="false"><use href="#ui-raise"/></svg></button>
       </div>
       <div class="doc-group doc-group-export" role="group" aria-label="${t('doc_group_export')}">
-        <button class="doc-fmt-btn doc-export-btn" id="btnDocExportMd" title="${t('export_markdown')}" aria-label="${t('export_markdown')}">${t('export_markdown')}</button>
+        <button class="doc-fmt-btn doc-export-btn" id="btnDocExportMd" title="${t('export_markdown')}" aria-label="${t('export_markdown')}"><svg class="ui-icon" aria-hidden="true" focusable="false"><use href="#ui-cm-export"/></svg><span aria-hidden="true">MD</span></button>
       </div>
       <div class="doc-group doc-group-danger" role="group" aria-label="${t('delete')}">
-        <button class="doc-fmt-btn doc-del-btn" id="btnDocDel" title="${t('delete')}" aria-label="${t('delete')}">🗑</button>
+        <button class="doc-fmt-btn doc-del-btn" id="btnDocDel" title="${t('delete')}" aria-label="${t('delete')}"><svg class="ui-icon" aria-hidden="true" focusable="false"><use href="#ui-trash"/></svg></button>
       </div>
       <span class="doc-hint">${t('doc_hint')}</span>
     </div>

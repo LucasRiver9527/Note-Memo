@@ -67,9 +67,9 @@ function noteToolHtml(id, n, isTodo) {
   const A = (key) => `title="${escapeHtml(t(key))}" aria-label="${escapeHtml(t(key))}"`;
   const pressed = (on) => `aria-pressed="${on ? 'true' : 'false'}"`;
   switch (id) {
-    case 'desktop': return `<button class="t-desktop" ${A('desktop')}><svg class="ui-icon" aria-hidden="true" focusable="false"><use href="#ui-pin"/></svg></button>`;
+    case 'desktop': return `<button class="t-desktop" ${A(n.gadget && n.desktopPin ? 'unpin' : 'desktop')}><svg class="ui-icon" aria-hidden="true" focusable="false"><use href="#ui-pin"/></svg></button>`;
     case 'todo': return `<button class="t-todo ${isTodo ? 'active' : ''}" ${A('todo_mode')} ${pressed(isTodo)}><svg class="ui-icon" aria-hidden="true" focusable="false"><use href="#ui-todo"/></svg></button>`;
-    case 'group': return `<button class="t-group ${n.groupId ? 'active' : ''}" ${A(n.groupId ? 'remove_from_group' : 'add_to_group')}><svg class="ui-icon" aria-hidden="true" focusable="false"><use href="#ui-folder"/></svg></button>`;
+    case 'group': return `<button class="t-group ${n.groupId ? 'active' : ''}" ${A(n.groupId && !n.gadget ? 'remove_from_group' : 'add_to_group')}><svg class="ui-icon" aria-hidden="true" focusable="false"><use href="#ui-folder"/></svg></button>`;
     case 'image': return `<button class="t-image" ${A('insert_image')}><svg class="ui-icon" aria-hidden="true" focusable="false"><use href="#ui-image"/></svg></button>`;
     case 'table': return `<button class="t-table" ${A('insert_table')}><svg class="ui-icon" aria-hidden="true" focusable="false"><use href="#ui-arrange"/></svg></button>`;
     case 'remind': return `<button class="t-remind" ${A('todo_remind')}><svg class="ui-icon" aria-hidden="true" focusable="false"><use href="#ui-clock"/></svg></button>`;
@@ -83,11 +83,13 @@ function noteToolHtml(id, n, isTodo) {
 
 function noteToolsHtml(n, isTodo, onBoard = false) {
   const hidden = new Set(state.settings.noteToolbarHidden || []);
-  const compact = state.settings.noteToolbarCompact !== false;
+  const compact = !!n.gadget || state.settings.noteToolbarCompact !== false;
   const render = (ids) => ids.filter((id) => !hidden.has(id)).map((id) => noteToolHtml(id, n, isTodo)).join('');
-  if (!compact) return render(NOTE_TOOL_PRIMARY.concat(NOTE_TOOL_SECONDARY));
-  const quickTools = render(onBoard ? NOTE_TOOL_PRIMARY.filter((id) => id !== 'pin') : NOTE_TOOL_PRIMARY);
-  return `<div class="compact-quick-tools">${quickTools}</div><button class="t-more" title="${escapeHtml(t('more'))}" aria-label="${escapeHtml(t('more'))}"><svg class="ui-icon" aria-hidden="true" focusable="false"><use href="#ui-more"/></svg></button>`;
+  const allTools = NOTE_TOOL_PRIMARY.concat(NOTE_TOOL_SECONDARY);
+  if (!compact && onBoard) return render(allTools);
+  const primaryTools = onBoard ? NOTE_TOOL_PRIMARY.filter((id) => id !== 'pin') : NOTE_TOOL_PRIMARY;
+  const quickTools = render(compact ? primaryTools : allTools);
+  return `<div class="${compact ? 'compact-quick-tools' : 'memo-full-tools'}">${quickTools}</div><button class="t-more" title="${escapeHtml(t('more'))}" aria-label="${escapeHtml(t('more'))}"><svg class="ui-icon" aria-hidden="true" focusable="false"><use href="#ui-more"/></svg></button>`;
 }
 
 function buildNoteEl(n) {
@@ -111,6 +113,13 @@ function buildNoteEl(n) {
   if (n.fontFamily && n.fontFamily !== 'system') el.style.fontFamily = FONTS[n.fontFamily] || n.fontFamily;
 
   const group = state.groups.find((g) => g.id === n.groupId);
+  const groupName = escapeHtml(group ? group.name : t('ungrouped'));
+  if (n.gadget) {
+    buildCanvasGadget(el, n, noteToolsHtml(n, false, true), groupName, sanitizeCss(group && group.color));
+    wireNoteEvents(el, n);
+    return el;
+  }
+  const updated = formatDate(n.updatedAt || n.createdAt);
   const isTodo = n.type === 'todo';
   const items = n.items || [];
   const reminder = n.reminder && n.reminder.enabled && n.reminder.time;
@@ -142,9 +151,9 @@ function buildNoteEl(n) {
     </div>
     <div class="note-body">${bodyHtml}</div>
     <div class="note-foot">
-      <span class="group-tag" title="${t('set_group')}"><span class="dot" style="background:${sanitizeCss(group && group.color) || '#999'}"></span>${group ? escapeHtml(group.name) : t('ungrouped')}</span>
-      ${reminder ? `<span class="reminder-chip ${overdue ? 'overdue' : ''}" title="${formatDate(n.reminder.time)}">⏰ ${formatDate(n.reminder.time)}</span>` : ''}
-      <span class="date">${formatDate(n.updatedAt || n.createdAt)}</span>
+      <span class="group-tag" title="${groupName}"><span class="dot" style="background:${sanitizeCss(group && group.color) || '#999'}"></span><span class="note-foot-label">${groupName}</span></span>
+      ${reminder ? `<span class="reminder-chip ${overdue ? 'overdue' : ''}" title="${formatDate(n.reminder.time)}"><svg class="ui-icon" aria-hidden="true" focusable="false"><use href="#ui-clock"/></svg><span class="note-foot-label">${formatDate(n.reminder.time)}</span></span>` : ''}
+      <span class="date" title="${updated}">${updated}</span>
     </div>
     <div class="resize-handle"></div>`;
 
@@ -373,13 +382,13 @@ function buildMemoEl(n) {
       <div class="memo-head">
         <span class="memo-grip" title="${t('drag_sort')}">⠿</span>
         <input class="note-title" value="${escapeHtml(n.title || '')}" placeholder="${t('note_title')}" />
-          <span class="date">${formatDate(n.updatedAt || n.createdAt)}</span>
         <div class="memo-tools${state.settings.noteToolbarCompact !== false ? ' compact-tools' : ''}">${noteToolsHtml(n, isTodo)}</div>
       </div>
       <div class="memo-body">${bodyHtml}</div>
       <div class="memo-foot">
         <span class="group-tag${group ? '' : ' memo-ungrouped'}" title="${t('set_group')}"><span class="dot" style="background:${sanitizeCss(group && group.color) || '#999'}"></span>${group ? escapeHtml(group.name) : t('ungrouped')}</span>
-        ${reminder ? `<span class="reminder-chip ${overdue ? 'overdue' : ''}" title="${formatDate(n.reminder.time)}">⏰ ${formatDate(n.reminder.time)}</span>` : ''}
+        ${reminder ? `<span class="reminder-chip ${overdue ? 'overdue' : ''}" title="${formatDate(n.reminder.time)}"><svg class="ui-icon" aria-hidden="true" focusable="false"><use href="#ui-clock"/></svg><span>${formatDate(n.reminder.time)}</span></span>` : ''}
+        <span class="date">${formatDate(n.updatedAt || n.createdAt)}</span>
       </div>
     </div>`;
 
@@ -399,7 +408,7 @@ function wireCommon(el, n) {
   });
   const checkboxes = $$('.todo-item input[type=checkbox]', el);
 
-  titleInput.addEventListener('keydown', (event) => {
+  titleInput?.addEventListener('keydown', (event) => {
     if (event.key !== 'Tab' || event.shiftKey || event.isComposing) return;
     const firstTool = el.querySelector('.note-tools button:not(:disabled), .memo-tools button:not(:disabled)');
     if (!firstTool) return;
@@ -407,7 +416,7 @@ function wireCommon(el, n) {
     titleInput.blur();
     firstTool.focus();
   });
-  titleInput.addEventListener('input', () => { n.title = titleInput.value; n.updatedAt = Date.now(); save(); refreshFoot(el, n); });
+  titleInput?.addEventListener('input', () => { n.title = titleInput.value; n.updatedAt = Date.now(); save(); refreshFoot(el, n); });
   if (content) {
     content.addEventListener('click', (e) => {
       const link = e.target.closest('a.note-link');
@@ -531,6 +540,7 @@ function wireCommon(el, n) {
   onTool('.t-remind', () => openReminder(n));
   onTool('.t-group', (e) => {
     e.stopPropagation();
+    if (n.gadget) { openGroupPop(el, n); return; }
     if (n.groupId) {
       const gname = (state.groups.find((g) => g.id === n.groupId) || {}).name;
       n.groupId = null;
@@ -544,7 +554,8 @@ function wireCommon(el, n) {
   });
   onTool('.t-desktop', (e) => {
     e.stopPropagation();
-    pinNoteToDesktop(n);
+    if (n.gadget && n.desktopPin) window.api.unpinFromDesktop(n.id);
+    else pinNoteToDesktop(n);
   });
   onTool('.t-image', async (e) => {
     e.stopPropagation();
@@ -683,8 +694,8 @@ function refreshBoardCards(board, visible) {
   getSortedNotes(visible).forEach((n) => {
     const existing = boardEls.get(n.id);
     const snap = noteFingerprint(n);
-    if (existing && existing.__snap === snap) {
-      refreshCardSearch(existing, n);
+    if (existing && existing.__snap === snap && (!n.gadget || existing.__gadgetNote === n)) {
+      if (!n.gadget) refreshCardSearch(existing, n);
       return;
     }
     const el = buildNoteEl(n);

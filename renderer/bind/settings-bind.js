@@ -37,7 +37,9 @@
     panel.classList.remove('hidden');
     const isSettings = page === 'settings';
     panel.classList.toggle('workspace-utility-page', !isSettings);
-    const title = $('#settingsTitle');
+    const heading = $('#settingsTitle');
+    const title = $('span', heading);
+    $('use', heading).setAttribute('href', page === 'trash' ? '#ui-trash' : page === 'sort' ? '#ui-sort' : '#ui-settings');
     title.dataset.i18n = page === 'trash' ? 'tab_trash' :
       page === 'sort' ? 'workspace_edit_order' : 'settings_title';
     title.textContent = t(title.dataset.i18n);
@@ -45,6 +47,8 @@
     switchTab(isSettings ? 'appearance' : page);
     panel.focus({ preventScroll: true });
     syncZoomToolbar();
+    syncCanvasLinks();
+    syncCanvasInk();
   }
 
   function closeSettingsPage() {
@@ -59,7 +63,10 @@
     }
     if (document.activeElement !== settingsOpener) gear.focus({ preventScroll: true });
     settingsOpener = null;
+    syncCanvasGadgets();
     syncZoomToolbar();
+    syncCanvasLinks();
+    syncCanvasInk();
   }
 
   function onSettingsKeydown(event) {
@@ -109,7 +116,21 @@ function bindSettings() {
   $('#btnCloseHide').onclick = () => closeDecision('hide');
   $('#btnCloseQuit').onclick = () => closeDecision('quit');
   $('#btnCloseCancel').onclick = () => closeDecision('cancel');
-  $('#closeOverlay').onclick = (e) => { if (e.target.id === 'closeOverlay') closeDecision('cancel'); };
+  const closeOverlay = $('#closeOverlay');
+  closeOverlay.onclick = (e) => { if (e.target === closeOverlay) closeDecision('cancel'); };
+  closeOverlay.addEventListener('keydown', (e) => {
+    if (e.key === 'Escape') {
+      e.preventDefault();
+      e.stopPropagation();
+      closeDecision('cancel');
+    } else if (e.key === 'Tab') {
+      const buttons = closeOverlay.querySelectorAll('button');
+      const edge = e.shiftKey ? buttons[0] : buttons[buttons.length - 1];
+      if (e.target !== edge) return;
+      e.preventDefault();
+      (e.shiftKey ? buttons[buttons.length - 1] : buttons[0]).focus();
+    }
+  });
 
   $('#btnChangelog').onclick = openChangelog;
   $('#btnChangelogClose').onclick = closeChangelog;

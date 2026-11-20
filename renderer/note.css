@@ -37,6 +37,10 @@ body.glass #note {
   color: inherit; display: inline-flex; align-items: center; justify-content: center;
   transition: background 0.12s;
 }
+.dn-btn > .ui-icon {
+  width: 15px; height: 15px; fill: none; stroke: currentColor; stroke-width: 1.6;
+  stroke-linecap: round; stroke-linejoin: round; pointer-events: none;
+}
 .dn-btn:hover { background: rgba(127,127,127,0.45); }
 
 .dn-body { flex: 1; padding: 4px 12px 12px; user-select: text; overflow-y: auto; letter-spacing: var(--font-letter-spacing, 0); }

@@ -5,6 +5,7 @@
   <meta http-equiv="Content-Security-Policy" content="default-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' data: note-bg: note-img:; font-src 'self' data: note-font:; media-src 'self' data: note-sound:;" />
   <title>便签</title>
   <link rel="stylesheet" href="styles.css" />
+  <link rel="stylesheet" href="gadgets.css" />
 </head>
 <body>
   <svg class="ui-icon-defs" aria-hidden="true" xmlns="http://www.w3.org/2000/svg">
@@ -26,6 +27,7 @@
     <symbol id="ui-cm-align-center" viewBox="0 0 24 24"><path d="M4 5h16M7 10h10M4 15h16M7 20h10"/></symbol>
     <symbol id="ui-cm-align-right" viewBox="0 0 24 24"><path d="M4 5h16m-10 5h10M4 15h16m-10 5h10"/></symbol>
     <symbol id="ui-cm-table" viewBox="0 0 24 24"><path d="M3 4h18v16H3zM3 10h18M3 15h18M9 10v10m6-10v10"/></symbol>
+    <symbol id="ui-chevron-down" viewBox="0 0 24 24"><path d="m6 9 6 6 6-6"/></symbol>
     <symbol id="ui-cm-chevron" viewBox="0 0 24 24"><path d="m9 5 7 7-7 7"/></symbol>
     <symbol id="ui-cm-export" viewBox="0 0 24 24"><path d="M12 3v12m-4-4 4 4 4-4M4 16v4h16v-4"/></symbol>
     <symbol id="ui-layers" viewBox="0 0 24 24"><path d="M12 3 3 8l9 5 9-5-9-5ZM3 12l9 5 9-5M3 16l9 5 9-5"/></symbol>
@@ -35,25 +37,40 @@
     <symbol id="ui-trash" viewBox="0 0 24 24"><path d="M4 7h16M9 7V4h6v3m3 0-1 14H7L6 7m4 4v6m4-6v6"/></symbol>
     <symbol id="ui-board" viewBox="0 0 24 24"><path d="M3 3h7v8H3zm11 0h7v5h-7zm0 9h7v9h-7zM3 15h7v6H3z"/></symbol>
     <symbol id="ui-memo" viewBox="0 0 24 24"><path d="M4 5h16M4 12h16M4 19h11"/></symbol>
+    <symbol id="ui-select-notes" viewBox="0 0 24 24"><rect x="3.5" y="8.5" width="12" height="12" rx="2"/><path d="M8.5 5.5a2 2 0 0 1 2-2h8a2 2 0 0 1 2 2v8a2 2 0 0 1-2 2M7 13h5m-5 3.5h3"/></symbol>
     <symbol id="ui-todo" viewBox="0 0 24 24"><path d="M20 12v8H4V4h12m-8 8 3 3 9-10"/></symbol>
     <symbol id="ui-doc" viewBox="0 0 24 24"><path d="M6 3h8l4 4v14H6zM14 3v5h4m-9 4h6m-6 4h6"/></symbol>
     <symbol id="ui-search" viewBox="0 0 24 24"><path d="M16 16l4 4M18 11a7 7 0 1 1-14 0 7 7 0 0 1 14 0Z"/></symbol>
     <symbol id="ui-sort" viewBox="0 0 24 24"><path d="M8 20V4L4 8m4-4 4 4m4-4v16l-4-4m4 4 4-4"/></symbol>
     <symbol id="ui-raise" viewBox="0 0 24 24"><path d="M5 4h14M12 20V8m-5 5 5-5 5 5"/></symbol>
+    <symbol id="ui-pen" viewBox="0 0 24 24"><path d="m4 20 4.5-1 11-11a2.5 2.5 0 0 0-3.5-3.5l-11 11L4 20Zm10-13 3.5 3.5"/></symbol>
+    <symbol id="ui-marker" viewBox="0 0 24 24"><path d="m4 20 2-4 4 2-3 2H4Zm2-4 9-11a2.2 2.2 0 0 1 3.3 0L20 7a2 2 0 0 1 0 2.8L10 18"/></symbol>
+    <symbol id="ui-eraser" viewBox="0 0 24 24"><path d="m4 14 8.5-9a2 2 0 0 1 2.8 0l4.7 4.7a2 2 0 0 1 0 2.8L13 20H9l-5-4a1.5 1.5 0 0 1 0-2Zm4-4 8 8m-3 2h8"/></symbol>
+    <symbol id="ui-link" viewBox="0 0 24 24"><path d="m10 13 4-4m-6 6-1 1a3.5 3.5 0 0 1-5-5l4-4a3.5 3.5 0 0 1 5 0m2 8a3.5 3.5 0 0 0 5 0l4-4a3.5 3.5 0 0 0-5-5l-1 1" transform="translate(0 1)"/></symbol>
+    <symbol id="ui-pan" viewBox="0 0 24 24"><path d="M9 13V5a1.5 1.5 0 0 1 3 0v6-7a1.5 1.5 0 0 1 3 0v7-5a1.5 1.5 0 0 1 3 0v6-3a1.5 1.5 0 0 1 3 0v6a6 6 0 0 1-6 6h-2a5 5 0 0 1-4-2l-4-5a1.5 1.5 0 0 1 2.2-2l1.8 1Z"/></symbol>
     <symbol id="ui-pin" viewBox="0 0 24 24"><path d="m15 4 5 5-3 1-3 4v3l-3-3-5-5h3l4-3 1-3m-3 11-6 6"/></symbol>
     <symbol id="ui-settings" viewBox="0 0 24 24"><path d="M10 3h4l.6 2.5 2 .9 2.2-1.3 2 3.4-1.8 1.8v2.4l1.8 1.8-2 3.4-2.2-1.3-2 .9-.6 2.5h-4l-.6-2.5-2-.9-2.2 1.3-2-3.4L5 12.7v-2.4L3.2 8.5l2-3.4 2.2 1.3 2-.9L10 3Zm5 8.5a3 3 0 1 0-6 0 3 3 0 0 0 6 0Z"/></symbol>
     <symbol id="ui-menu" viewBox="0 0 24 24"><path d="M4 6h16M4 12h16M4 18h16"/></symbol>
     <symbol id="ui-more" viewBox="0 0 24 24"><path d="M5 12h.1m6.9 0h.1m6.9 0h.1"/></symbol>
     <symbol id="ui-sun" viewBox="0 0 24 24"><path d="M12 2v2m0 16v2M2 12h2m16 0h2M5 5l1.5 1.5m11 11L19 19M5 19l1.5-1.5m11-11L19 5m-3 7a4 4 0 1 1-8 0 4 4 0 0 1 8 0Z"/></symbol>
     <symbol id="ui-moon" viewBox="0 0 24 24"><path d="M20.8 15.2A9 9 0 0 1 8.8 3.2a9 9 0 1 0 12 12Z"/></symbol>
+    <symbol id="ui-close" viewBox="0 0 24 24"><path d="m6 6 12 12M18 6 6 18"/></symbol>
+    <symbol id="ui-minus" viewBox="0 0 24 24"><path d="M5 12h14"/></symbol>
+    <symbol id="ui-play" viewBox="0 0 24 24"><path d="m8 5 11 7-11 7z"/></symbol>
+    <symbol id="ui-pause" viewBox="0 0 24 24"><path d="M9 5v14m6-14v14"/></symbol>
+    <symbol id="ui-flag" viewBox="0 0 24 24"><path d="M5 21V4m0 1c5-4 9 4 14 0v10c-5 4-9-4-14 0"/></symbol>
+    <symbol id="ui-reset" viewBox="0 0 24 24"><path d="M20 4v5h-5m5 0a8 8 0 1 0 0 6"/></symbol>
     <symbol id="ui-plus" viewBox="0 0 24 24"><path d="M12 5v14M5 12h14"/></symbol>
+    <symbol id="ui-back" viewBox="0 0 24 24"><path d="M20 12H4m7-7-7 7 7 7"/></symbol>
     <symbol id="ui-undo" viewBox="0 0 24 24"><path d="M8 5 3 10l5 5m-5-5h11a6 6 0 0 1 6 6v3"/></symbol>
     <symbol id="ui-redo" viewBox="0 0 24 24"><path d="m16 5 5 5-5 5m5-5H10a6 6 0 0 0-6 6v3"/></symbol>
     <symbol id="ui-save" viewBox="0 0 24 24"><path d="M5 3h12l4 4v14H3V3zm3 0v6h8V3M7 21v-7h10v7"/></symbol>
-    <symbol id="ui-arrange" viewBox="0 0 24 24"><path d="M4 4h6v6H4zm10 0h6v6h-6zM4 14h6v6H4zm10 0h6v6h-6z"/></symbol>
+    <symbol id="ui-arrange" viewBox="0 0 24 24"><path d="M4 6h15M4 12h10M4 18h7m6-2 2 2-2 2m-2-2h4"/></symbol>
     <symbol id="ui-eye" viewBox="0 0 24 24"><path d="M2 12s4-6 10-6 10 6 10 6-4 6-10 6-10-6-10-6Zm13 0a3 3 0 1 0-6 0 3 3 0 0 0 6 0Z"/></symbol>
     <symbol id="ui-color" viewBox="0 0 24 24"><path d="M12 3a9 9 0 1 0 0 18h2a2 2 0 0 0 1-3.7 1.6 1.6 0 0 1 1-2.9H18a3 3 0 0 0 3-3c0-4.7-4-8.4-9-8.4ZM7 10h.1m3-3h.1m4 0h.1m3 3h.1"/></symbol>
+    <symbol id="ui-calendar" viewBox="0 0 24 24"><path d="M4 6h16v14H4zM8 3v6m8-6v6M4 11h16"/></symbol>
     <symbol id="ui-clock" viewBox="0 0 24 24"><path d="M21 12a9 9 0 1 1-18 0 9 9 0 0 1 18 0Zm-9-5v5l3 2"/></symbol>
+    <symbol id="ui-puzzle" viewBox="0 0 24 24"><path d="M4 8h5a2.5 2.5 0 1 1 4 0h5v4a2.5 2.5 0 1 1 0 4v4h-5a2.5 2.5 0 1 0-4 0H4v-4a2.5 2.5 0 1 0 0-4z"/></symbol>
     <symbol id="ui-image" viewBox="0 0 24 24"><path d="M3 4h18v16H3zM3 16l5-5 4 4 3-3 6 6m-5-9h.1"/></symbol>
   </svg>
   <div id="app">
@@ -75,6 +92,10 @@
       <nav id="filterbar" aria-label="筛选范围" data-i18n-aria-label="filter_scope">
         <div class="workspace-nav-items">
         <button class="tb-btn" id="btnAdd" data-i18n-title="new_note_tip" title="新建便签 (Ctrl+Shift+N)"><svg class="ui-icon" aria-hidden="true" focusable="false"><use href="#ui-plus"/></svg><span class="ui-icon-label" data-i18n="new_note">新建</span></button>
+        <div id="canvasShortcuts" class="canvas-shortcuts hidden" role="group" data-i18n-aria-label="canvas_tools">
+          <button class="ct-btn" type="button" id="btnCanvasDraw" aria-pressed="false" aria-controls="canvasInkTools"><svg class="ui-icon" aria-hidden="true"><use href="#ui-pen"/></svg><span data-i18n="canvas_draw">涂鸦</span></button>
+          <button class="ct-btn" type="button" id="btnCanvasLink" aria-pressed="false" aria-controls="canvasLinkPrompt"><svg class="ui-icon" aria-hidden="true"><use href="#ui-link"/></svg><span data-i18n="canvas_link_short">关联</span></button>
+        </div>
       <div class="filter-scope" role="group" aria-label="筛选范围" data-i18n-aria-label="filter_scope">
         <button class="chip active" data-group="all"><svg class="ui-icon" aria-hidden="true" focusable="false"><use href="#ui-layers"/></svg><span class="ui-icon-label" data-i18n="workspace_all">全部便签</span></button>
         <button class="chip" data-group="ungrouped"><svg class="ui-icon" aria-hidden="true" focusable="false"><use href="#ui-folder"/></svg><span class="ui-icon-label" data-i18n="ungrouped">未分组</span></button>
@@ -94,6 +115,14 @@
     </details>
 
         <button type="button" class="chip workspace-trash" id="btnWorkspaceTrash"><svg class="ui-icon" aria-hidden="true" focusable="false"><use href="#ui-trash"/></svg><span class="ui-icon-label" data-i18n="tab_trash">回收站</span></button>
+        <div id="canvasGadgetEntries" class="hidden" role="group" aria-label="新建组件" data-i18n-aria-label="canvas_gadgets">
+          <div class="canvas-gadget-heading">
+            <svg class="ui-icon" aria-hidden="true" focusable="false"><use href="#ui-puzzle"/></svg>
+            <span><span data-i18n="canvas_gadget_heading">组件</span> <span aria-hidden="true">+</span></span>
+          </div>
+          <button class="chip" type="button" draggable="true" data-gadget="timer"><svg class="ui-icon" aria-hidden="true"><use href="#ui-clock"/></svg><span data-i18n="gadget_timer">专注计时</span></button>
+          <button class="chip" type="button" draggable="true" data-gadget="calendar"><svg class="ui-icon" aria-hidden="true"><use href="#ui-calendar"/></svg><span data-i18n="gadget_calendar">日历</span></button>
+        </div>
         <div class="workspace-group-header">
           <span data-i18n="workspace_groups">我的分组</span>
       <button class="chip add-chip" id="btnAddGroup" data-i18n-title="new_group" title="新建分组"><svg class="ui-icon" aria-hidden="true" focusable="false"><use href="#ui-plus"/></svg><span class="ui-icon-label" data-i18n="add_group">分组</span></button>
@@ -105,46 +134,57 @@
         <div id="workspaceHeader">
         <div class="workspace-heading">
           <button type="button" class="icon-btn" id="btnWorkspaceNav" aria-expanded="false" aria-controls="filterbar" data-i18n-aria-label="filter_scope" aria-label="筛选范围"><svg class="ui-icon" aria-hidden="true" focusable="false"><use href="#ui-menu"/></svg></button>
-          <div class="workspace-welcome"><svg class="ui-icon" aria-hidden="true" focusable="false"><use id="workspaceGreetingIcon" href="#ui-sun"/></svg><span id="workspaceGreeting"></span></div>
           <div class="workspace-context"><svg class="ui-icon" aria-hidden="true" focusable="false"><use href="#ui-folder"/></svg>
           <h1 id="workspaceTitle" data-i18n="workspace_all">全部便签</h1>
-          <span class="note-count" id="noteCount">0</span>
+          <span class="note-count" id="workspaceCount"><span id="noteCount">0</span></span>
           </div>
+          <div class="workspace-welcome"><svg class="ui-icon" aria-hidden="true" focusable="false"><use id="workspaceGreetingIcon" href="#ui-sun"/></svg><span id="workspaceGreeting"></span></div>
         </div>
         <div class="workspace-toolbar">
       <div class="tb-center">
         <div class="search-box">
           <span class="search-icon"><svg class="ui-icon" aria-hidden="true" focusable="false"><use href="#ui-search"/></svg></span>
           <input id="searchInput" type="text" data-i18n-placeholder="search" placeholder="搜索便签…" />
-          <button id="searchClear" class="icon-btn hidden" data-i18n-title="clear" title="清除" data-i18n-aria-label="clear" aria-label="清除">✕</button>
+          <button id="searchClear" class="icon-btn hidden" data-i18n-title="clear" title="清除" data-i18n-aria-label="clear" aria-label="清除"><svg class="ui-icon" aria-hidden="true" focusable="false"><use href="#ui-close"/></svg></button>
         </div>
         <section id="recentNotes" class="hidden" aria-labelledby="recentNotesTitle">
           <h2 id="recentNotesTitle" data-i18n="recent_notes">最近编辑</h2>
           <div class="recent-note-list"></div>
         </section>
       </div>
+      <div class="workspace-actions">
       <div class="view-toggle" role="group" aria-label="视图" data-i18n-aria-label="views_group">
         <button class="view-btn active" id="viewBoard" data-i18n-title="board_view" title="便签视图" data-i18n-aria-label="board_view" aria-label="便签视图" aria-pressed="true"><svg class="ui-icon" aria-hidden="true" focusable="false"><use href="#ui-board"/></svg></button>
         <button class="view-btn" id="viewMemo" data-i18n-title="memo_view" title="备忘录视图" data-i18n-aria-label="memo_view" aria-label="备忘录视图" aria-pressed="false"><svg class="ui-icon" aria-hidden="true" focusable="false"><use href="#ui-memo"/></svg></button>
         <button class="view-btn" id="viewTodo" data-i18n-title="todo_view" title="待办区" data-i18n-aria-label="todo_view" aria-label="待办区" aria-pressed="false"><svg class="ui-icon" aria-hidden="true" focusable="false"><use href="#ui-todo"/></svg></button>
         <button class="view-btn" id="viewDoc" data-i18n-title="doc_view" title="文档模式" data-i18n-aria-label="doc_view" aria-label="文档模式" aria-pressed="false"><svg class="ui-icon" aria-hidden="true" focusable="false"><use href="#ui-doc"/></svg></button>
       </div>
-          <div class="workspace-actions">
-            <button type="button" class="tb-btn secondary arrange-unavailable" disabled id="btnQuickArrange" aria-label="一键整理" data-i18n-aria-label="workspace_arrange_action" data-i18n-title="quick_arrange" title="一键整理"><svg class="ui-icon" aria-hidden="true" focusable="false"><use href="#ui-arrange"/></svg><span class="ui-icon-label" data-i18n="quick_arrange">一键整理</span></button>
-        <button class="tb-btn secondary" id="btnBatchToggle" data-i18n-aria-label="workspace_batch_action" aria-label="批量选中" data-i18n-title="batch_select" title="批量选中"><svg class="ui-icon" aria-hidden="true" focusable="false"><use href="#ui-todo"/></svg><span class="ui-icon-label" data-i18n="batch_select">批量选中</span></button>
+        <button class="tb-btn secondary" id="btnBatchToggle" data-i18n-aria-label="workspace_batch_action" aria-label="批量选中" data-i18n-title="batch_select" title="批量选中"><svg class="ui-icon" aria-hidden="true" focusable="false"><use href="#ui-select-notes"/></svg><span class="ui-icon-label" data-i18n="batch_select">批量选中</span></button>
+        <div class="workspace-layout-actions" role="group" aria-label="整理与布局" data-i18n-aria-label="workspace_arrange_layout">
+          <button type="button" class="tb-btn secondary arrange-unavailable" disabled id="btnQuickArrange" aria-label="一键整理" data-i18n-aria-label="workspace_arrange_action" data-i18n-title="quick_arrange" title="一键整理"><svg class="ui-icon" aria-hidden="true" focusable="false"><use href="#ui-arrange"/></svg><span class="ui-icon-label" data-i18n="quick_arrange">一键整理</span></button>
         <div class="tb-more-wrap" id="toolbarMoreWrap">
-          <button class="tb-btn secondary" id="btnToolbarMore" type="button" aria-haspopup="true" aria-expanded="false" aria-controls="toolbarMoreMenu" data-i18n-title="workspace_layout_menu" title="排序与布局" data-i18n-aria-label="workspace_layout_menu" aria-label="排序与布局"><svg class="ui-icon" aria-hidden="true" focusable="false"><use href="#ui-sort"/></svg><span class="ui-icon-label" data-i18n="workspace_layout_menu">排序与布局</span></button>
+          <button class="tb-btn secondary" id="btnToolbarMore" type="button" aria-haspopup="true" aria-expanded="false" aria-controls="toolbarMoreMenu" data-i18n-title="workspace_layout_menu" title="排序与布局" data-i18n-aria-label="workspace_layout_menu" aria-label="排序与布局"><svg class="ui-icon" aria-hidden="true" focusable="false"><use href="#ui-chevron-down"/></svg><svg class="ui-icon standalone-layout-icon" aria-hidden="true" focusable="false"><use href="#ui-sort"/></svg><span class="standalone-layout-label" data-i18n="workspace_layout_menu">排序与布局</span></button>
           <div class="tb-more-menu hidden" id="toolbarMoreMenu" role="menu" aria-labelledby="btnToolbarMore">
             <div id="toolbarSortRules" role="group" data-i18n-aria-label="sort_mode" aria-label="排序方式"></div>
             <button type="button" class="tb-btn secondary" role="menuitem" id="btnWorkspaceSort" title="排序" data-i18n-title="workspace_edit_order"><svg class="ui-icon" aria-hidden="true" focusable="false"><use href="#ui-sort"/></svg><span data-i18n="workspace_edit_order">编辑自定义顺序</span></button>
             <button role="menuitem" class="tb-btn secondary" id="btnSaveOrder" data-i18n-title="save_current_order" title="保存排序与布局"><svg class="ui-icon" aria-hidden="true" focusable="false"><use href="#ui-save"/></svg><span class="ui-icon-label" data-i18n="save_current_order">保存排序与布局</span></button>
           </div>
         </div>
+        </div>
         <button class="icon-btn" id="btnUndo" data-i18n-title="undo" title="撤销 (Ctrl+Z)" data-i18n-aria-label="undo" aria-label="撤销" disabled><svg class="ui-icon" aria-hidden="true" focusable="false"><use href="#ui-undo"/></svg></button>
         <button class="icon-btn" id="btnRedo" data-i18n-title="redo" title="重做 (Ctrl+Shift+Z)" data-i18n-aria-label="redo" aria-label="重做" disabled><svg class="ui-icon" aria-hidden="true" focusable="false"><use href="#ui-redo"/></svg></button>
           </div>
         </div>
 
+      <div id="canvasToolbar" class="hidden">
+        <button class="ct-btn ct-toggle" id="ctExpand" type="button" aria-controls="ctGroup" aria-expanded="false" aria-label="画布缩放 / 平移，100%"><span class="ct-label" id="zoomLabel">100%</span><svg class="ui-icon" aria-hidden="true" focusable="false"><use href="#ui-cm-chevron"/></svg></button>
+        <span id="ctGroup" class="ct-group" inert>
+          <button class="ct-btn" id="btnZoomOut" data-i18n-title="canvas_zoom_out" title="缩小" data-i18n-aria-label="canvas_zoom_out" aria-label="缩小"><svg class="ui-icon" aria-hidden="true" focusable="false"><use href="#ui-minus"/></svg></button>
+          <button class="ct-btn" id="btnZoomIn" data-i18n-title="canvas_zoom_in" title="放大" data-i18n-aria-label="canvas_zoom_in" aria-label="放大"><svg class="ui-icon" aria-hidden="true" focusable="false"><use href="#ui-plus"/></svg></button>
+          <button class="ct-btn" id="btnZoomReset" data-i18n-title="canvas_zoom_reset" title="重置缩放" data-i18n-aria-label="canvas_zoom_reset" aria-label="重置缩放"><svg class="ui-icon" aria-hidden="true" focusable="false"><use href="#ui-reset"/></svg></button>
+          <button class="ct-btn" id="btnZoomPan" data-i18n-title="canvas_pan_hint" title="平移画布：按住空格键＋鼠标左键拖动，或按住鼠标中键拖动；单按空格不会移动画布（编辑时空格仍用于输入）" data-i18n-aria-label="canvas_pan_hint" aria-label="平移画布：按住空格键＋鼠标左键拖动，或按住鼠标中键拖动；单按空格不会移动画布（编辑时空格仍用于输入）"><svg class="ui-icon" aria-hidden="true" focusable="false"><use href="#ui-pan"/></svg></button>
+        </span>
+      </div>
         </div>
 
     <div id="filterStatus" class="filter-status hidden"></div>
@@ -153,10 +193,10 @@
       <span id="batchCount" class="batch-count"></span>
       <button class="batch-btn" id="btnBatchSelectAll" data-i18n="batch_select_all">全选</button>
       <button class="batch-btn" id="btnBatchClear" data-i18n="batch_clear_sel">取消选择</button>
-      <button type="button" class="batch-btn" id="btnBatchArrange" data-i18n="batch_arrange" data-i18n-title="batch_arrange_hint" title="按当前排序整理选中便签，其他便签保持原位" disabled>⚡ 整理选中</button>
-      <button class="batch-btn" id="btnBatchMove" data-i18n="batch_move">🏷 移动到分组</button>
-      <button class="batch-btn danger" id="btnBatchDelete" data-i18n="batch_delete">🗑 批量删除</button>
-      <button class="batch-btn" id="btnBatchExit" data-i18n="batch_exit">✕ 退出批量</button>
+      <button type="button" class="batch-btn" id="btnBatchArrange" data-i18n-title="batch_arrange_hint" title="按当前排序整理选中便签，其他便签保持原位" disabled><svg class="ui-icon" aria-hidden="true" focusable="false"><use href="#ui-arrange"/></svg><span data-i18n="batch_arrange">整理选中</span></button>
+      <button class="batch-btn" id="btnBatchMove"><svg class="ui-icon" aria-hidden="true" focusable="false"><use href="#ui-folder"/></svg><span data-i18n="batch_move">移动到分组</span></button>
+      <button class="batch-btn danger" id="btnBatchDelete"><svg class="ui-icon" aria-hidden="true" focusable="false"><use href="#ui-trash"/></svg><span data-i18n="batch_delete">批量删除</span></button>
+      <button class="batch-btn" id="btnBatchExit"><svg class="ui-icon" aria-hidden="true" focusable="false"><use href="#ui-close"/></svg><span data-i18n="batch_exit">退出批量</span></button>
     </div>
 
     <main id="canvas">
@@ -165,27 +205,28 @@
       <div id="todoList" class="hidden"></div>
       <div id="docList" class="hidden"></div>
       <div class="empty-hint hidden" id="emptyHint">
-        <div class="empty-icon" id="emptyHintIcon">🗒️</div>
+        <div class="empty-icon" id="emptyHintIcon"><svg class="ui-icon" aria-hidden="true" focusable="false"><use href="#ui-doc"/></svg></div>
         <p data-i18n="no_notes">还没有便签</p>
         <button id="btnEmptyCreate" class="tb-btn empty-create" type="button" data-i18n="new_note">＋ 新建</button>
         <button id="btnClearFilters" class="tb-btn empty-create hidden" type="button" data-i18n="clear_filters">清除搜索与筛选</button>
         <p class="sub" data-i18n="no_notes_sub">也可以双击空白处创建</p>
       </div>
-      <div id="canvasToolbar" class="hidden">
-        <button class="ct-btn ct-toggle" id="ctExpand" data-i18n-title="canvas_zoom_toggle" title="画布缩放 / 平移" data-i18n-aria-label="canvas_zoom_toggle" aria-label="画布缩放 / 平移">⤢</button>
-        <span id="ctGroup" class="ct-group">
-          <button class="ct-btn" id="btnZoomOut" data-i18n-title="canvas_zoom_out" title="缩小" data-i18n-aria-label="canvas_zoom_out" aria-label="缩小">−</button>
-          <span class="ct-label" id="zoomLabel">100%</span>
-          <button class="ct-btn" id="btnZoomIn" data-i18n-title="canvas_zoom_in" title="放大" data-i18n-aria-label="canvas_zoom_in" aria-label="放大">＋</button>
-          <button class="ct-btn" id="btnZoomReset" data-i18n-title="canvas_zoom_reset" title="重置缩放" data-i18n-aria-label="canvas_zoom_reset" aria-label="重置缩放">⟳</button>
-          <button class="ct-btn" id="btnZoomPan" data-i18n-title="canvas_pan_hint" title="平移画布：按住空格键＋鼠标左键拖动，或按住鼠标中键拖动；单按空格不会移动画布（编辑时空格仍用于输入）" data-i18n-aria-label="canvas_pan_hint" aria-label="平移画布：按住空格键＋鼠标左键拖动，或按住鼠标中键拖动；单按空格不会移动画布（编辑时空格仍用于输入）">✋</button>
-        </span>
-      </div>
     </main>
+    <div id="canvasInkTools" class="hidden" role="group" data-i18n-aria-label="canvas_draw">
+      <div class="ink-brushes">
+        <button class="ct-btn" type="button" data-ink-tool="pen" aria-pressed="true" data-i18n-aria-label="canvas_ink_pen" data-i18n-title="canvas_ink_pen"><svg class="ui-icon" aria-hidden="true"><use href="#ui-pen"/></svg></button>
+        <button class="ct-btn" type="button" data-ink-tool="marker" aria-pressed="false" data-i18n-aria-label="canvas_ink_marker" data-i18n-title="canvas_ink_marker"><svg class="ui-icon" aria-hidden="true"><use href="#ui-marker"/></svg></button>
+        <button class="ct-btn" type="button" data-ink-tool="eraser" aria-pressed="false" data-i18n-aria-label="canvas_ink_eraser" data-i18n-title="canvas_ink_eraser"><svg class="ui-icon" aria-hidden="true"><use href="#ui-eraser"/></svg></button>
+      </div>
+      <label class="ink-width"><span data-i18n="canvas_ink_width">粗细</span><input id="canvasInkWidth" type="range" min="1" max="20" value="3"><output id="canvasInkWidthValue" for="canvasInkWidth">3</output></label>
+      <div id="canvasInkColors" class="ink-colors" role="group" data-i18n-aria-label="color"></div>
+      <button class="ct-btn ink-exit" id="btnCanvasDrawExit" type="button" data-i18n="canvas_draw_exit">退出涂鸦</button>
+    </div>
+    <div id="canvasLinkPrompt" class="hidden"><span id="canvasLinkStatus" role="status"></span><button class="ct-btn" type="button" id="btnCanvasLinkExit" data-i18n="canvas_link_exit">退出</button></div>
   <!-- 全局设置面板 -->
   <section id="settingsPanel" class="hidden" aria-labelledby="settingsTitle" tabindex="-1">
       <header class="sp-header">
-        <h1 id="settingsTitle" data-i18n="settings_title">⚙ 全局设置</h1>
+        <h1 id="settingsTitle"><svg class="ui-icon" aria-hidden="true" focusable="false"><use href="#ui-settings"/></svg><span data-i18n="settings_title">全局设置</span></h1>
         <button type="button" class="tb-btn secondary" id="btnCloseSettings" data-i18n="settings_back">← 返回工作区</button>
       </header>
       <div class="sp-layout">
@@ -617,7 +658,7 @@
                 </select>
               </label>
               <p class="sp-hint" data-i18n="trash_hint">删除的便签会先进入回收站，超过保留天数后自动彻底删除。</p>
-              <button class="sp-btn ghost danger" id="btnEmptyTrash" data-i18n="empty_trash">🗑 清空回收站</button>
+              <button class="sp-btn ghost danger with-icon" id="btnEmptyTrash"><svg class="ui-icon" aria-hidden="true" focusable="false"><use href="#ui-trash"/></svg><span data-i18n="empty_trash">清空回收站</span></button>
               <div class="trash-list" id="trashList"></div>
             </div>
           </section>
@@ -640,7 +681,7 @@
               <div class="stack">
                 <button class="sp-btn ghost" id="btnArrange" data-i18n="arrange">▦ 整理排列便签</button>
                 <button class="sp-btn ghost" id="btnRestoreLayout" data-i18n="restore_layout">↩ 恢复保存布局</button>
-                <button class="sp-btn ghost danger" id="btnClearAll" data-i18n="clear_all">🗑 清空全部便签</button>
+                <button class="sp-btn ghost danger with-icon" id="btnClearAll"><svg class="ui-icon" aria-hidden="true" focusable="false"><use href="#ui-trash"/></svg><span data-i18n="clear_all">清空全部便签</span></button>
               </div>
               <p class="sp-hint" id="arrangeHint" data-i18n="arrange_hint">一键整理按当前排序紧凑排布；恢复保存布局仅还原已保存位置，未保存/隐藏便签保持原位；若恢复后重叠或超出窗口，可用「一键整理」调整。</p>
               <p class="sp-hint" data-i18n="clear_all_hint">清空全部便签会将其移入回收站，可在回收站中恢复。</p>
@@ -676,9 +717,9 @@
             </div>
             <div class="sp-group">
               <h4><svg class="ui-icon" aria-hidden="true"><use href="#ui-doc"/></svg><span data-i18n="changelog_title">更新说明</span></h4>
-              <button class="sp-btn ghost" id="btnChangelog" data-i18n="changelog_open" style="width:auto;padding:8px 14px">✨ 查看更新说明</button>
-              <div style="margin-top:8px">
-                <button class="sp-btn" id="btnCheckUpdate" data-i18n="check_update" style="width:auto;padding:8px 14px">🔄 检查更新</button>
+              <div class="bg-actions" style="margin-bottom:0">
+                <button class="sp-btn ghost with-icon" id="btnChangelog" style="width:auto;padding:8px 14px"><svg class="ui-icon" aria-hidden="true" focusable="false"><use href="#ui-doc"/></svg><span data-i18n="changelog_open">查看更新说明</span></button>
+                <button class="sp-btn with-icon" id="btnCheckUpdate" style="width:auto;padding:8px 14px"><svg class="ui-icon" aria-hidden="true" focusable="false"><use href="#ui-reset"/></svg><span data-i18n="check_update">检查更新</span></button>
               </div>
             </div>
           </section>
@@ -717,14 +758,14 @@
     <div id="alarmModal">
       <header><span data-i18n="alarm_title">闹铃提醒</span></header>
       <div class="alarm-body">
-        <div class="alarm-icon">⏰</div>
+        <div class="alarm-icon" aria-hidden="true"><svg class="ui-icon" aria-hidden="true" focusable="false"><use href="#ui-clock"/></svg></div>
         <div id="alarmTitle" class="alarm-title"></div>
         <div id="alarmBody" class="alarm-text"></div>
       </div>
       <footer>
-        <button class="sp-btn ghost" id="btnAlarmSnooze5" data-i18n="alarm_snooze_5">⏱ 5 分钟</button>
-        <button class="sp-btn ghost" id="btnAlarmSnooze10" data-i18n="alarm_snooze_10">⏱ 10 分钟</button>
-        <button class="sp-btn ghost" id="btnAlarmSnooze30" data-i18n="alarm_snooze_30">⏱ 30 分钟</button>
+        <button class="sp-btn ghost with-icon" id="btnAlarmSnooze5"><svg class="ui-icon" aria-hidden="true" focusable="false"><use href="#ui-clock"/></svg><span data-i18n="alarm_snooze_5">5 分钟</span></button>
+        <button class="sp-btn ghost with-icon" id="btnAlarmSnooze10"><svg class="ui-icon" aria-hidden="true" focusable="false"><use href="#ui-clock"/></svg><span data-i18n="alarm_snooze_10">10 分钟</span></button>
+        <button class="sp-btn ghost with-icon" id="btnAlarmSnooze30"><svg class="ui-icon" aria-hidden="true" focusable="false"><use href="#ui-clock"/></svg><span data-i18n="alarm_snooze_30">30 分钟</span></button>
         <button class="sp-btn primary" id="btnAlarmDismiss" data-i18n="alarm_dismiss">关闭闹铃</button>
       </footer>
     </div>
@@ -737,13 +778,13 @@
 
   <!-- 关闭确认弹窗（主题化选择：隐藏到任务栏 / 退出应用 / 取消） -->
   <div id="closeOverlay" class="hidden">
-    <div id="closeModal">
+    <div id="closeModal" role="dialog" aria-modal="true" aria-labelledby="closeModalTitle" aria-describedby="closeModalPrompt">
       <header>
         <span class="close-head-icon"><svg width="20" height="20" viewBox="0 0 24 24" fill="none" aria-hidden="true"><rect x="3" y="4" width="18" height="16" rx="3" stroke="currentColor" stroke-width="2"/><line x1="3" y1="9" x2="21" y2="9" stroke="currentColor" stroke-width="2"/></svg></span>
-        <span data-i18n="close_title">关闭便签</span>
+        <span id="closeModalTitle" data-i18n="close_title">关闭便签</span>
       </header>
       <div class="close-body">
-        <div data-i18n="close_ask">彻底退出应用，还是最小化隐藏到任务栏（托盘）继续运行？</div>
+        <div id="closeModalPrompt" data-i18n="close_ask">彻底退出应用，还是最小化隐藏到任务栏（托盘）继续运行？</div>
       </div>
       <footer>
         <button class="sp-btn ghost" id="btnCloseHide" data-i18n="close_hide">隐藏到任务栏（托盘）</button>
@@ -786,6 +827,9 @@
   <script src="board/note-drag.js"></script>
   <script src="board/note-card.js"></script>
   <script src="board/canvas-zoom.js"></script>
+  <script src="board/canvas-links.js"></script>
+  <script src="board/canvas-ink.js"></script>
+  <script src="board/canvas-gadgets.js"></script>
   <script src="editors/rich-tools.js"></script>
   <script src="workspace-navigation.js"></script>
   <script src="editors/doc-view.js"></script>

@@ -2,7 +2,7 @@ const { app, BrowserWindow, screen } = require('electron');
 const path = require('path');
 const DesktopSnap = require('./desktop-snap.js');
 
-function createWindowManager({ mainPage, notePage, readData, writeData, clearRecoveryAfterReplace }) {
+function createWindowManager({ mainPage, notePage, taskbarDetails, readData, writeData, clearRecoveryAfterReplace }) {
   let mainWindow = null;
   let isQuitting = false;
   const detachedWindows = new Map();
@@ -96,6 +96,7 @@ function createWindowManager({ mainPage, notePage, readData, writeData, clearRec
         additionalArguments: ['--app-version=' + app.getVersion()]
       }
     });
+    if (taskbarDetails) mainWindow.setAppDetails(taskbarDetails);
     hardenWindowNavigation(mainWindow);
 
     mainWindow.on('maximize', () => { mainWindow.webContents.send('window:maximized', true); persistWindowState(); });
@@ -144,6 +145,11 @@ function createWindowManager({ mainPage, notePage, readData, writeData, clearRec
   function requestCloseMainWindow(intent) {
     if (!mainWindow || mainWindow.isDestroyed()) return;
     try {
+      if (intent !== 'quit') {
+        if (mainWindow.isMinimized()) mainWindow.restore();
+        if (!mainWindow.isVisible()) mainWindow.show();
+        mainWindow.focus();
+      }
       mainWindow.webContents.send('window:close-request', intent);
     } catch (e) { /* ignore */ }
   }
@@ -165,9 +171,10 @@ function createWindowManager({ mainPage, notePage, readData, writeData, clearRec
 
   function createDetachedWindow(noteId) {
     if (detachedWindows.has(noteId)) return detachedWindows.get(noteId);
+    const gadget = readData()?.notes?.find(item => item.id === noteId)?.gadget;
     const win = new BrowserWindow({
       width: 300,
-      height: 240,
+      height: gadget?.kind === 'calendar' ? 380 : 240,
       minWidth: 220,
       minHeight: 150,
       frame: false,
@@ -185,6 +192,7 @@ function createWindowManager({ mainPage, notePage, readData, writeData, clearRec
         additionalArguments: ['--app-version=' + app.getVersion()]
       }
     });
+    if (taskbarDetails) win.setAppDetails(taskbarDetails);
     hardenWindowNavigation(win);
     win.noteLoadPromise = win.loadFile(notePage, { query: { id: noteId } });
     win.setAlwaysOnTop(true, 'screen-saver');

@@ -122,7 +122,7 @@ function bindAppearance() {
     toast(t('toast_bg_cleared'));
   };
   $('#btnResetTheme').onclick = () => {
-    state.settings = { ...DEFAULT_SETTINGS };
+    state.settings = { ...DEFAULT_SETTINGS, boardInk: state.settings.boardInk };
     syncSettingsInputs();
     renderThemePanel();
     applyTheme();
