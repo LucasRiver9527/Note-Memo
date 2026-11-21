@@ -24,9 +24,15 @@
   <a href="https://github.com/LucasRiver9527/Note-Memo/issues">反馈问题</a>
 </p>
 
-![Note-Memo 画布：周末徒步计划连接路线和准备清单，画布右侧有专注计时和带日期标记的日历](./docs/images/overview.png)
+## 示例工作区
 
-*上图为 1.3.2 的示例工作区。*
+![周末徒步画布上有三条关联线和手绘标记，右侧的出门清单和集合提醒钉在 Windows 桌面](./docs/images/workspace-and-desktop.png)
+
+*1.3.2 示例画布和两张独立钉在 Windows 桌面的便签。*
+
+![工作区近景，展示徒步路线、准备清单、专注计时与日历](./docs/images/overview.png)
+
+*画布近景，可以看清关联、待办和组件的细节。*
 
 ## 安装与升级
 

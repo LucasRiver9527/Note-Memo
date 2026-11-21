@@ -23,9 +23,15 @@
   <a href="https://github.com/LucasRiver9527/Note-Memo/issues">Send feedback</a>
 </p>
 
-![A weekend hike plan linked to a route note and packing list, with a focus timer and a calendar on the right](./docs/images/overview.png)
+## Example workspace
 
-*The screenshots use the Chinese interface. You can switch to English in Global Settings.*
+![A weekend hike canvas with linked notes and hand-drawn annotations, beside a packing list and a meetup note pinned to the Windows desktop](./docs/images/workspace-and-desktop.png)
+
+*The 1.3.2 workspace alongside two notes pinned to the Windows desktop.*
+
+![A close-up of the canvas with linked hike plans, checklists, a focus timer, and a calendar](./docs/images/overview.png)
+
+*A closer look at links, checklists, and canvas widgets. You can switch the interface to English in Global Settings.*
 
 ## Install and update
 
