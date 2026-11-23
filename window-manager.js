@@ -1,11 +1,18 @@
 const { app, BrowserWindow, screen } = require('electron');
 const path = require('path');
 const DesktopSnap = require('./desktop-snap.js');
+const { desktopWindowAppearance } = require('./desktop-window-appearance.js');
+const { resolveWindowBounds, MIN_WIDTH, MIN_HEIGHT } = require('./window-bounds.js');
 
-function createWindowManager({ mainPage, notePage, taskbarDetails, readData, writeData, clearRecoveryAfterReplace }) {
+const DETACHED_FLUSH_TIMEOUT_MS = 5000;
+
+function createWindowManager({ mainPage, notePage, taskbarDetails, readData, writeData, queueDataWrite, waitForDataWrites, clearRecoveryAfterReplace }) {
   let mainWindow = null;
   let isQuitting = false;
   const detachedWindows = new Map();
+  const detachedFlushes = new WeakMap();
+  const approvedDetachedCloses = new WeakSet();
+  let nextFlushId = 0;
   let desktopSnap = null;
   let desktopSnapAppearance = {};
   // 被导入替换作废的旧 WebContents；同 ID 的新窗口不会解除旧来源的禁写。
@@ -13,18 +20,11 @@ function createWindowManager({ mainPage, notePage, taskbarDetails, readData, wri
 
   // ---- 窗口状态持久化：把 bounds / maximized 记到数据文件的 settings.windowState ----
   // （放在 settings 里是因为 renderer 的 data:save 只写 {settings,groups,notes,trash}，顶层键会被覆盖）
-  function readWindowState() {
-    const data = readData();
-    const ws = data && data.settings && data.settings.windowState;
-    if (ws && ws.normalBounds && typeof ws.normalBounds.width === 'number') return ws;
-    return null;
-  }
-
   let winStateTimer = null;
   function persistWindowState(immediate = false) {
     if (!mainWindow || mainWindow.isDestroyed()) return;
     clearTimeout(winStateTimer);
-    const write = () => {
+    const write = () => queueDataWrite(async () => {
       if (!mainWindow || mainWindow.isDestroyed()) return;
       try {
         if (mainWindow.isMinimized()) return;
@@ -36,12 +36,15 @@ function createWindowManager({ mainPage, notePage, taskbarDetails, readData, wri
         // 数据不可用时直接放弃：绝不能用 {} 兜底，否则会把整个数据文件覆盖成只剩 windowState
         const data = readData();
         if (!data) return;
-        data.settings = data.settings || {};
+        const previous = data.settings?.windowState;
+        if (previous?.maximized === state.maximized &&
+            Object.keys(state.normalBounds).every(key => previous.normalBounds?.[key] === state.normalBounds[key])) return;
+        data.settings ||= {};
         data.settings.windowState = state;
-        writeData(data);
+        await writeData(data);
       } catch (e) { /* ignore */ }
-    };
-    if (immediate === true) write();
+    });
+    if (immediate === true) return write();
     else winStateTimer = setTimeout(write, 300);
   }
 
@@ -58,26 +61,13 @@ function createWindowManager({ mainPage, notePage, taskbarDetails, readData, wri
     win.webContents.on('will-frame-navigate', block);
   }
 
-  function createWindow() {
-    const { width, height } = screen.getPrimaryDisplay().workAreaSize;
-    const saved = readWindowState();
-    const nb = (saved && saved.normalBounds) || null;
-    // 用保存的普通尺寸；若之前最大化，仍先按普通尺寸创建再 restore，避免越界
-    const winW = (nb && nb.width) || 1080;
-    const winH = (nb && nb.height) || 720;
-    let startX = (nb && typeof nb.x === 'number') ? nb.x : Math.round((width - winW) / 2);
-    let startY = (nb && typeof nb.y === 'number') ? nb.y : Math.round((height - winH) / 2);
-    // 防越界：窗口至少一部分落在工作区内
-    if (startX + winW < 0 || startX > width) startX = Math.round((width - winW) / 2);
-    if (startY + winH < 0 || startY > height) startY = Math.round((height - winH) / 2);
-
+  function createWindow(data = readData()) {
+    const state = data?.settings?.windowState;
+    const saved = typeof state?.normalBounds?.width === 'number' ? state : null;
     mainWindow = new BrowserWindow({
-      width: winW,
-      height: winH,
-      minWidth: 640,
-      minHeight: 420,
-      x: startX,
-      y: startY,
+      ...resolveWindowBounds(screen, saved?.normalBounds),
+      minWidth: MIN_WIDTH,
+      minHeight: MIN_HEIGHT,
       titleBarStyle: 'hidden',
       titleBarOverlay: {
         color: '#00000000',
@@ -161,7 +151,7 @@ function createWindowManager({ mainPage, notePage, taskbarDetails, readData, wri
         if (mainWindow && !mainWindow.isDestroyed()) mainWindow.webContents.send('window:save-failed');
         return;
       }
-      prepareToQuit();
+      await prepareToQuit();
       app.quit();
     } else if (decision === 'hide') {
       if (mainWindow && !mainWindow.isDestroyed()) mainWindow.hide();
@@ -169,9 +159,9 @@ function createWindowManager({ mainPage, notePage, taskbarDetails, readData, wri
     // 'cancel' → 什么都不做
   }
 
-  function createDetachedWindow(noteId) {
+  function createDetachedWindow(note, settings = {}, { pendingPin = false } = {}) {
+    const { id: noteId, gadget } = note;
     if (detachedWindows.has(noteId)) return detachedWindows.get(noteId);
-    const gadget = readData()?.notes?.find(item => item.id === noteId)?.gadget;
     const win = new BrowserWindow({
       width: 300,
       height: gadget?.kind === 'calendar' ? 380 : 240,
@@ -182,6 +172,7 @@ function createWindowManager({ mainPage, notePage, taskbarDetails, readData, wri
       backgroundColor: '#00000000',
       resizable: true,
       alwaysOnTop: true,
+      show: !pendingPin,
       skipTaskbar: false,
       hasShadow: true,
       icon: path.join(__dirname, 'assets', 'icon.png'),
@@ -192,67 +183,115 @@ function createWindowManager({ mainPage, notePage, taskbarDetails, readData, wri
         additionalArguments: ['--app-version=' + app.getVersion()]
       }
     });
-    if (taskbarDetails) win.setAppDetails(taskbarDetails);
-    hardenWindowNavigation(win);
-    win.noteLoadPromise = win.loadFile(notePage, { query: { id: noteId } });
-    win.setAlwaysOnTop(true, 'screen-saver');
-    // 桌面便签玻璃拟态：Windows 11 亚克力材质，提供背后桌面的磨砂模糊
-    if (process.platform === 'win32' && typeof win.setBackgroundMaterial === 'function') {
-      const data = readData();
-      const desktopMica = data && data.settings && data.settings.desktopMica;
-      try { win.setBackgroundMaterial(desktopMica ? 'acrylic' : 'none'); } catch (e) { /* ignore */ }
-    }
-    if (!desktopSnap) desktopSnap = DesktopSnap.createDesktopSnap({ BrowserWindow, screen });
-    const snapSettings = (readData() || {}).settings || {};
-    desktopSnap.setEnabled(desktopSnapAppearance.enabled ?? (snapSettings.desktopSnap !== false));
-    desktopSnap.setAppearance({ ...desktopSnapAppearance, radius: (desktopSnapAppearance.radius ?? snapSettings.noteRadius) === 0 ? 0 : 8 });
-    desktopSnap.attach(win);
-    win.noteCornerRadius = desktopSnapAppearance.radius ?? snapSettings.noteRadius;
-    win.updateNoteShape = () => {
-      if (process.platform !== 'win32' || win.isDestroyed()) return;
-      try { require('./desktop-snap-native.js')().applyRoundedCorners(win, win.noteCornerRadius); }
-      catch (error) { console.warn('[note-shape] Could not update rounded window:', error); }
-    };
-    let shapeUpdateQueued = false;
-    win.on('resize', () => {
-      if (shapeUpdateQueued) return;
-      shapeUpdateQueued = true;
-      setImmediate(() => { shapeUpdateQueued = false; win.updateNoteShape(); });
-    });
-    win.updateNoteShape();
-    win.on('focus', () => win.setAlwaysOnTop(true, 'screen-saver'));
-    win.on('show', () => win.setAlwaysOnTop(true, 'screen-saver'));
-    win.on('blur', () => win.setAlwaysOnTop(true, 'screen-saver'));
-    const topmostTimer = setInterval(() => {
-      if (win.isDestroyed()) { clearInterval(topmostTimer); return; }
-      win.setAlwaysOnTop(true, 'screen-saver');
-    }, 2000);
+    win.notePinPending = pendingPin;
     detachedWindows.set(noteId, win);
     win.on('closed', () => {
-      if (detachedWindows.get(noteId) === win) detachedWindows.delete(noteId);
-      if (mainWindow && !win.notePinFailed && !win.suppressUnpin) mainWindow.webContents.send('note:unpinned', noteId);
+      detachedFlushes.get(win)?.finish(false);
+      if (detachedWindows.get(noteId) !== win) return;
+      detachedWindows.delete(noteId);
+      if (!isQuitting && mainWindow && !mainWindow.isDestroyed() && !win.notePinPending && !win.notePinFailed && !win.suppressUnpin) {
+        mainWindow.webContents.send('note:unpinned', noteId);
+      }
+    });
+    try {
+      if (taskbarDetails) win.setAppDetails(taskbarDetails);
+      hardenWindowNavigation(win);
+      win.setAlwaysOnTop(true, 'screen-saver');
+      win.noteAcrylicActive = desktopWindowAppearance.setMaterial(win, settings?.desktopMica);
+      if (!desktopSnap) desktopSnap = DesktopSnap.createDesktopSnap({ BrowserWindow, screen });
+      desktopSnap.setEnabled(desktopSnapAppearance.enabled ?? (settings?.desktopSnap !== false));
+      desktopSnap.setAppearance({ ...desktopSnapAppearance, radius: (desktopSnapAppearance.radius ?? settings?.noteRadius) === 0 ? 0 : 8 });
+      desktopSnap.attach(win);
+      win.noteCornerRadius = desktopSnapAppearance.radius ?? settings?.noteRadius;
+      win.updateNoteShape = () => desktopWindowAppearance.updateCorners(win, win.noteCornerRadius);
+      let shapeUpdateQueued = false;
+      win.on('resize', () => {
+        if (shapeUpdateQueued) return;
+        shapeUpdateQueued = true;
+        setImmediate(() => { shapeUpdateQueued = false; win.updateNoteShape(); });
+      });
+      win.updateNoteShape();
+      const keepTopmost = () => win.setAlwaysOnTop(true, 'screen-saver');
+      win.on('focus', keepTopmost);
+      win.on('show', keepTopmost);
+      win.on('blur', keepTopmost);
+      win.on('always-on-top-changed', (_event, alwaysOnTop) => {
+        if (!alwaysOnTop) setImmediate(() => {
+          if (!win.isDestroyed() && !win.isAlwaysOnTop()) keepTopmost();
+        });
+      });
+      win.webContents.on('render-process-gone', () => detachedFlushes.get(win)?.finish(false));
+      let deadline, ready;
+      if (pendingPin) {
+        ready = new Promise((resolve) => { win.finishNoteInit = resolve; });
+      }
+      const loaded = win.loadFile(notePage, { query: { id: noteId } });
+      win.noteLoadPromise = pendingPin ? Promise.race([
+        Promise.all([loaded, ready]).then(([, ok]) => { if (!ok) throw new Error('Desktop note initialization failed'); }),
+        new Promise((resolve, reject) => {
+          deadline = setTimeout(() => reject(new Error('Desktop note initialization timed out')), 10000);
+          win.once('closed', () => reject(new Error('Desktop note window closed during initialization')));
+        })
+      ]).finally(() => { clearTimeout(deadline); delete win.finishNoteInit; }) : loaded;
+    } catch (err) {
+      win.notePinFailed = true;
+      win.destroy();
+      throw err;
+    }
+    let nativeClosePending = false;
+    win.on('close', event => {
+      if (isQuitting || win.suppressUnpin || approvedDetachedCloses.has(win)) return;
+      event.preventDefault();
+      if (nativeClosePending) return;
+      nativeClosePending = true;
+      flushDetachedNote(win).then(ok => {
+        nativeClosePending = false;
+        if (ok) closeDetachedNote(win);
+      });
     });
     return win;
   }
 
-  async function flushDetachedNote(win) {
-    if (!win || win.isDestroyed()) return true;
-    try {
-      // 静态脚本，只调用独立便签暴露的本地保存函数，不插入用户内容。
-      return await win.webContents.executeJavaScript(
-        'typeof window.flushNoteForClose === "function" && window.flushNoteForClose()'
-      ) === true;
-    } catch (err) {
-      console.error('[note] 独立便签保存失败：', err);
-      return false;
+  function closeDetachedNote(win) {
+    if (!win || win.isDestroyed()) return;
+    approvedDetachedCloses.add(win);
+    try { win.close(); }
+    finally { approvedDetachedCloses.delete(win); }
+  }
+
+  function flushDetachedNote(win) {
+    if (!win || win.isDestroyed()) return Promise.resolve(true);
+    const pending = detachedFlushes.get(win);
+    if (pending) return pending.promise;
+
+    const id = ++nextFlushId;
+    let resolve;
+    const promise = new Promise(done => { resolve = done; });
+    const timeout = setTimeout(() => finish(false), DETACHED_FLUSH_TIMEOUT_MS);
+    function finish(saved) {
+      if (detachedFlushes.get(win)?.id !== id) return;
+      clearTimeout(timeout);
+      detachedFlushes.delete(win);
+      resolve(saved);
     }
+    detachedFlushes.set(win, { id, promise, finish });
+    Promise.resolve(win.noteLoadPromise).then(() => {
+      if (detachedFlushes.get(win)?.id === id) win.webContents.send('note:flush-request', id);
+    }).catch(() => finish(false));
+    return promise;
+  }
+
+  function completeDetachedFlush(win, id, saved) {
+    const pending = detachedFlushes.get(win);
+    if (pending && id === pending.id) pending.finish(saved === true);
   }
 
   async function flushDetachedNotes() {
+    let savedAll = true;
     for (const win of detachedWindows.values()) {
-      if (!(await flushDetachedNote(win))) return false;
+      if (!(await flushDetachedNote(win))) savedAll = false;
     }
-    return true;
+    return savedAll;
   }
 
   // 显式整份替换（导入备份）成功落盘后，正在打开的独立便签仍持有被替换前的旧内容：
@@ -260,30 +299,33 @@ function createWindowManager({ mainPage, notePage, taskbarDetails, readData, wri
   // 导入是整份替换，故协调所有仍在的独立窗（含被导入移除的 ID）；只在整份数据成功写入后调用，
   // 写入失败时不动窗口、不清草稿。
   async function reconcileDetachedAfterReplace(data) {
-    const previous = Array.from(detachedWindows);
-    // 先作废所有旧来源，再等待关窗；同 ID 新窗口不会解除旧来源的禁写状态。
-    for (const [, win] of previous) {
+    const previous = Array.from(detachedWindows.values());
+    // Retire every old window and its drafts before yielding to new edits.
+    for (const win of previous) {
       if (win.isDestroyed()) continue;
       supersededDetached.add(win.webContents);
       win.suppressUnpin = true;
     }
-    for (const [id, win] of previous) {
-      if (win.isDestroyed()) { detachedWindows.delete(id); continue; }
-      const closed = new Promise((resolve) => win.once('closed', resolve));
-      win.close();
-      await closed;
-    }
-    // 整份替换已经落盘；旧主窗及未开窗便签的草稿也失效，不能在重启时回滚导入。
     clearRecoveryAfterReplace();
-    for (const n of data.notes || []) {
-      if (!n || !n.desktopPin || detachedWindows.has(n.id)) continue;
+    detachedWindows.clear();
+    for (const win of previous) {
+      if (!win.isDestroyed()) win.destroy();
+    }
+    const pinned = (data.notes || []).filter(note => note?.desktopPin);
+    await Promise.all(pinned.map(async note => {
+      let win;
       try {
-        const w = createDetachedWindow(n.id);
-        await w.noteLoadPromise;
+        win = createDetachedWindow(note, data.settings);
+        await win.noteLoadPromise;
       } catch (err) {
+        if (win?.isDestroyed()) return;
+        if (win) {
+          win.notePinFailed = true;
+          win.destroy();
+        }
         console.error('[note] 导入后重开独立便签失败：', err);
       }
-    }
+    }));
   }
 
   function setDesktopSnapAppearance(fx) {
@@ -294,11 +336,16 @@ function createWindowManager({ mainPage, notePage, taskbarDetails, readData, wri
     }
   }
 
+  let quitPreparation;
   function prepareToQuit() {
-    if (isQuitting) return;
-    persistWindowState(true);
-    isQuitting = true;
+    if (!quitPreparation) {
+      quitPreparation = Promise.resolve(persistWindowState(true))
+        .then(waitForDataWrites)
+        .then(() => { isQuitting = true; });
+    }
+    return quitPreparation;
   }
+  const isReadyToQuit = () => isQuitting;
 
   function dispose() {
     if (desktopSnap) desktopSnap.dispose();
@@ -307,8 +354,8 @@ function createWindowManager({ mainPage, notePage, taskbarDetails, readData, wri
   return {
     get mainWindow() { return mainWindow; },
     detachedWindows, supersededDetached, createWindow, createDetachedWindow,
-    requestCloseMainWindow, handleCloseDecision, flushDetachedNote, flushDetachedNotes,
-    reconcileDetachedAfterReplace, setDesktopSnapAppearance, prepareToQuit, dispose
+    requestCloseMainWindow, handleCloseDecision, closeDetachedNote, flushDetachedNote, flushDetachedNotes, completeDetachedFlush,
+    reconcileDetachedAfterReplace, setDesktopSnapAppearance, prepareToQuit, isReadyToQuit, dispose
   };
 }
 

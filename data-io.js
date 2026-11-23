@@ -207,9 +207,8 @@ function cleanupTmp(fs, tmp) {
   return { cleaned: false, attempts: CLEANUP_MAX_UNLINK };
 }
 
-function atomicWrite(filePath, data, fsx, pathx) {
+function atomicWrite(filePath, data, fsx, _pathx) {
   const fs = fsOf(fsx);
-  const p = pathOf(pathx);
   if (!isValidDataShape(data)) {
     console.error('[data-io] 数据结构错误，已拒绝写入');
     return false;
@@ -222,11 +221,7 @@ function atomicWrite(filePath, data, fsx, pathx) {
     return false;
   }
 
-  // 随机后缀避免并发写冲突（窗口状态防抖 300ms 可能与 data:save 重叠）
-  const tmp = filePath + '.' + process.pid + '.' + Math.random().toString(36).slice(2, 10) + '.tmp';
-  try {
-    fs.writeFileSync(tmp, json, 'utf-8');
-
+  return atomicReplace(filePath, json, fs, () => {
     // 旧文件能解析才备份，避免把损坏内容覆盖到唯一的好备份上
     let shouldBackup = false;
     try {
@@ -242,6 +237,16 @@ function atomicWrite(filePath, data, fsx, pathx) {
         console.error('[data-io] 生成 .bak 失败（继续写入）：', e.message);
       }
     }
+  });
+}
+
+function atomicReplace(filePath, contents, fsx, beforeReplace) {
+  const fs = fsOf(fsx);
+  // Write next to the target so both paths are on the same filesystem.
+  const tmp = filePath + '.' + process.pid + '.' + Math.random().toString(36).slice(2, 10) + '.tmp';
+  try {
+    fs.writeFileSync(tmp, contents, 'utf-8');
+    beforeReplace?.();
 
     // Windows + Node 支持直接覆盖已存在目标，无需 unlink
     fs.renameSync(tmp, filePath);
@@ -257,8 +262,39 @@ function atomicWrite(filePath, data, fsx, pathx) {
   }
 }
 
+// The caller serializes complete read-modify-write operations.
+async function atomicWriteAsync(filePath, data, fs = nodeFs.promises) {
+  if (!isValidDataShape(data)) return false;
+  const tmp = filePath + '.' + process.pid + '.' + Math.random().toString(36).slice(2, 10) + '.tmp';
+  try {
+    await fs.writeFile(tmp, JSON.stringify(data, null, 2), 'utf-8');
+    const previous = await fs.readFile(filePath, 'utf-8').catch(() => null);
+    if (parseStoredData(previous)) {
+      await fs.copyFile(filePath, filePath + '.bak').catch(error => {
+        console.error('[data-io] 生成 .bak 失败（继续写入）：', error.message);
+      });
+    }
+    await fs.rename(tmp, filePath);
+    return true;
+  } catch (error) {
+    console.error('[data-io] 原子写入失败，原文件未受影响：', error.message);
+    for (let attempt = 1; attempt <= CLEANUP_MAX_UNLINK; attempt++) {
+      try { await fs.unlink(tmp); break; }
+      catch (cleanupError) {
+        if (cleanupError.code === 'ENOENT') break;
+        if (attempt < CLEANUP_MAX_UNLINK && CLEANUP_TRANSIENT_CODES.has(cleanupError.code)) continue;
+        console.error('[data-io] 临时文件清理失败：', tmp, cleanupError.message);
+        break;
+      }
+    }
+    return false;
+  }
+}
+
 module.exports = {
+  atomicWriteAsync,
   atomicWrite,
+  atomicReplace,
   safeRead,
   isValidDataShape,
   parsesAsJson,

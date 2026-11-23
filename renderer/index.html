@@ -91,6 +91,7 @@
     <div id="workspace">
       <nav id="filterbar" aria-label="筛选范围" data-i18n-aria-label="filter_scope">
         <div class="workspace-nav-items">
+        <div class="workspace-nav-fixed">
         <button class="tb-btn" id="btnAdd" data-i18n-title="new_note_tip" title="新建便签 (Ctrl+Shift+N)"><svg class="ui-icon" aria-hidden="true" focusable="false"><use href="#ui-plus"/></svg><span class="ui-icon-label" data-i18n="new_note">新建</span></button>
         <div id="canvasShortcuts" class="canvas-shortcuts hidden" role="group" data-i18n-aria-label="canvas_tools">
           <button class="ct-btn" type="button" id="btnCanvasDraw" aria-pressed="false" aria-controls="canvasInkTools"><svg class="ui-icon" aria-hidden="true"><use href="#ui-pen"/></svg><span data-i18n="canvas_draw">涂鸦</span></button>
@@ -127,7 +128,8 @@
           <span data-i18n="workspace_groups">我的分组</span>
       <button class="chip add-chip" id="btnAddGroup" data-i18n-title="new_group" title="新建分组"><svg class="ui-icon" aria-hidden="true" focusable="false"><use href="#ui-plus"/></svg><span class="ui-icon-label" data-i18n="add_group">分组</span></button>
         </div>
-        <div id="groupChips"></div>
+        </div>
+        <div id="groupChips" role="group" data-i18n-aria-label="workspace_groups" aria-label="我的分组"></div>
         </div>
       </nav>
       <div id="workspaceContent">
@@ -561,13 +563,13 @@
             </div>
             <div class="sp-group">
               <h4><svg class="ui-icon" aria-hidden="true"><use href="#ui-clock"/></svg><span data-i18n="custom_sound">自定义声音</span></h4>
-              <div class="bg-actions">
-                <button class="sp-btn ghost" id="btnPickSound" style="width:auto;padding:8px 14px">＋ <span data-i18n="pick_sound">选择声音文件</span>…</button>
-                <button class="sp-btn ghost" id="btnClearSound" style="width:auto;padding:8px 14px" data-i18n="clear_sound">清除自定义</button>
-              </div>
-              <div class="sound-item" id="soundName"><span data-i18n="default_sound">默认：系统提示音（内置）</span></div>
-              <div class="bg-actions" style="margin-top:10px">
-                <button class="sp-btn" id="btnTestSound" data-i18n="test_sound">▶ 试听</button>
+              <div class="sound-preview-row">
+                <div class="sound-item" id="soundName" data-i18n="default_sound">默认：系统提示音（内置）</div>
+                <div class="sound-controls">
+                  <button class="sp-btn ghost with-icon" id="btnTestSound"><svg class="ui-icon" aria-hidden="true"><use href="#ui-play"/></svg><span data-i18n="test_sound">试听</span></button>
+                  <button class="sp-btn ghost with-icon" id="btnPickSound"><svg class="ui-icon" aria-hidden="true"><use href="#ui-folder"/></svg><span data-i18n="pick_sound">选择声音文件</span>…</button>
+                  <button class="sp-btn ghost" id="btnClearSound" data-i18n="clear_sound" disabled>恢复默认</button>
+                </div>
               </div>
             </div>
           </section>
@@ -608,6 +610,14 @@
             <div class="sp-group">
               <h4><svg class="ui-icon" aria-hidden="true"><use href="#ui-shortcuts"/></svg><span data-i18n="shortcuts_title">快捷键</span></h4>
               <p class="sp-hint" data-i18n="shortcuts_hint">点击下方的快捷键即可重新按键更改。全局快捷键在应用最小化/隐藏时也生效；编辑快捷键仅在编辑器内生效。若被系统或其它应用占用将无法保存。</p>
+              <div class="row">
+                <label for="globalCreateMode" data-i18n="quick_capture_action">全局新建快捷键</label>
+                <select id="globalCreateMode">
+                  <option value="quick" data-i18n="quick_capture_mode">打开速记窗</option>
+                  <option value="workspace" data-i18n="quick_capture_workspace">在工作区新建</option>
+                </select>
+                <button type="button" class="sp-btn ghost" id="openQuickCapture" data-i18n="quick_capture_try">试用速记</button>
+              </div>
               <div id="shortcutList" class="shortcut-list"></div>
               <div class="stack" style="margin-top:16px">
                 <button class="sp-btn ghost" id="btnResetShortcuts" data-i18n="shortcuts_reset">♻ 恢复默认快捷键</button>
@@ -618,24 +628,47 @@
           <!-- 备份 -->
           <section class="sp-tab hidden" data-tab="backup">
             <h2 class="sp-page-title" data-i18n="tab_backup">备份</h2>
+            <div class="sp-group full-backup-card">
+              <h4>
+                <svg class="ui-icon" aria-hidden="true"><use href="#ui-backup"/></svg>
+                <span data-i18n="full_backup_title">完整备份</span>
+                <span class="full-backup-last" id="fullBackupLastExport"></span>
+              </h4>
+              <ul class="full-backup-contents">
+                <li><svg class="ui-icon" aria-hidden="true"><use href="#ui-doc"/></svg><span data-i18n="full_backup_notes">便签、分组与回收站</span></li>
+                <li><svg class="ui-icon" aria-hidden="true"><use href="#ui-desktop"/></svg><span data-i18n="full_backup_layout">外观与布局</span></li>
+                <li><svg class="ui-icon" aria-hidden="true"><use href="#ui-image"/></svg><span data-i18n="full_backup_media">图片与字体</span></li>
+                <li><svg class="ui-icon" aria-hidden="true"><use href="#ui-clock"/></svg><span data-i18n="full_backup_reminders">提醒与声音</span></li>
+              </ul>
+              <p class="sp-hint" data-i18n="full_backup_hint">保存为一个 .notememo 文件。外部附件保留原路径，请另行复制附件。</p>
+              <p class="full-backup-warning">
+                <svg class="ui-icon" aria-hidden="true"><use href="#ui-about"/></svg>
+                <span data-i18n="full_backup_warning">恢复会替换当前工作区。建议先导出一份完整备份。</span>
+              </p>
+              <div class="bg-actions full-backup-actions">
+                <button class="sp-btn primary" id="btnExportFullBackup" data-i18n="full_backup_export">导出完整备份…</button>
+                <button class="sp-btn ghost" id="btnRestoreFullBackup" data-i18n="full_backup_restore">从备份恢复…</button>
+              </div>
+              <p class="full-backup-status" id="fullBackupStatus" role="status"></p>
+            </div>
             <div class="sp-group">
-              <h4><svg class="ui-icon" aria-hidden="true"><use href="#ui-backup"/></svg><span data-i18n="backup_folder">备份文件夹</span></h4>
+              <h4><svg class="ui-icon" aria-hidden="true"><use href="#ui-folder"/></svg><span data-i18n="backup_folder">JSON 备份文件夹</span></h4>
               <p class="sp-hint" data-i18n="backup_hint">设置一个专门的备份文件夹，「一键导出」会把备份文件保存到该文件夹内。</p>
               <div class="dir-row">
                 <input id="backupDir" type="text" data-i18n-placeholder="backup_dir_placeholder" placeholder="默认：应用数据目录/backups" spellcheck="false" />
                 <button class="sp-btn ghost" id="btnChooseDir" data-i18n="choose" style="width:auto;padding:8px 12px">选择…</button>
               </div>
-              <div class="bg-actions" style="margin-top:10px">
-                <button class="sp-btn" id="btnBackupNow" data-i18n="backup_now">⬇ 一键导出</button>
+              <div class="bg-actions settings-compact-actions backup-folder-actions">
+                <button class="sp-btn ghost" id="btnBackupNow" data-i18n="backup_now">导出 JSON 到此处</button>
                 <button class="sp-btn ghost" id="btnOpenDir" data-i18n="open_folder" style="width:auto">打开文件夹</button>
               </div>
             </div>
             <div class="sp-group">
-              <h4><svg class="ui-icon" aria-hidden="true"><use href="#ui-more"/></svg><span data-i18n="more">更多</span></h4>
-              <div class="stack">
+              <h4><svg class="ui-icon" aria-hidden="true"><use href="#ui-data"/></svg><span data-i18n="backup_legacy_tools">旧版备份与维护</span></h4>
+              <div class="bg-actions settings-compact-actions">
                 <button class="sp-btn ghost" id="btnExport" data-i18n="export_as">导出到指定位置…</button>
-                <button class="sp-btn ghost" id="btnImport" data-i18n="import">导入备份…</button>
-                <button class="sp-btn ghost" id="btnCleanupMedia" data-i18n="cleanup_media">🧹 清理未引用媒体</button>
+                <button class="sp-btn ghost" id="btnImport" data-i18n="full_backup_legacy">导入旧 JSON…</button>
+                <button class="sp-btn ghost with-icon" id="btnCleanupMedia"><svg class="ui-icon" aria-hidden="true"><use href="#ui-trash"/></svg><span data-i18n="cleanup_media">清理未引用媒体</span></button>
               </div>
               <p class="sp-hint" data-i18n="backup_restore_hint">恢复请使用 JSON 备份，TXT 仅供阅读。导入会替换当前便签、分组、回收站与设置，请先导出当前数据。</p>
             </div>
@@ -820,13 +853,20 @@
   <script src="board-layout.js"></script>
   <script src="sort-state.js"></script>
   <script src="rich-content.js"></script>
+  <script src="editors/text-editing.js"></script>
   <script src="settings-panel.js"></script>
   <script src="table-logic.js"></script>
   <script src="board/note-media.js"></script>
   <script src="board/table-editor.js"></script>
+  <script src="board/table-dialogs.js"></script>
+  <script src="board/table-toolbar.js"></script>
   <script src="board/note-drag.js"></script>
+  <script src="board/card-search.js"></script>
+  <script src="board/note-card-events.js"></script>
   <script src="board/note-card.js"></script>
   <script src="board/canvas-zoom.js"></script>
+  <script src="board/group-collapse.js"></script>
+  <script src="board/workspace-notes.js"></script>
   <script src="board/canvas-links.js"></script>
   <script src="board/canvas-ink.js"></script>
   <script src="board/canvas-gadgets.js"></script>
@@ -850,6 +890,7 @@
   <script src="bind/settings-bind.js"></script>
   <script src="bind/appearance-bind.js"></script>
   <script src="notes-view.js"></script>
+  <script src="system/quick-capture-bridge.js"></script>
   <script src="app.js"></script>
 </body>
 </html>

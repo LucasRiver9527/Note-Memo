@@ -1,0 +1,59 @@
+* { box-sizing: border-box; }
+:root {
+  color-scheme: light;
+  --accent: #00b894;
+  --paper: #f7f7f1;
+  --ink: #232c29;
+  --quiet: #59645e;
+  --field: #ffffff99;
+  --line: #252f3029;
+  --mark: color-mix(in srgb, var(--accent), #152421 62%);
+  font: 14px/1.45 "Segoe UI", "Microsoft YaHei UI", sans-serif;
+}
+:root[data-dark] {
+  color-scheme: dark;
+  --paper: #1e2223;
+  --ink: #eff4f1;
+  --quiet: #b3bfba;
+  --field: #ffffff0b;
+  --line: #ffffff35;
+  --mark: color-mix(in srgb, var(--accent), #172422 66%);
+}
+body { margin: 0; color: var(--ink); background: var(--paper); }
+form {
+  display: grid;
+  grid-template-rows: auto auto minmax(80px, 1fr) auto auto;
+  gap: 10px;
+  height: 100vh;
+  padding: 17px 20px 12px;
+}
+h1 { margin: 0 0 2px; font-size: 21px; line-height: 1.25; letter-spacing: 0.01em; }
+input, textarea, select, button {
+  color: inherit;
+  font: inherit;
+  min-width: 0;
+  border: 1px solid var(--line);
+  border-radius: 9px;
+  background: var(--field);
+}
+input, textarea { width: 100%; padding: 8px 10px; }
+input, select, button { min-height: 36px; }
+textarea {
+  resize: none;
+  background: color-mix(in srgb, var(--accent) 9%, var(--field));
+}
+::placeholder { color: var(--quiet); }
+.actions { display: grid; grid-template-columns: minmax(70px, 1fr) auto minmax(75px, auto); gap: 8px; margin-top: 3px; }
+select { padding-inline: 8px; text-overflow: ellipsis; }
+button { cursor: pointer; padding-inline: 9px; }
+#pin { display: inline-flex; align-items: center; justify-content: center; gap: 6px; }
+#pin[aria-pressed=true] { border-color: var(--mark); background: color-mix(in srgb, var(--accent) 16%, var(--field)); }
+#save { color: #fff; background: var(--mark); border-color: transparent; font-weight: 600; }
+button:hover:not(:disabled) { filter: brightness(1.12); }
+:focus-visible { outline: 2px solid var(--ink); outline-offset: 1px; }
+textarea:focus { border-color: color-mix(in srgb, var(--accent), var(--ink) 25%); }
+textarea:focus-visible { outline: 1px solid var(--mark); outline-offset: 0; }
+:disabled { cursor: default; opacity: .65; }
+.foot { display: flex; gap: 10px; justify-content: space-between; color: var(--quiet); font-size: 12px; }
+kbd { margin-left: auto; white-space: nowrap; font: inherit; }
+#status:empty { display: none; }

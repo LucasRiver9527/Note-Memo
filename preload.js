@@ -3,9 +3,19 @@ const { contextBridge, ipcRenderer, webUtils } = require('electron');
 // 由主进程通过 additionalArguments 注入，保证同步可读、单一来源
 const APP_VERSION = ((process.argv || []).find((a) => a.startsWith('--app-version=')) || '').slice('--app-version='.length) || '';
 
+// Only the isolated preload reads OS-backed File paths from a trusted drop.
+let droppedPaths = null;
+window.addEventListener('drop', (event) => {
+  if (!event.isTrusted || !event.dataTransfer?.files.length) return;
+  const paths = Array.from(event.dataTransfer.files, (file) => webUtils.getPathForFile(file)).filter(Boolean);
+  droppedPaths = paths;
+  setTimeout(() => { if (droppedPaths === paths) droppedPaths = null; }, 0);
+}, true);
+
 contextBridge.exposeInMainWorld('api', {
   appVersion: APP_VERSION,
   loadData: () => ipcRenderer.invoke('data:load'),
+  openQuickCapture: () => ipcRenderer.send('quick:show'),
   captureDraft: (data) => ipcRenderer.sendSync('data:draft', data),
   resolveRecovery: (decision) => ipcRenderer.invoke('data:recovery:resolve', decision),
   // 只读：返回 { status, corruptPath }，渲染层据此决定是否锁定保存
@@ -23,6 +33,10 @@ contextBridge.exposeInMainWorld('api', {
   },
   exportData: (data) => ipcRenderer.invoke('data:export', data),
   importData: () => ipcRenderer.invoke('data:import'),
+  exportFullBackup: () => ipcRenderer.invoke('backup:export-full'),
+  getLastFullBackup: () => ipcRenderer.invoke('backup:last-full-export'),
+  openFullBackup: () => ipcRenderer.invoke('backup:open-full'),
+  discardFullBackup: (token) => ipcRenderer.invoke('backup:discard-full', token),
   pickImage: () => ipcRenderer.invoke('dialog:pick-image'),
   saveNoteImage: (dataUrl) => ipcRenderer.invoke('note:save-image', dataUrl),
   pickNoteImage: () => ipcRenderer.invoke('dialog:pick-note-image'),
@@ -37,13 +51,10 @@ contextBridge.exposeInMainWorld('api', {
 
   readClipboardFiles: () => ipcRenderer.invoke('clipboard:read-files'),
   statPath: (p) => ipcRenderer.invoke('path:stat', p),
-  getPathForFile: async (file) => {
-    try {
-      const filePath = webUtils.getPathForFile(file);
-      return filePath && await ipcRenderer.invoke('file:authorize-drop', filePath) ? filePath : '';
-    } catch (e) {
-      return '';
-    }
+  getDroppedFilePaths: () => {
+    const paths = droppedPaths;
+    droppedPaths = null;
+    return paths?.length ? ipcRenderer.invoke('file:authorize-drop', paths) : Promise.resolve([]);
   },
   openFilePath: (noteId, fileId) => ipcRenderer.invoke('file:open', { id: noteId, fileId }),
   deleteNoteFromDesktop: (id) => ipcRenderer.invoke('note:delete', id),
@@ -86,6 +97,15 @@ contextBridge.exposeInMainWorld('api', {
   showDesktopNote: (id) => ipcRenderer.invoke('note:show', id),
   closeAllDetached: () => ipcRenderer.invoke('note:close-all'),
   noteGet: (id) => ipcRenderer.invoke('note:get', id),
+  reportNoteReady: (id, ok) => ipcRenderer.send('note:ready', id, ok),
+  onNoteFlush: (callback) => {
+    ipcRenderer.on('note:flush-request', async (_event, id) => {
+      let saved = false;
+      try { saved = await callback() === true; }
+      catch (error) { console.error('[note] Could not flush:', error); }
+      ipcRenderer.send('note:flush-result', id, saved);
+    });
+  },
   captureNoteDraft: (note) => ipcRenderer.sendSync('note:draft', note),
   noteUpdate: (note, opts) => ipcRenderer.invoke('note:update', note, opts),
   showNativeMenu: (opts) => ipcRenderer.invoke('note:show-menu', opts),

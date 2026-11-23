@@ -53,52 +53,12 @@ function clearSavedSelection() {
 }
 
 /* ============ 加粗 / 高亮 切换 ============ */
-function selectionHasHighlight() {
-  const sel = window.getSelection();
-  if (!sel || sel.isCollapsed || !sel.rangeCount) return false;
-  const range = sel.getRangeAt(0);
-  const cn = range.commonAncestorContainer;
-  const el = cn && (cn.nodeType === 1 ? cn : cn.parentElement);
-  const scope = el && el.closest('.note-content, .dn-content, .doc-content');
-  if (!scope) return false;
-  const marks = scope.querySelectorAll('mark.hl, span[style*="background"], font[style*="background"]');
-  for (const m of marks) {
-    if (range.intersectsNode(m) || m.contains(range.startContainer) || m.contains(range.endContainer)) return true;
-  }
-  return false;
-}
-
-function removeHighlightFromSelection() {
-  const sel = window.getSelection();
-  if (!sel || !sel.rangeCount) return;
-  const range = sel.getRangeAt(0);
-  const cn = range.commonAncestorContainer;
-  const el = cn && (cn.nodeType === 1 ? cn : cn.parentElement);
-  const scope = el && el.closest('.note-content, .dn-content, .doc-content');
-  if (!scope) return;
-  const marks = Array.from(scope.querySelectorAll('mark.hl, span[style*="background"], font[style*="background"]'));
-  marks.forEach((m) => {
-    if (range.intersectsNode(m)) {
-      const parent = m.parentNode;
-      while (m.firstChild) parent.insertBefore(m.firstChild, m);
-      parent.removeChild(m);
-    }
-  });
-}
-
 function toggleBold(contentEl) {
-  if (contentEl) contentEl.focus();
-  document.execCommand('bold');
+  return TextEditing.format(contentEl, 'bold');
 }
 
 function toggleHighlight(contentEl) {
-  if (contentEl) contentEl.focus();
-  if (selectionHasHighlight()) {
-    removeHighlightFromSelection();
-    if (contentEl) contentEl.dispatchEvent(new Event('input', { bubbles: true }));
-  } else {
-    document.execCommand('hiliteColor', false, highlightColor());
-  }
+  return TextEditing.toggleHighlight(contentEl, highlightColor());
 }
 
 function getSelectedImageSrc() {
@@ -113,7 +73,10 @@ function getSelectedImageSrc() {
   return null;
 }
 
+let noteEditVersion = 0;
+
 function save() {
+  noteEditVersion++;
   cleanupRefs();
   const draftToken = window.api.captureNoteDraft(note);
   if (!draftToken) console.error('[note] 恢复草稿写入失败');
@@ -151,8 +114,14 @@ async function saveNow(pendingToken) {
   return ok;
 }
 
-// 主进程执行更新安装前使用；窗口仍在时才能读取最新编辑态并等待落盘。
-window.flushNoteForClose = saveNow;
+window.api.onNoteFlush(async () => {
+  let version;
+  do {
+    version = noteEditVersion;
+    if (!(await saveNow())) return false;
+  } while (version !== noteEditVersion);
+  return true;
+});
 
 // 富文本/表格 HTML 构建已统一到 logic.js（单一来源），此处由 logic.js 全局提供；
 // 仅在此注入本窗口翻译器与 Markdown 开关。
@@ -631,7 +600,7 @@ function editCell(block, td, tbl, r, c) {
       done(true, nav, !nav); // 无目标（边界）=> 提交并结束编辑
       return;
     }
-    if (e.key === 'Enter') { e.preventDefault(); document.execCommand('insertLineBreak'); }
+    if (e.key === 'Enter') { e.preventDefault(); TextEditing.insertLineBreak(td); }
     else if (e.key === 'Escape') { e.preventDefault(); done(false); }
     else if (whichShortcut(e, settings, 'editor') === 'bold') { e.preventDefault(); toggleBold(td); }
     else if (whichShortcut(e, settings, 'editor') === 'highlight') { e.preventDefault(); toggleHighlight(td); }
@@ -640,14 +609,9 @@ function editCell(block, td, tbl, r, c) {
 
 function insertMarkerAtCursor(marker) {
   const content = $('#dnText');
-  if (content && (document.activeElement === content || content.contains(document.activeElement))) {
-    content.focus();
-    document.execCommand('insertText', false, marker);
-    note.content = readRichContent(content);
-  } else if (content && savedRange) {
-    content.focus();
-    restoreSelection();
-    document.execCommand('insertText', false, marker);
+  const isFocused = content?.contains(document.activeElement);
+  if (TextEditing.insertText(content, marker) ||
+      (!isFocused && savedRange && TextEditing.insertText(content, marker, { range: savedRange, focus: true }))) {
     note.content = readRichContent(content);
   } else {
     note.content = ((note.content || '').trim() ? note.content + '\n' : '') + marker;
@@ -678,6 +642,15 @@ function addFileToNote(path, isDir) {
   renderBody();
 }
 
+let imageWarningTimer;
+function showImageWarning(error) {
+  const warning = $('#noteImageWarning');
+  warning.textContent = error;
+  warning.classList.remove('hidden');
+  clearTimeout(imageWarningTimer);
+  imageWarningTimer = setTimeout(() => warning.classList.add('hidden'), 4000);
+}
+
 async function insertPastedFilesAtCursor(paths) {
   for (const p of paths) {
     const lower = p.toLowerCase();
@@ -685,6 +658,7 @@ async function insertPastedFilesAtCursor(paths) {
     if (imageExts.some((e) => lower.endsWith(e))) {
       const r = await window.api.addImageFile(p);
       if (r.ok) addImageToNote({ id: uid(), src: r.url, w: 200 });
+      else showImageWarning(r.error);
     } else {
       const st = await window.api.statPath(p);
       if (st && st.exists) addFileToNote(p, !!st.isDirectory);
@@ -705,6 +679,7 @@ async function handleImagePaste(cd) {
       });
       const r = await window.api.saveNoteImage(dataUrl);
       if (r.ok) addImageToNote({ id: uid(), src: r.url, w: 200 });
+      else showImageWarning(r.error);
       return;
     }
   }
@@ -751,6 +726,7 @@ function renderBody() {
     content.addEventListener('paste', async (e) => {
       const cd = e.clipboardData || window.clipboardData;
       const text = cd ? cd.getData('text/plain') : '';
+      const pasteRange = TextEditing.selectionWithin(content);
       const items = (cd && cd.items) ? Array.from(cd.items) : [];
       const hasImage = items.some((it) => it.type && it.type.indexOf('image') === 0);
       if (copiedImage) { e.preventDefault(); insertImageReferenceAtCursor(copiedImage.src, copiedImage.w); return; }
@@ -758,16 +734,12 @@ function renderBody() {
       const files = await window.api.readClipboardFiles();
       if (files && files.length) { await insertPastedFilesAtCursor(files); return; }
       if (hasImage) { await handleImagePaste(cd); return; }
-      if (text) {
-        if (savedRange) restoreSelection();
-        document.execCommand('insertText', false, text);
-      }
+      if (text && pasteRange) TextEditing.insertText(content, text, { range: pasteRange });
     });
     content.addEventListener('drop', async (e) => {
       e.preventDefault();
       e.stopPropagation();
-      const files = Array.from((e.dataTransfer && e.dataTransfer.files) || []);
-      const paths = (await Promise.all(files.map((f) => window.api.getPathForFile(f)))).filter(Boolean);
+      const paths = await window.api.getDroppedFilePaths();
       if (paths.length) {
         content.focus();
         await insertPastedFilesAtCursor(paths);
@@ -786,6 +758,7 @@ function renderBody() {
       adjustFontSize(e.deltaY < 0 ? 1 : -1);
     }, { passive: false });
     content.addEventListener('keydown', (e) => {
+      if (e.isComposing || e.keyCode === 229) return;
       const sc = whichShortcut(e, settings, 'editor');
       if (sc === 'bold') { e.preventDefault(); toggleBold(content); }
       else if (sc === 'highlight') { e.preventDefault(); toggleHighlight(content); }
@@ -896,13 +869,14 @@ function showCtxMenu(e) {
     if (r) {
       const saved = await window.api.saveNoteImage(r);
       if (saved.ok) addImageToNote({ id: uid(), src: saved.url, w: 200 });
+      else showImageWarning(saved.error);
       clearSavedSelection();
       return;
     }
     const text = await window.api.readClipboard();
     if (text) {
       const c = $('#dnText');
-      if (c) { c.focus(); if (savedRange) restoreSelection(); document.execCommand('insertText', false, text); }
+      TextEditing.insertText(c, text, { range: savedRange, focus: true });
     }
     clearSavedSelection();
   });
@@ -979,15 +953,7 @@ function showTextColorMenu() {
 }
 
 function applyInlineColor(range, color) {
-  const content = $('#dnText');
-  if (!content || !range) return;
-  content.focus();
-  const sel = window.getSelection();
-  sel.removeAllRanges();
-  sel.addRange(range);
-  document.execCommand('foreColor', false, color);
-  note.content = readRichContent(content);
-  save();
+  if (range) TextEditing.format($('#dnText'), 'foreColor', color, range);
 }
 
 async function handleNativeMenuAction(a) {
@@ -1017,13 +983,14 @@ async function handleNativeMenuAction(a) {
     if (r) {
       const saved = await window.api.saveNoteImage(r);
       if (saved.ok) addImageToNote({ id: uid(), src: saved.url, w: 200 });
+      else showImageWarning(saved.error);
       clearSavedSelection();
       return;
     }
     const text = await window.api.readClipboard();
     if (text) {
       const c = $('#dnText');
-      if (c) { c.focus(); if (savedRange) restoreSelection(); document.execCommand('insertText', false, text); }
+      TextEditing.insertText(c, text, { range: savedRange, focus: true });
     }
     clearSavedSelection();
   } else if (action === 'text-color') {
@@ -1182,10 +1149,7 @@ async function init() {
   const unpinBtn = $('#dnUnpin');
   unpinBtn.title = tr('unpin');
   unpinBtn.setAttribute('aria-label', unpinBtn.title);
-  unpinBtn.onclick = async () => {
-    // 取消置顶会立即关闭窗口，先等最后一次编辑得到落盘确认。
-    if (await saveNow()) await window.api.unpinFromDesktop(noteId);
-  };
+  unpinBtn.onclick = () => window.api.unpinFromDesktop(noteId);
 
   document.addEventListener('contextmenu', (e) => {
     e.preventDefault();
@@ -1204,7 +1168,9 @@ async function init() {
     }
   });
 
-  // 正常关闭由主进程先调用 flushNoteForClose；异常退出靠同步草稿恢复。
 }
 
-init();
+init().then(() => window.api.reportNoteReady(noteId, !!note), (err) => {
+  console.error('[note] 初始化失败：', err);
+  window.api.reportNoteReady(noteId, false);
+});

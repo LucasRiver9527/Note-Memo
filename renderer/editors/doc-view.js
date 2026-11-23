@@ -460,6 +460,7 @@ function wireDocView(n, isTodo) {
   content.addEventListener('paste', async (e) => {
     const cd = e.clipboardData || window.clipboardData;
     const text = cd ? cd.getData('text/plain') : '';
+    const pasteRange = TextEditing.selectionWithin(content);
     const items = (cd && cd.items) ? Array.from(cd.items) : [];
     const hasImage = items.some((it) => it.type && it.type.indexOf('image') === 0);
     if (copiedImage) { e.preventDefault(); insertImageReferenceAtCursor(n, copiedImage.src, copiedImage.w); return; }
@@ -467,16 +468,12 @@ function wireDocView(n, isTodo) {
     const files = await window.api.readClipboardFiles();
     if (files && files.length) { await insertPastedFilesAtCursor(n, files); return; }
     if (hasImage) { await handleImagePaste(cd, n); return; }
-    if (text) {
-      if (savedRange && savedNoteId === n.id) restoreSelection();
-      document.execCommand('insertText', false, text);
-    }
+    if (text && pasteRange) TextEditing.insertText(content, text, { range: pasteRange });
   });
   content.addEventListener('drop', async (e) => {
     e.preventDefault();
     e.stopPropagation();
-    const files = Array.from((e.dataTransfer && e.dataTransfer.files) || []);
-    const paths = (await Promise.all(files.map((f) => window.api.getPathForFile(f)))).filter(Boolean);
+    const paths = await window.api.getDroppedFilePaths();
     if (paths.length) {
       content.focus();
       await insertPastedFilesAtCursor(n, paths);
@@ -495,6 +492,7 @@ function wireDocView(n, isTodo) {
     adjustNoteFontSize(n, e.deltaY < 0 ? 1 : -1, (sz) => { const ed = content.closest('.doc-editor'); if (ed) ed.style.setProperty('--note-font-size', sz + 'px'); });
   }, { passive: false });
   content.addEventListener('keydown', (e) => {
+    if (e.isComposing || e.keyCode === 229) return;
     const sc = whichShortcut(e, state.settings, 'editor');
     if (sc === 'bold') { e.preventDefault(); toggleBold(content); }
     else if (sc === 'highlight') { e.preventDefault(); toggleHighlight(content); }

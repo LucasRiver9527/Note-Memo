@@ -39,11 +39,11 @@
 
 **Updating.** Open **Global Settings → About → Check for updates**, then follow the prompts. You can also download and run the new installer over the existing version. The app stores your notes in a separate user data folder. You can export a backup before updating.
 
-**Windows SmartScreen.** The 1.3.2 installer is unsigned, so Windows may flag it as an unrecognized app. Download it from the official release page and compare the installer’s SHA-256 checksum with the value listed there if you need to verify the file. [Verify the 1.3.2 installer](https://github.com/LucasRiver9527/Note-Memo/releases/tag/v1.3.2) · [Microsoft’s SmartScreen guide](https://learn.microsoft.com/windows/apps/package-and-deploy/smartscreen-reputation)
+**Windows SmartScreen.** The current installer is unsigned, so Windows may flag it as an unrecognized app. Download it from the official release page and compare the installer’s SHA-256 checksum with the value listed there if you need to verify the file. [Verify the stable installer](https://github.com/LucasRiver9527/Note-Memo/releases/latest) · [Microsoft’s SmartScreen guide](https://learn.microsoft.com/windows/apps/package-and-deploy/smartscreen-reputation)
 
 ## Quick start
 
-1. Select **New** in the sidebar or press `Ctrl+Shift+N`. Enter a title and some text.
+1. Select **New** in the sidebar or press `Ctrl+Shift+N` to open Quick Capture. Enter your note and press `Ctrl+Enter` to save it from Quick Capture.
 2. Select the pin on a note or drag the card to **Desktop notes** in the sidebar. Pinned notes can stay on top, snap to screen edges, and be moved or resized. You can also adjust their opacity.
 3. When you want to organize several notes, reopen the main window from the system tray and return to the canvas.
 
@@ -83,7 +83,7 @@ Notes support bold text, highlighting, alignment, images, links to local files, 
 
 </details>
 
-## Canvas features in 1.3.2
+## Canvas links, drawing, and widgets
 
 - **Link notes.** Connect plans, reference notes, and tasks with labeled arrows that follow the cards when you move them. Keep links visible or show them on hover and focus.
 - **Draw on the canvas.** Use a pen or highlighter for quick annotations. Marks drawn on a note move with it. Drawing and erasing support undo.
@@ -107,9 +107,9 @@ Open **Global Settings → Backup → Open folder**. With the default backup loc
 
 ### Back up and move to another PC
 
-1. On the old PC, open **Global Settings → Backup**. Select **Export now** or **Export to…** and keep the **JSON** file. It contains notes, groups, settings, layouts, and recycle bin entries.
-2. Copy any `images`, `backgrounds`, `fonts`, and `sounds` folders you use from the old data folder. Copy files referenced by local links separately, and update the links if the paths change.
-3. On the new PC, open Note-Memo, locate its data folder, and back up any notes you want to keep. Quit the app, copy the media into the corresponding subfolders, then reopen it. Select **Import…** in the Backup page, choose the old JSON, and check your notes and media. **Importing replaces the current data.**
+1. On the old PC, open **Global Settings → Backup**, select **Export full backup…**, and save the `.notememo` file. It includes notes, groups, recycle bin entries, appearance, layout, in-app images, custom fonts, and reminder sounds.
+2. On the new PC, select **Restore from backup…**. **Restoring replaces the current workspace**, so first export any data you want to keep. Copy files referenced by external links separately and update any paths that changed.
+3. For an older JSON backup, use **More → Import legacy JSON…** on the Backup page. With this format, copy the old data folder’s `images`, `backgrounds`, `fonts`, and `sounds` folders separately.
 
 <details>
 <summary>Default keyboard shortcuts</summary>
@@ -117,7 +117,8 @@ Open **Global Settings → Backup → Open folder**. With the default backup loc
 | Action | Shortcut |
 | --- | --- |
 | Show or hide the main window | `Ctrl+Shift+M` |
-| Create a note | `Ctrl+Shift+N` |
+| Open Quick Capture | `Ctrl+Shift+N` |
+| Save in Quick Capture | `Ctrl+Enter` |
 | Zoom the canvas | `Ctrl+mouse wheel` |
 | Pan the canvas | Hold Space and drag with the left button, or drag with the middle button |
 | Undo / redo a workspace action | `Ctrl+Z` / `Ctrl+Shift+Z` |

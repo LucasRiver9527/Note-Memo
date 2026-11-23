@@ -64,42 +64,8 @@ function noteAnchor(n) {
 }
 
 /* ============ 加粗 / 高亮 切换 ============ */
-function selectionHasHighlight() {
-  const sel = window.getSelection();
-  if (!sel || sel.isCollapsed || !sel.rangeCount) return false;
-  const range = sel.getRangeAt(0);
-  const cn = range.commonAncestorContainer;
-  const el = cn && (cn.nodeType === 1 ? cn : cn.parentElement);
-  const scope = el && el.closest('.note-content, .dn-content, .doc-content');
-  if (!scope) return false;
-  const marks = scope.querySelectorAll('mark.hl, span[style*="background"], font[style*="background"]');
-  for (const m of marks) {
-    if (range.intersectsNode(m) || m.contains(range.startContainer) || m.contains(range.endContainer)) return true;
-  }
-  return false;
-}
-
-function removeHighlightFromSelection() {
-  const sel = window.getSelection();
-  if (!sel || !sel.rangeCount) return;
-  const range = sel.getRangeAt(0);
-  const cn = range.commonAncestorContainer;
-  const el = cn && (cn.nodeType === 1 ? cn : cn.parentElement);
-  const scope = el && el.closest('.note-content, .dn-content, .doc-content');
-  if (!scope) return;
-  const marks = Array.from(scope.querySelectorAll('mark.hl, span[style*="background"], font[style*="background"]'));
-  marks.forEach((m) => {
-    if (range.intersectsNode(m)) {
-      const parent = m.parentNode;
-      while (m.firstChild) parent.insertBefore(m.firstChild, m);
-      parent.removeChild(m);
-    }
-  });
-}
-
 function toggleBold(contentEl) {
-  if (contentEl) contentEl.focus();
-  document.execCommand('bold');
+  return TextEditing.format(contentEl, 'bold');
 }
 
 /* 对齐光标所在「段落/块」或选区覆盖的多个块（含图片），不使用 execCommand，避免杂散 span 或触发高亮 */
@@ -205,13 +171,7 @@ function alignBlock(contentEl, cmd) {
 }
 
 function toggleHighlight(contentEl) {
-  if (contentEl) contentEl.focus();
-  if (selectionHasHighlight()) {
-    removeHighlightFromSelection();
-    if (contentEl) contentEl.dispatchEvent(new Event('input', { bubbles: true }));
-  } else {
-    document.execCommand('hiliteColor', false, highlightColor());
-  }
+  return TextEditing.toggleHighlight(contentEl, highlightColor());
 }
 
 function setHighlightColor(color) {
@@ -224,16 +184,9 @@ function setHighlightColor(color) {
 
 function applyInlineColor(n, range, color) {
   const contentEl = focusNoteContent(n);
-  if (!contentEl || !range) return;
-  contentEl.focus();
-  const sel = window.getSelection();
-  sel.removeAllRanges();
-  sel.addRange(range);
-  document.execCommand('foreColor', false, color);
-  n.content = readRichContent(contentEl);
-  n.updatedAt = Date.now();
-  save();
-  renderAll();
+  if (!range || !TextEditing.format(contentEl, 'foreColor', color, range)) return;
+  const card = contentEl.closest('.note, .memo-row');
+  if (card) refreshFoot(card, n);
 }
 
 function getSelectedImageSrc(n) {
@@ -248,5 +201,5 @@ function getSelectedImageSrc(n) {
   return null;
 }
 
-  return { selectionHasHighlight, removeHighlightFromSelection, toggleBold, alignBlock, toggleHighlight, setHighlightColor, applyInlineColor, getSelectedImageSrc, captureSelection, restoreSelection, clearSavedSelection, focusNoteContent, noteAnchor, noteFontSize, adjustNoteFontSize };
+  return { toggleBold, alignBlock, toggleHighlight, setHighlightColor, applyInlineColor, getSelectedImageSrc, captureSelection, restoreSelection, clearSavedSelection, focusNoteContent, noteAnchor, noteFontSize, adjustNoteFontSize };
 }));

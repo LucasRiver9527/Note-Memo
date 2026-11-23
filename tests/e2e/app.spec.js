@@ -26,8 +26,10 @@ async function openApp(opts) {
   // 环境变量 MYNOTES_E2E_EXTRA_ARGS 便于 CI/沙箱注入 --disable-gpu 等；opts.extraArgs 优先级更高
   const envArgs = (process.env.MYNOTES_E2E_EXTRA_ARGS || '').split(/\s+/).filter(Boolean);
   const extraArgs = (opts && opts.extraArgs) || envArgs;
+  const executablePath = opts?.executablePath;
   const electronApp = await electron.launch({
-    args: ['.'].concat(extraArgs),
+    executablePath,
+    args: executablePath ? extraArgs : ['.'].concat(extraArgs),
     cwd: ROOT,
     env: { ...process.env, MYNOTES_USER_DATA: userDataDir }
   });
@@ -4658,7 +4660,7 @@ test('关闭确认：选「隐藏到任务栏」后窗口隐藏', async () => {
 });
 
 // —— 分组过多：筛选栏可收缩滚动，右侧按钮不被挤出 ——
-test('工作区侧栏：长分组可滚动选择，窄窗可用键盘打开与关闭', async () => {
+test('工作区侧栏：长分组可滚动选择，窄窗可用键盘打开与关闭', async ({}, testInfo) => {
   const seed = searchViewSeed();
   seed.groups.push(...Array.from({ length: 24 }, (_, i) => ({
     id: 'g' + i, name: '一个特别长的分组名字测试' + i, color: '#6c5ce7'
@@ -4666,17 +4668,43 @@ test('工作区侧栏：长分组可滚动选择，窄窗可用键盘打开与�
   const ctx = await openApp({ seed });
   const { win } = ctx;
   try {
-    const resize = (width) => ctx.electronApp.evaluate(({ BrowserWindow }, w) => {
-      BrowserWindow.getAllWindows()[0].setSize(w, 620);
-    }, width);
+    const resize = (width, height = 760) => ctx.electronApp.evaluate(({ BrowserWindow }, [w, h]) => {
+      BrowserWindow.getAllWindows()[0].setSize(w, h);
+    }, [width, height]);
     await resize(1200);
     const sidebar = win.locator('#filterbar');
     const last = win.locator('#groupChips button').getByText('一个特别长的分组名字测试23', { exact: true });
+    const sidebarScroll = sidebar.locator('.workspace-nav-items');
+    const groupScroll = sidebar.locator('#groupChips');
+    await expect(sidebarScroll).not.toHaveClass(/workspace-nav-overflow/);
+    await last.scrollIntoViewIfNeeded();
+    expect(await groupScroll.evaluate(node => node.scrollTop)).toBeGreaterThan(0);
+    expect(await sidebarScroll.evaluate(node => node.scrollTop)).toBe(0);
+    await expect(sidebar.locator('#btnAdd')).toBeInViewport();
+    await expect(sidebar.locator('#btnAddGroup')).toBeInViewport();
+    await sidebar.screenshot({ path: testInfo.outputPath('sidebar-groups-only-scroll.png') });
     await last.click();
     await expect(win.locator('#workspaceTitle')).toHaveText('一个特别长的分组名字测试23');
-    expect(await sidebar.locator('.workspace-nav-items').evaluate((node) => node.scrollTop)).toBeGreaterThan(0);
     await expect(sidebar.getByRole('button', { name: '外观', exact: true })).toHaveCount(0);
     await expect(win.locator('#viewDoc')).toBeInViewport();
+
+    await resize(1200, 420);
+    await expect(sidebarScroll).toHaveClass(/workspace-nav-overflow/);
+    await groupScroll.locator('button').last().scrollIntoViewIfNeeded();
+    expect(await sidebarScroll.evaluate(node => node.scrollTop)).toBeGreaterThan(0);
+    expect(await groupScroll.evaluate(node => node.scrollTop)).toBe(0);
+
+    const compactHeight = await sidebarScroll.evaluate(node => {
+      const style = getComputedStyle(node);
+      const spacing = parseFloat(style.paddingTop) + parseFloat(style.paddingBottom) + parseFloat(style.rowGap);
+      return Math.ceil(innerHeight - node.clientHeight + node.querySelector('.workspace-nav-fixed').offsetHeight + spacing + 115);
+    });
+    await resize(1200, compactHeight);
+    await expect(sidebarScroll).not.toHaveClass(/workspace-nav-overflow/);
+    await sidebar.locator('#desktopNotesSummary').click();
+    await expect(sidebarScroll).toHaveClass(/workspace-nav-overflow/);
+    await sidebar.locator('#desktopNotesSummary').click();
+    await expect(sidebarScroll).not.toHaveClass(/workspace-nav-overflow/);
 
     await resize(640);
     await expect.poll(() => win.evaluate(() => innerWidth)).toBe(640);
@@ -8693,12 +8721,15 @@ test('备份目录只接受默认目录、已保存目录或本次选择的目�
   const ctx = await openApp();
   try {
     const chosen = path.join(ctx.userDataDir, 'chosen');
+    const saveAs = path.join(ctx.userDataDir, 'save-as.json');
+    await fs.writeFile(saveAs, '{ "previous": true }');
     const saved = path.join(ctx.userDataDir, 'saved');
     const denied = path.join(ctx.userDataDir, 'unapproved');
-    await ctx.electronApp.evaluate(({ dialog, shell }, folder) => {
-      dialog.showOpenDialog = async () => ({ canceled: false, filePaths: [folder] });
+    await ctx.electronApp.evaluate(({ dialog, shell }, { chosen, saveAs }) => {
+      dialog.showOpenDialog = async () => ({ canceled: false, filePaths: [chosen] });
+      dialog.showSaveDialog = async () => ({ canceled: false, filePath: saveAs });
       shell.openPath = async () => '';
-    }, chosen);
+    }, { chosen, saveAs });
     const dataFile = path.join(ctx.userDataDir, 'notes-data.json');
     const disk = JSON.parse(await fs.readFile(dataFile, 'utf8'));
     disk.settings.backupDir = saved;
@@ -8711,7 +8742,9 @@ test('备份目录只接受默认目录、已保存目录或本次选择的目�
       const savedOpen = await window.api.openPath(saved);
       const selection = await window.api.chooseDirectory();
       const chosenWrite = await window.api.backupExport(payload, selection.path);
-      return { deniedOpen, deniedWrite, defaultWrite, savedOpen, chosenWrite };
+      const nextWrite = await window.api.backupExport({ notes: [], settings: { language: 'en' } }, selection.path);
+      const manualWrite = await window.api.exportData(payload);
+      return { deniedOpen, deniedWrite, defaultWrite, savedOpen, chosenWrite, nextWrite, manualWrite };
     }, { denied, saved });
     expect(result.deniedOpen.ok).toBe(false);
     expect(result.deniedWrite.ok).toBe(false);
@@ -8720,48 +8753,136 @@ test('备份目录只接受默认目录、已保存目录或本次选择的目�
     expect(path.dirname(result.defaultWrite.path)).toBe(path.join(ctx.userDataDir, 'backups'));
     expect(path.dirname(result.chosenWrite.path)).toBe(chosen);
     expect(JSON.parse(await fs.readFile(result.chosenWrite.path, 'utf8'))).toEqual({ notes: [] });
+    expect(result.nextWrite.path).not.toBe(result.chosenWrite.path);
+    expect(result.manualWrite.ok).toBe(true);
+    expect(await fs.readdir(chosen)).toHaveLength(2);
+    expect(JSON.parse(await fs.readFile(saveAs, 'utf8'))).toEqual({ notes: [] });
+
+    await ctx.electronApp.evaluate(({ app }, file) => {
+      const require = process.getBuiltinModule('module').createRequire(app.getAppPath() + '/package.json');
+      const fs = require('node:fs');
+      const realRename = fs.renameSync;
+      fs.renameSync = (source, target) => {
+        if (target !== file) return realRename(source, target);
+        fs.renameSync = realRename;
+        throw Object.assign(new Error('locked export'), { code: 'EBUSY' });
+      };
+    }, saveAs);
+    const failed = await ctx.win.evaluate(() => window.api.exportData({ notes: [{ title: 'Different content' }] }));
+    expect(failed.ok).toBe(false);
+    expect(JSON.parse(await fs.readFile(saveAs, 'utf8'))).toEqual({ notes: [] });
+    expect((await fs.readdir(ctx.userDataDir)).filter(name => name.startsWith('save-as.json.'))).toEqual([]);
   } finally { await closeApp(ctx); }
 });
 
-test('只查询或导入当前窗口通过本地文件或剪贴板取得的路径', async () => {
+test('只授权系统拖放和剪贴板路径，并校验导入图片', async () => {
   const ctx = await openApp();
   try {
-    const image = path.join(ctx.userDataDir, 'drop.png');
+    const image = path.join(ctx.userDataDir, 'drop.PNG');
+    const fake = path.join(ctx.userDataDir, 'fake.png');
+    const big = path.join(ctx.userDataDir, 'big.png');
     const documentPath = path.join(ctx.userDataDir, 'clipboard.txt');
     await fs.copyFile(path.join(ROOT, 'assets', 'icon.png'), image);
+    await fs.writeFile(fake, 'not an image');
+    const largeFile = await fs.open(big, 'w');
+    try { await largeFile.truncate(32 * 1024 * 1024 + 1); } finally { await largeFile.close(); }
     await fs.writeFile(documentPath, 'clipboard attachment');
-    await ctx.electronApp.evaluate(({ clipboard }, file) => {
+    await ctx.electronApp.evaluate(({ clipboard, dialog }, { documentPath, fake }) => {
       clipboard.readBuffer = (format) => format === 'FileNameW'
-        ? Buffer.from(file + '\0', 'utf16le')
-        : Buffer.alloc(0);
-    }, documentPath);
-    await ctx.win.evaluate(() => {
-      const input = document.createElement('input');
-      input.type = 'file';
-      input.id = 'test-native-file';
-      document.body.appendChild(input);
-    });
-    await ctx.win.locator('#test-native-file').setInputFiles(image);
-    const results = await ctx.win.evaluate(async ({ image, documentPath }) => {
-      const initialStat = await window.api.statPath(documentPath);
-      const initialImport = await window.api.addImageFile(image);
-      const synthetic = await window.api.getPathForFile(new File(['fake'], image));
-      const file = document.querySelector('#test-native-file').files[0];
-      const grantedPath = await window.api.getPathForFile(file);
-      const imported = await window.api.addImageFile(grantedPath);
-      const clipboardFiles = await window.api.readClipboardFiles();
-      const clipboardStat = await window.api.statPath(clipboardFiles[0]);
-      return { initialStat, initialImport, synthetic, grantedPath, imported, clipboardFiles, clipboardStat };
+        ? Buffer.from(documentPath + '\0', 'utf16le') : Buffer.alloc(0);
+      dialog.showOpenDialog = async () => ({ canceled: false, filePaths: [fake] });
+    }, { documentPath, fake });
+    const beforeDrop = await ctx.win.evaluate(async ({ image, documentPath }) => {
+      window.addEventListener('dragover', (event) => event.preventDefault());
+      window.addEventListener('drop', (event) => {
+        event.preventDefault();
+        window.testDrop = window.api.getDroppedFilePaths();
+      });
+      const transfer = new DataTransfer();
+      transfer.items.add(new File(['fake'], image, { type: 'image/png' }));
+      document.elementFromPoint(30, 100).dispatchEvent(new DragEvent('drop', {
+        bubbles: true, cancelable: true, dataTransfer: transfer
+      }));
+      return {
+        initialStat: await window.api.statPath(documentPath),
+        initialImport: await window.api.addImageFile(image),
+        synthetic: await window.testDrop
+      };
     }, { image, documentPath });
-    expect(results.initialStat).toEqual({ exists: false });
-    expect(results.initialImport.ok).toBe(false);
-    expect(results.synthetic).toBe('');
-    expect(results.grantedPath).toBe(image);
-    expect(results.imported.ok).toBe(true);
-    const importedName = decodeURIComponent(new URL(results.imported.url).pathname.slice(1));
+    expect(beforeDrop.initialStat).toEqual({ exists: false });
+    expect(beforeDrop.initialImport.ok).toBe(false);
+    expect(beforeDrop.synthetic).toEqual([]);
+
+    const cdp = await ctx.win.context().newCDPSession(ctx.win);
+    try {
+      const data = { items: [], files: [image, fake, big], dragOperationsMask: 1 };
+      for (const type of ['dragEnter', 'dragOver', 'drop']) {
+        await cdp.send('Input.dispatchDragEvent', { type, x: 30, y: 100, data });
+      }
+    } finally { await cdp.detach(); }
+    const results = await ctx.win.evaluate(async () => {
+      const paths = await window.testDrop;
+      const imported = await Promise.all(paths.map(p => window.api.addImageFile(p)));
+      const clipboardFiles = await window.api.readClipboardFiles();
+      return { paths, imported, clipboardFiles, clipboardStat: await window.api.statPath(clipboardFiles[0]),
+        pickerRejected: await window.api.pickNoteImage(),
+        pastedRejected: await window.api.saveNoteImage('data:image/png;base64,bm90IGFuIGltYWdl'),
+        expired: await window.api.getDroppedFilePaths() };
+    });
+    expect(results.paths).toEqual([image, fake, big]);
+    expect(results.imported.map(item => item.ok)).toEqual([true, false, false]);
+    expect(results.imported[2].error).toContain('32 MB');
+    const importedName = decodeURIComponent(new URL(results.imported[0].url).pathname.slice(1));
     expect(await fs.readFile(path.join(ctx.userDataDir, 'images', importedName))).toEqual(await fs.readFile(image));
+    expect(await fs.readdir(path.join(ctx.userDataDir, 'images'))).toEqual([importedName]);
     expect(results.clipboardFiles).toEqual([documentPath]);
     expect(results.clipboardStat).toMatchObject({ exists: true, isFile: true });
+    expect(results.pickerRejected.ok).toBe(false);
+    expect(results.pastedRejected.ok).toBe(false);
+    expect(results.expired).toEqual([]);
+  } finally { await closeApp(ctx); }
+});
+
+test('画布、文档和桌面便签都能插入系统拖放的文件', async () => {
+  const seed = searchViewSeed();
+  const [first] = seed.notes;
+  const id = first.id;
+  seed.notes = [{ ...first, type: 'note', items: [] }];
+  const ctx = await openApp({ seed });
+  try {
+    const files = ['canvas.txt', 'document.txt', 'desktop.txt'];
+    await Promise.all(files.map(name => fs.writeFile(path.join(ctx.userDataDir, name), name)));
+
+    async function dropFile(page, editor, name) {
+      await expect(editor).toBeVisible();
+      const box = await editor.boundingBox();
+      const cdp = await page.context().newCDPSession(page);
+      try {
+        const data = { items: [], files: [path.join(ctx.userDataDir, name)], dragOperationsMask: 1 };
+        for (const type of ['dragEnter', 'dragOver', 'drop']) {
+          await cdp.send('Input.dispatchDragEvent', { type, x: box.x + 12, y: box.y + 8, data });
+        }
+      } finally { await cdp.detach(); }
+    }
+
+    async function expectAttachment(page, editor, name) {
+      await dropFile(page, editor, name);
+      await expect(editor.locator('.file-link').filter({ hasText: name })).toBeVisible();
+    }
+
+    const card = ctx.win.locator('#board .note[data-id="' + id + '"] .note-content');
+    await expectAttachment(ctx.win, card, files[0]);
+    await stableClick(ctx.win.locator('#viewDoc'));
+    await stableClick(ctx.win.locator('.doc-pick-item[data-id="' + id + '"]'));
+    const doc = ctx.win.locator('#docContent');
+    await expectAttachment(ctx.win, doc, files[1]);
+    await ctx.win.evaluate(() => window.saveNow());
+    expect(await ctx.win.evaluate(id => window.api.pinToDesktop(id), id)).toBe(true);
+    const detached = ctx.electronApp.windows().find(page => page.url().includes('note.html'));
+    await expectAttachment(detached, detached.locator('.dn-content'), files[2]);
+    await fs.writeFile(path.join(ctx.userDataDir, 'wrong.png'), 'not a png');
+    await dropFile(detached, detached.locator('.dn-content'), 'wrong.png');
+    await expect(detached.locator('#noteImageWarning')).toContainText('PNG');
   } finally { await closeApp(ctx); }
 });
 
@@ -9631,5 +9752,792 @@ test('画布关联管理：编辑入向关系标签、取消和解除均可撤�
     await target.hover();
     await expect(curve).toHaveCount(1);
     await expect(label).toHaveCount(0);
+  } finally { await closeApp(ctx); }
+});
+
+test('全局速记：隐藏工作区时输入、失败重试、按分组保存并钉桌', async ({}, testInfo) => {
+  const { electronApp, win, userDataDir } = await openApp({
+    seed: { settings: { language: 'en', appearanceMode: 'dark', lastSeenVersion: EXPECTED_VERSION },
+      notes: [], groups: [{ id: 'capture-group', name: 'Capture group', color: '#00b894' }], trash: [] }
+  });
+  const findCapture = () => electronApp.windows().find(page => page.url().endsWith('/quick-capture.html'));
+  try {
+    await electronApp.evaluate(({ globalShortcut }) => {
+      const register = globalShortcut.register.bind(globalShortcut);
+      globalShortcut.register = (key, callback) => {
+        if (key === 'CommandOrControl+Shift+N') globalThis.captureShortcut = callback;
+        return register(key, callback);
+      };
+    });
+    const shortcutSettings = await win.evaluate(() => window.api.setShortcuts({}));
+    expect(shortcutSettings.ok).toBe(true);
+    await win.evaluate(() => window.api.hide());
+    await electronApp.evaluate(() => globalThis.captureShortcut());
+    await expect.poll(() => Boolean(findCapture())).toBe(true);
+    const quick = findCapture();
+    await expect(quick.locator('h1')).toHaveText('Quick Capture');
+    await expect(quick.locator(':root')).toHaveAttribute('data-dark', '');
+    expect(await quick.evaluate(() => typeof window.api)).toBe('undefined');
+    await expect(electronApp.evaluate(({ BrowserWindow, ipcMain }) => {
+      const sender = BrowserWindow.getAllWindows().find(w => w.webContents.getURL().endsWith('/quick-capture.html')).webContents;
+      return ipcMain._invokeHandlers.get('data:load')({ sender, senderFrame: sender.mainFrame });
+    })).rejects.toThrow('unauthorized ipc source');
+    await expect(quick.locator('#content')).toBeFocused();
+    await quick.locator('#title').fill('Capture smoke');
+    await quick.locator('#content').fill('  First line\nSecond line');
+    await quick.locator('#group').selectOption('capture-group');
+    await quick.locator('#pin').click();
+    await quick.screenshot({ path: testInfo.outputPath('quick-capture-dark-en.png') });
+    await quick.keyboard.press('Escape');
+    const isVisible = () => electronApp.evaluate(({ BrowserWindow }) => BrowserWindow.getAllWindows()
+      .find(w => w.webContents.getURL().endsWith('/quick-capture.html')).isVisible());
+    await expect.poll(isVisible).toBe(false);
+    await win.evaluate(() => window.api.openQuickCapture());
+    await expect.poll(isVisible).toBe(true);
+    await expect(quick.locator('#content')).toHaveValue('  First line\nSecond line');
+    await expect(quick.locator('#group')).toHaveValue('capture-group');
+    await expect(quick.locator('#pin')).toHaveAttribute('aria-pressed', 'true');
+
+    await electronApp.evaluate(({ ipcMain }) => {
+      globalThis.savedCaptureHandler = ipcMain._invokeHandlers.get('data:save');
+      ipcMain.removeHandler('data:save');
+      ipcMain.handle('data:save', () => { throw new Error('save failure test'); });
+    });
+    await quick.locator('#content').press('Control+Enter');
+    await expect(quick.locator('#status')).toContainText('Save failed');
+    await expect(quick.locator('#content')).toHaveValue('  First line\nSecond line');
+
+    await electronApp.evaluate(({ ipcMain }) => {
+      ipcMain.removeHandler('data:save');
+      ipcMain.handle('data:save', globalThis.savedCaptureHandler);
+    });
+    await quick.locator('#content').press('Control+Enter');
+    await expect.poll(isVisible).toBe(false);
+    const disk = JSON.parse(await fs.readFile(path.join(userDataDir, 'notes-data.json'), 'utf8'));
+    expect(disk.notes).toHaveLength(1);
+    expect(disk.notes[0]).toMatchObject({
+      title: 'Capture smoke', content: '  First line\nSecond line', groupId: 'capture-group', desktopPin: true
+    });
+    await expect.poll(() => electronApp.windows().some(page => /\/note\.html\?/.test(page.url()))).toBe(true);
+    expect(await electronApp.evaluate(({ BrowserWindow }) => BrowserWindow.getAllWindows()
+      .find(w => w.webContents.getURL().endsWith('/index.html')).isVisible())).toBe(false);
+
+    await win.evaluate(async () => {
+      const mode = document.querySelector('#globalCreateMode');
+      renderShortcutPanel();
+      mode.value = 'workspace';
+      mode.dispatchEvent(new Event('change'));
+    });
+    await expect.poll(async () => JSON.parse(await fs.readFile(path.join(userDataDir, 'notes-data.json'), 'utf8'))
+      .settings.globalCreateMode).toBe('workspace');
+    await electronApp.evaluate(() => globalThis.captureShortcut());
+    await expect.poll(async () => JSON.parse(await fs.readFile(path.join(userDataDir, 'notes-data.json'), 'utf8'))
+      .notes.length).toBe(2);
+    await expect.poll(isVisible).toBe(false);
+  } finally {
+    await electronApp.close();
+  }
+});
+
+test('完整备份：设置页导出后迁移到新数据目录，可恢复媒体，坏包保留原数据', async ({}, testInfo) => {
+  test.skip(!process.env.WINDIR, 'Uses a Windows font fixture');
+  const from = await fs.mkdtemp(path.join(os.tmpdir(), 'mynotes-bundle-from-'));
+  const to = await fs.mkdtemp(path.join(os.tmpdir(), 'mynotes-bundle-to-'));
+  const bundleFile = testInfo.outputPath('fixture.notememo');
+  const damagedFile = testInfo.outputPath('damaged.notememo');
+  await fs.mkdir(path.dirname(bundleFile), { recursive: true });
+  function silentWave() {
+    const wav = Buffer.alloc(44 + 3200);
+    wav.write('RIFF', 0);
+    wav.writeUInt32LE(wav.length - 8, 4);
+    wav.write('WAVEfmt ', 8);
+    wav.writeUInt32LE(16, 16);
+    wav.writeUInt16LE(1, 20);
+    wav.writeUInt16LE(1, 22);
+    wav.writeUInt32LE(8000, 24);
+    wav.writeUInt32LE(16000, 28);
+    wav.writeUInt16LE(2, 32);
+    wav.writeUInt16LE(16, 34);
+    wav.write('data', 36);
+    wav.writeUInt32LE(wav.length - 44, 40);
+    return wav;
+  }
+  const openBackupPage = async (ctx) => {
+    await stableClick(ctx.win.locator('#btnSettings'));
+    await stableClick(ctx.win.locator('.sp-nav-item[data-tab="backup"]'));
+    await expect(ctx.win.locator('#btnExportFullBackup')).toBeVisible();
+  };
+  const data = {
+    settings: {
+      language: 'zh', lastSeenVersion: EXPECTED_VERSION, recycleBinDays: 0,
+      appearanceMode: 'light', backgroundImage: 'note-bg://local/wall.png',
+      reminderSound: true, reminderSoundPath: 'note-sound://local/ping.wav',
+      customFonts: [{ id: 'cf-test', name: 'Migration font', family: 'MigrationFont', url: 'note-font://local/type.ttf' }]
+    },
+    groups: [{ id: 'travel', name: '周末徒步', color: '#00b894' }],
+    notes: [{
+      id: 'transferred', groupId: 'travel', title: '记得下载离线地图', content: '[[img:photo]]',
+      images: [{ id: 'photo', src: 'note-img://local/map.png' }],
+      positionAll: { x: 165, y: 190 }, x: 130, y: 140, w: 270, h: 220
+    }],
+    trash: [{ note: { id: 'bin', title: '已删除的路线' }, deletedAt: Date.now() }]
+  };
+  for (const dir of ['images', 'backgrounds', 'fonts', 'sounds']) await fs.mkdir(path.join(from, dir));
+  const fixturePng = path.join(ROOT, 'assets', 'icon.png');
+  await fs.copyFile(fixturePng, path.join(from, 'images', 'map.png'));
+  await fs.copyFile(fixturePng, path.join(from, 'backgrounds', 'wall.png'));
+  await fs.copyFile(path.join(process.env.WINDIR, 'Fonts', 'arial.ttf'), path.join(from, 'fonts', 'type.ttf'));
+  await fs.writeFile(path.join(from, 'sounds', 'ping.wav'), silentWave());
+
+  let ctx;
+  try {
+    const executablePath = process.env.MYNOTES_FULL_BACKUP_TEST_EXE;
+    ctx = await openApp({ userDataDir: from, seed: data, executablePath });
+    await ctx.electronApp.evaluate(({ dialog }, destination) => {
+      dialog.showSaveDialog = async () => ({ canceled: false, filePath: destination });
+    }, bundleFile);
+    await openBackupPage(ctx);
+    await expect(ctx.win.locator('#fullBackupLastExport')).toHaveText('暂无导出记录');
+    await ctx.win.locator('.sp-tab[data-tab="backup"] .sp-group').first().screenshot({
+      path: testInfo.outputPath('full-backup-light-zh.png')
+    });
+    await stableClick(ctx.win.locator('#btnExportFullBackup'));
+    await expect.poll(async () => (await fs.stat(bundleFile).catch(() => null))?.size || 0).toBeGreaterThan(1000);
+    await expect(ctx.win.locator('#fullBackupLastExport')).toContainText('上次备份');
+    const exportedAt = await ctx.win.evaluate(() => window.api.getLastFullBackup());
+    expect(Date.now() - exportedAt).toBeLessThan(60000);
+    await ctx.win.locator('.full-backup-card').screenshot({ path: testInfo.outputPath('full-backup-recorded-zh.png') });
+    await ctx.electronApp.close();
+    ctx = null;
+    ctx = await openApp({ userDataDir: from, executablePath });
+    await openBackupPage(ctx);
+    await expect(ctx.win.locator('#fullBackupLastExport')).toContainText('上次备份');
+    expect(await ctx.win.evaluate(() => window.api.getLastFullBackup())).toBe(exportedAt);
+    await ctx.electronApp.close();
+    ctx = null;
+
+    const damaged = await fs.readFile(bundleFile);
+    damaged[damaged.length - 1] ^= 1;
+    await fs.writeFile(damagedFile, damaged);
+    await fs.mkdir(path.join(to, 'images'));
+    await fs.writeFile(path.join(to, 'images', 'map.png'), 'existing destination asset');
+    ctx = await openApp({
+      userDataDir: to, executablePath, seed: {
+        settings: { language: 'en', appearanceMode: 'dark', lastSeenVersion: EXPECTED_VERSION },
+        notes: [{ id: 'keep', title: 'Keep this before restore' }], groups: [], trash: []
+      }
+    });
+    const choose = (file) => ctx.electronApp.evaluate(({ dialog }, filePath) => {
+      dialog.showOpenDialog = async () => ({ canceled: false, filePaths: [filePath] });
+    }, file);
+    const restore = ctx.win.locator('#btnRestoreFullBackup');
+    await ctx.electronApp.evaluate(({ BrowserWindow }) => BrowserWindow.getAllWindows()[0].setSize(640, 720));
+    await openBackupPage(ctx);
+    await expect(ctx.win.locator('#fullBackupLastExport')).toHaveText('No export recorded');
+    await ctx.win.locator('.sp-tab[data-tab="backup"] .sp-group').first().screenshot({
+      path: testInfo.outputPath('full-backup-dark-en.png')
+    });
+    await choose(damagedFile);
+    await stableClick(restore);
+    await expect(restore).toBeEnabled();
+    expect((await ux01ReadData(to)).notes[0].title).toBe('Keep this before restore');
+    expect(await fs.readdir(path.join(to, 'images'))).toEqual(['map.png']);
+
+    await choose(bundleFile);
+    await stableClick(restore);
+    await stableClick(ctx.win.locator('#cmCancel'));
+    await expect(restore).toBeEnabled();
+    expect((await ux01ReadData(to)).notes[0].title).toBe('Keep this before restore');
+    expect((await fs.readdir(to)).some(name => name.startsWith('.restore-'))).toBe(false);
+
+    await stableClick(restore);
+    await stableClick(ctx.win.locator('#cmOk'));
+    await expect(restore).toBeEnabled();
+    await expect(ctx.win.locator('#fullBackupLastExport')).toHaveText('暂无导出记录');
+    const disk = await ux01ReadData(to);
+    expect(disk.notes[0]).toMatchObject({ title: '记得下载离线地图', groupId: 'travel', positionAll: { x: 165, y: 190 } });
+    expect(disk.trash[0].note.title).toBe('已删除的路线');
+    expect(await fs.readFile(path.join(to, 'images', 'map.png'), 'utf8')).toBe('existing destination asset');
+    expect(await ctx.win.evaluate(async () => {
+      const media = state.notes[0].images[0].src;
+      const wallpaper = state.settings.backgroundImage;
+      const customFont = await document.fonts.load('14px MigrationFont');
+      const sizes = await Promise.all([media, wallpaper].map(async (src) => {
+        const image = new Image();
+        image.src = src;
+        await image.decode();
+        return image.naturalWidth;
+      }));
+      const audio = new Audio(state.settings.reminderSoundPath);
+      audio.muted = true;
+      await audio.play();
+      const duration = audio.duration;
+      audio.pause();
+      return { photo: sizes[0] > 0, wallpaper: sizes[1] > 0, font: customFont[0]?.status, duration };
+    })).toEqual({ photo: true, wallpaper: true, font: 'loaded', duration: 0.2 });
+
+    await ctx.electronApp.close();
+    ctx = null;
+    ctx = await openApp({ userDataDir: to, executablePath });
+    await expect.poll(() => ctx.win.evaluate(() => state.notes[0]?.title)).toBe('记得下载离线地图');
+    expect(await ctx.win.evaluate(async () => {
+      const image = new Image();
+      image.src = state.notes[0].images[0].src;
+      await image.decode();
+      return image.naturalWidth > 0;
+    })).toBe(true);
+  } finally {
+    if (ctx) await ctx.electronApp.close();
+    await fs.rm(from, { recursive: true, force: true });
+    await fs.rm(to, { recursive: true, force: true });
+  }
+});
+
+test('钉桌事务：窗口加载或首次初始化失败时保持未钉桌，并保留其他便签编辑', async () => {
+  const ctx = await openApp({ seed: {
+    settings: { lastSeenVersion: EXPECTED_VERSION }, groups: [], trash: [],
+    notes: [{ id: 'pin-failure', title: '待钉桌' }, { id: 'keep-edit', title: '其他便签' }]
+  } });
+  try {
+    await ctx.electronApp.evaluate(({ BrowserWindow }) => {
+      const load = BrowserWindow.prototype.loadFile;
+      BrowserWindow.prototype.loadFile = function (file, opts) {
+        if (opts?.query?.id === 'pin-failure') {
+          return new Promise((resolve, reject) => {
+            globalThis.failPinLoad = () => {
+              BrowserWindow.prototype.loadFile = load;
+              reject(new Error('simulated load failure'));
+            };
+          });
+        }
+        return load.call(this, file, opts);
+      };
+    });
+    const pending = ctx.win.evaluate(() => window.api.pinToDesktop('pin-failure'));
+    await expect.poll(() => ctx.electronApp.evaluate(() => Boolean(globalThis.failPinLoad))).toBe(true);
+    expect((await ux01ReadData(ctx.userDataDir)).notes[0].desktopPin).not.toBe(true);
+    await ctx.win.evaluate(async () => {
+      state.notes.find(note => note.id === 'keep-edit').title = '开窗期间的新编辑';
+      await saveNow();
+    });
+    await ctx.electronApp.evaluate(() => globalThis.failPinLoad());
+    expect(await pending).toBe(false);
+    expect((await ux01ReadData(ctx.userDataDir)).notes.find(note => note.id === 'keep-edit').title).toBe('开窗期间的新编辑');
+    expect(await ctx.electronApp.evaluate(({ BrowserWindow }) => BrowserWindow.getAllWindows().length)).toBe(1);
+
+    await ctx.electronApp.evaluate(({ ipcMain }) => {
+      const original = ipcMain._invokeHandlers.get('note:get');
+      ipcMain.removeHandler('note:get');
+      ipcMain.handle('note:get', (event, id) => {
+        ipcMain.removeHandler('note:get');
+        ipcMain.handle('note:get', original);
+        return { note: null, settings: null };
+      });
+    });
+    expect(await ctx.win.evaluate(() => window.api.pinToDesktop('pin-failure'))).toBe(false);
+    expect((await ux01ReadData(ctx.userDataDir)).notes[0].desktopPin).not.toBe(true);
+    expect(await ctx.electronApp.evaluate(({ BrowserWindow }) => BrowserWindow.getAllWindows().length)).toBe(1);
+    await ctx.electronApp.evaluate(({ BrowserWindow }) => {
+      const show = BrowserWindow.prototype.show;
+      BrowserWindow.prototype.show = function (...args) {
+        if (this.webContents.getURL().endsWith('/note.html?id=pin-failure')) {
+          BrowserWindow.prototype.show = show;
+          throw new Error('simulated show failure');
+        }
+        return show.apply(this, args);
+      };
+    });
+    expect(await ctx.win.evaluate(() => window.api.pinToDesktop('pin-failure'))).toBe(false);
+    expect(await ctx.electronApp.evaluate(({ BrowserWindow }) => BrowserWindow.getAllWindows().length)).toBe(1);
+    expect((await ux01ReadData(ctx.userDataDir)).notes[0].desktopPin).not.toBe(true);
+    expect(await ctx.win.evaluate(() => window.api.pinToDesktop('pin-failure'))).toBe(true);
+    expect((await ux01ReadData(ctx.userDataDir)).notes[0].desktopPin).toBe(true);
+  } finally { await closeApp(ctx); }
+});
+
+test('多窗刷盘：首张桌面便签失败仍会保存后续便签并阻止退出', async () => {
+  const ctx = await openApp({ seed: {
+    settings: { lastSeenVersion: EXPECTED_VERSION }, groups: [], trash: [],
+    notes: [{ id: 'first', title: '第一页' }, { id: 'second', title: '第二页' }]
+  } });
+  try {
+    expect(await ctx.win.evaluate(() => window.api.pinToDesktop('first'))).toBe(true);
+    expect(await ctx.win.evaluate(() => window.api.pinToDesktop('second'))).toBe(true);
+    const second = ctx.electronApp.windows().find(page => page.url().endsWith('/note.html?id=second'));
+    await ctx.electronApp.evaluate(({ ipcMain }) => {
+      const update = ipcMain._invokeHandlers.get('note:update');
+      ipcMain.removeHandler('note:update');
+      ipcMain.handle('note:update', (event, note, opts) => note.id === 'first' ? false : update(event, note, opts));
+    });
+    await second.locator('#dnTitle').fill('后续窗口的最新内容');
+    await second.evaluate(() => { clearTimeout(saveTimer); saveTimer = null; });
+    await ctx.win.evaluate(() => window.api.close());
+    await expect(ctx.win.locator('#closeOverlay')).toBeVisible();
+    await stableClick(ctx.win.locator('#btnCloseQuit'));
+    await expect.poll(async () => (await ux01ReadData(ctx.userDataDir)).notes.find(note => note.id === 'second').title)
+      .toBe('后续窗口的最新内容');
+    expect(await ctx.electronApp.evaluate(({ BrowserWindow }) => BrowserWindow.getAllWindows().length)).toBe(3);
+  } finally { await closeApp(ctx); }
+});
+
+test('桌面便签走系统关闭时等待保存，超时后可重试，并在丢失置顶时恢复', async () => {
+  const id = 'native-close';
+  const ctx = await openApp({ seed: {
+    settings: { lastSeenVersion: EXPECTED_VERSION }, groups: [], trash: [],
+    notes: [{ id, title: '原始标题' }]
+  } });
+  try {
+    expect(await ctx.win.evaluate(id => window.api.pinToDesktop(id), id)).toBe(true);
+    const note = ctx.electronApp.windows().find(page => page.url().endsWith('/note.html?id=' + id));
+    const isOnTop = () => ctx.electronApp.evaluate(({ BrowserWindow }, id) => (
+      BrowserWindow.getAllWindows().find(w => w.webContents.getURL().endsWith('/note.html?id=' + id)).isAlwaysOnTop()
+    ), id);
+    expect(await isOnTop()).toBe(true);
+    await ctx.electronApp.evaluate(({ BrowserWindow }, id) => {
+      BrowserWindow.getAllWindows().find(w => w.webContents.getURL().endsWith('/note.html?id=' + id)).setAlwaysOnTop(false);
+    }, id);
+    await expect.poll(isOnTop).toBe(true);
+
+    await note.locator('#dnTitle').fill('系统关闭前的最后编辑');
+    await note.evaluate(() => { clearTimeout(saveTimer); saveTimer = null; });
+    await ctx.electronApp.evaluate(({ ipcMain }) => {
+      const update = ipcMain._invokeHandlers.get('note:update');
+      ipcMain.removeHandler('note:update');
+      ipcMain.handle('note:update', (event, note, opts) => {
+        if (note.id !== 'native-close') return update(event, note, opts);
+        ipcMain.removeHandler('note:update');
+        ipcMain.handle('note:update', update);
+        globalThis.__finishOldNoteUpdate = null;
+        return new Promise(resolve => { globalThis.__finishOldNoteUpdate = resolve; });
+      });
+    });
+    expect(await ctx.win.evaluate(id => window.api.unpinFromDesktop(id), id)).toBe(false);
+    expect(note.isClosed()).toBe(false);
+    expect(await note.locator('#dnTitle').inputValue()).toBe('系统关闭前的最后编辑');
+    expect((await ux01ReadData(ctx.userDataDir)).notes[0].title).toBe('原始标题');
+
+    await ctx.electronApp.evaluate(({ BrowserWindow, ipcMain }, id) => {
+      const update = ipcMain._invokeHandlers.get('note:update');
+      ipcMain.removeHandler('note:update');
+      ipcMain.handle('note:update', async (event, note, opts) => {
+        if (note.id !== id) return update(event, note, opts);
+        ipcMain.removeHandler('note:update');
+        ipcMain.handle('note:update', update);
+        const saved = await update(event, note, opts);
+        return new Promise(resolve => { globalThis.__finishCurrentNoteUpdate = () => resolve(saved); });
+      });
+      const win = BrowserWindow.getAllWindows().find(w => w.webContents.getURL().endsWith('/note.html?id=' + id));
+      win.close();
+      win.close();
+    }, id);
+    await expect.poll(() => ctx.electronApp.evaluate(() => Boolean(globalThis.__finishCurrentNoteUpdate))).toBe(true);
+    await ctx.electronApp.evaluate(() => globalThis.__finishOldNoteUpdate(true));
+    await note.locator('#dnTitle').fill('等待关闭期间的新编辑');
+    await note.evaluate(() => { clearTimeout(saveTimer); saveTimer = null; });
+    const closed = note.waitForEvent('close');
+    await ctx.electronApp.evaluate(() => globalThis.__finishCurrentNoteUpdate());
+    await closed;
+    const disk = await ux01ReadData(ctx.userDataDir);
+    expect(disk.notes[0].title).toBe('等待关闭期间的新编辑');
+  } finally { await closeApp(ctx); }
+});
+
+test('旧备份恢复尚在重开窗口时，新的恢复独占窗口且保留之后的草稿', async () => {
+  const data = notes => ({ settings: { lastSeenVersion: EXPECTED_VERSION }, notes, groups: [], trash: [] });
+  const ctx = await openApp({ seed: data([{ id: 'before', title: '恢复前' }]) });
+  try {
+    await ctx.electronApp.evaluate(({ BrowserWindow }) => {
+      const loadFile = BrowserWindow.prototype.loadFile;
+      BrowserWindow.prototype.loadFile = function (file, options) {
+        const loaded = loadFile.call(this, file, options);
+        if (options?.query?.id !== 'shared' || globalThis.__resumeOldRestore) return loaded;
+        return loaded.then(() => new Promise(resolve => { globalThis.__resumeOldRestore = resolve; }));
+      };
+    });
+
+    const first = data([
+      { id: 'shared', title: '较早的恢复', desktopPin: true },
+      { id: 'first-only', title: '只在旧备份中', desktopPin: true }
+    ]);
+    const latest = data([{ id: 'shared', title: '较新的恢复', desktopPin: true }]);
+    await ctx.win.evaluate(data => {
+      window.oldRestore = window.api.saveData(data, { replace: true, force: true });
+    }, first);
+    await expect.poll(() => ctx.electronApp.evaluate(() => Boolean(globalThis.__resumeOldRestore))).toBe(true);
+    expect(await ctx.win.evaluate(data => window.api.saveData(data, { replace: true, force: true }), latest)).toBe(true);
+
+    const draft = data([{ id: 'shared', title: '恢复后还在编辑' }]);
+    expect(await ctx.win.evaluate(data => window.api.captureDraft(data), draft)).toBeTruthy();
+    await ctx.electronApp.evaluate(() => globalThis.__resumeOldRestore());
+    expect(await ctx.win.evaluate(() => window.oldRestore)).toBe(true);
+    const notePages = ctx.electronApp.windows().filter(page => page.url().includes('/note.html'));
+    expect(notePages.map(page => new URL(page.url()).searchParams.get('id'))).toEqual(['shared']);
+    await expect(notePages[0].locator('#dnTitle')).toHaveValue('较新的恢复');
+    expect((await ux01ReadData(ctx.userDataDir)).notes.map(note => note.title)).toEqual(['较新的恢复']);
+    const recovery = JSON.parse(await fs.readFile(path.join(ctx.userDataDir, 'notes-recovery.json'), 'utf8'));
+    expect(recovery.main.data.notes[0].title).toBe('恢复后还在编辑');
+  } finally { await closeApp(ctx); }
+});
+
+test('分组右键菜单色板紧凑并在窗口底部向上展开', async ({}, testInfo) => {
+  const seed = searchViewSeed();
+  seed.settings.appearanceMode = 'light';
+  seed.groups = Array.from({ length: 16 }, (_, i) => ({ id: 'g' + i, name: '分组 ' + (i + 1), color: '#6c5ce7' }));
+  const ctx = await openApp({ seed });
+  try {
+    await ctx.win.setViewportSize({ width: 1000, height: 800 });
+    const chips = ctx.win.locator('#groupChips .chip');
+    const menu = ctx.win.locator('.group-edit-pop');
+    await chips.first().click({ button: 'right' });
+    await expect(menu.getByRole('button', { name: '重命名分组' })).toBeVisible();
+    const colors = menu.locator('.group-edit-color');
+    await expect(colors).toHaveCount(10);
+    await expect(colors.first()).toHaveAttribute('aria-pressed', 'true');
+    const rows = await colors.evaluateAll(buttons => buttons.map(button => button.getBoundingClientRect().top));
+    expect(rows.slice(0, 5).every(top => top === rows[0])).toBe(true);
+    expect(rows.slice(5).every(top => top === rows[5])).toBe(true);
+    expect(rows[5]).toBeGreaterThan(rows[0]);
+    const firstBox = await chips.first().boundingBox();
+    const lightBox = await menu.boundingBox();
+    expect(lightBox.width).toBeLessThanOrEqual(240);
+    expect(lightBox.x).toBeCloseTo(firstBox.x, 0);
+    expect(lightBox.y).toBeGreaterThanOrEqual(firstBox.y + firstBox.height);
+    await menu.screenshot({ path: testInfo.outputPath('group-menu-light.png'), animations: 'disabled' });
+    await ctx.win.keyboard.press('Escape');
+    await expect(menu).toHaveCount(0);
+    await expect(chips.first()).toBeFocused();
+
+    await ctx.win.setViewportSize({ width: 700, height: 560 });
+    await ctx.win.evaluate(() => {
+      state.settings.appearanceMode = 'dark';
+      state.settings.menuAcrylic = true;
+      applyTheme();
+    });
+    await ctx.win.locator('#btnWorkspaceNav').click();
+    await chips.last().scrollIntoViewIfNeeded();
+    await chips.last().click({ button: 'right' });
+    const lastBox = await chips.last().boundingBox();
+    const darkBox = await menu.boundingBox();
+    expect(darkBox.y).toBeGreaterThanOrEqual(8);
+    expect(darkBox.y + darkBox.height).toBeLessThanOrEqual(lastBox.y);
+    await expect(menu.locator('.cm-danger use')).toHaveAttribute('href', '#ui-trash');
+    await menu.screenshot({ path: testInfo.outputPath('group-menu-dark.png'), animations: 'disabled' });
+    await colors.last().click();
+    await expect(menu).toHaveCount(0);
+    await chips.last().click({ button: 'right' });
+    await expect(colors.last()).toHaveAttribute('aria-pressed', 'true');
+    await menu.locator('.cm-row').nth(1).click();
+    await chips.last().click({ button: 'right' });
+    await expect(menu.locator('.cm-row').nth(1)).toContainText('展开分组');
+  } finally { await closeApp(ctx); }
+});
+
+test('异步存档等待落盘并按顺序合并多窗编辑，失败后可以重试', async () => {
+  const ctx = await openApp({ seed: {
+    settings: { lastSeenVersion: EXPECTED_VERSION }, groups: [], trash: [],
+    notes: [{ id: 'async-a', title: '初始 A' }, { id: 'async-b', title: '初始 B' }]
+  } });
+  try {
+    for (const id of ['async-a', 'async-b']) {
+      expect(await ctx.win.evaluate(id => window.api.pinToDesktop(id), id)).toBe(true);
+    }
+    const a = ctx.electronApp.windows().find(page => page.url().endsWith('id=async-a'));
+    const b = ctx.electronApp.windows().find(page => page.url().endsWith('id=async-b'));
+    const blockRename = (fail) => ctx.electronApp.evaluate(({ app }, fail) => {
+      const require = process.getBuiltinModule('module').createRequire(app.getAppPath() + '/package.json');
+      const fs = require('node:fs/promises');
+      const rename = fs.rename;
+      const file = require('node:path').join(app.getPath('userData'), 'notes-data.json');
+      globalThis.__resumeSave = null;
+      fs.rename = (tmp, dest) => {
+        if (dest !== file) return rename(tmp, dest);
+        fs.rename = rename;
+        return new Promise((resolve, reject) => {
+          globalThis.__resumeSave = () => fail
+            ? reject(Object.assign(new Error('injected rename failure'), { code: 'EBUSY' }))
+            : rename(tmp, dest).then(resolve, reject);
+        });
+      };
+    }, fail);
+    const waitForRename = () => expect.poll(() => ctx.electronApp.evaluate(() => Boolean(globalThis.__resumeSave))).toBe(true);
+    const resumeRename = () => ctx.electronApp.evaluate(() => { globalThis.__resumeSave(); });
+    const startSave = (page, title) => page.evaluate(title => {
+      note.title = title;
+      const draftToken = window.api.captureNoteDraft(note);
+      window.testSaved = null;
+      window.testSave = window.api.noteUpdate(note, { draftToken }).then(ok => { window.testSaved = ok; return ok; });
+    }, title);
+    await blockRename(false);
+    await startSave(a, '窗口 A');
+    await waitForRename();
+    await startSave(b, '窗口 B');
+    expect(await a.evaluate(() => window.testSaved)).toBeNull();
+    expect(await b.evaluate(() => window.testSaved)).toBeNull();
+    expect((await ux01ReadData(ctx.userDataDir)).notes.map(note => note.title)).toEqual(['初始 A', '初始 B']);
+    await resumeRename();
+    expect(await a.evaluate(() => window.testSave)).toBe(true);
+    expect(await b.evaluate(() => window.testSave)).toBe(true);
+
+    await blockRename(true);
+    await startSave(a, '重试后的 A');
+    await waitForRename();
+    await resumeRename();
+    expect(await a.evaluate(() => window.testSave)).toBe(false);
+    expect((await ux01ReadData(ctx.userDataDir)).notes.map(note => note.title)).toEqual(['窗口 A', '窗口 B']);
+    const recovery = JSON.parse(await fs.readFile(path.join(ctx.userDataDir, 'notes-recovery.json'), 'utf8'));
+    expect(recovery.notes['async-a'].note.title).toBe('重试后的 A');
+    expect((await fs.readdir(ctx.userDataDir)).filter(name => name.endsWith('.tmp'))).toEqual([]);
+    await startSave(a, '重试后的 A');
+    expect(await a.evaluate(() => window.testSave)).toBe(true);
+    expect((await ux01ReadData(ctx.userDataDir)).notes.map(note => note.title)).toEqual(['重试后的 A', '窗口 B']);
+  } finally { await closeApp(ctx); }
+});
+
+test('文档表格入口可以插入表格并保存边框设置', async () => {
+  const seed = searchViewSeed();
+  seed.notes = [{ ...seed.notes[0], type: 'note', items: [], content: '文档表格' }];
+  const ctx = await openApp({ seed });
+  try {
+    const win = ctx.win;
+    await stableClick(win.locator('#viewDoc'));
+    await stableClick(win.locator('.doc-pick-item').first());
+    await win.locator('#docContent').click();
+    await stableClick(win.locator('#btnDocTable'));
+    await win.locator('#tbRows').fill('2');
+    await win.locator('#tbCols').fill('4');
+    await stableClick(win.locator('#tbOk'));
+    const block = win.locator('#docContent .note-table-block');
+    await expect(block.locator('td')).toHaveCount(8);
+    await block.locator('td').first().click();
+    await stableClick(win.locator('.table-toolbar').getByRole('button', { name: '表格设置' }));
+    await win.locator('#tblBWidth').fill('5');
+    await stableClick(win.locator('#tblSetOk'));
+    await expect.poll(async () => {
+      const notes = (await ux01ReadData(ctx.userDataDir)).notes;
+      return notes[0]?.tables?.[0]?.borderWidth;
+    }).toBe(5);
+  } finally { await closeApp(ctx); }
+});
+
+test('纯文本粘贴替换中文选区，保留光标和原生撤销', async () => {
+  const id = 'text-edit';
+  const ctx = await openApp({ seed: {
+    settings: { lastSeenVersion: EXPECTED_VERSION }, groups: [], trash: [],
+    notes: [{ id, title: '选区测试', type: 'note', content: '甲乙丙' }]
+  } });
+  try {
+    await ctx.electronApp.evaluate(({ clipboard }) => { clipboard.readBuffer = () => Buffer.alloc(0); });
+    async function expectPasteUndo(editor) {
+      await expect(editor).toHaveText('甲乙丙');
+      await editor.evaluate(el => {
+        el.focus();
+        const textNode = document.createTreeWalker(el, NodeFilter.SHOW_TEXT).nextNode();
+        getSelection().setBaseAndExtent(textNode, 1, textNode, 2);
+        const data = new DataTransfer();
+        data.setData('text/plain', '替换');
+        data.setData('text/html', '<b>不应使用的格式</b>');
+        el.dispatchEvent(new ClipboardEvent('paste', { clipboardData: data, bubbles: true, cancelable: true }));
+      });
+      await expect(editor).toHaveText('甲替换丙');
+      expect(await editor.evaluate(el => {
+        const selection = getSelection();
+        const prefix = selection.getRangeAt(0).cloneRange();
+        prefix.setStart(el, 0);
+        return { collapsed: selection.isCollapsed, before: prefix.toString() };
+      })).toEqual({ collapsed: true, before: '甲替换' });
+      await editor.press('Control+z');
+      await expect(editor).toHaveText('甲乙丙');
+    }
+
+    const board = ctx.win.locator('#board .note-content').first();
+    await expectPasteUndo(board);
+    await board.click({ button: 'right' });
+    await expect(ctx.win.locator('.ctx-menu')).toBeVisible();
+    await ctx.win.locator('.ctx-menu .cm-row', { hasText: '全选' }).click();
+    expect(await board.evaluate(() => getSelection().toString())).toBe('甲乙丙');
+
+    await stableClick(ctx.win.locator('#viewDoc'));
+    await stableClick(ctx.win.locator('.doc-pick-item').first());
+    const doc = ctx.win.locator('#docContent');
+    await expectPasteUndo(doc);
+    expect(await ctx.win.evaluate(() => saveNow())).toBe(true);
+    expect(await ctx.win.evaluate(id => window.api.pinToDesktop(id), id)).toBe(true);
+    const detached = ctx.electronApp.windows().find(page => page.url().endsWith('id=' + id));
+    const independent = detached.locator('#dnText');
+    await expectPasteUndo(independent);
+
+    await independent.evaluate(el => {
+      el.focus();
+      getSelection().selectAllChildren(el);
+      getSelection().collapseToEnd();
+    });
+    const cdp = await detached.context().newCDPSession(detached);
+    try {
+      await cdp.send('Input.imeSetComposition', { text: 'zhong', selectionStart: 5, selectionEnd: 5 });
+      await cdp.send('Input.insertText', { text: '中' });
+    } finally { await cdp.detach(); }
+    await expect(independent).toHaveText('甲乙丙中');
+    await independent.press('Control+z');
+    await expect(independent).toHaveText('甲乙丙');
+  } finally { await closeApp(ctx); }
+});
+
+test('多行中文选区加粗、高亮和着色可以逐项撤销', async () => {
+  const id = 'text-format';
+  const original = '甲乙行\n丙丁行';
+  const ctx = await openApp({ seed: {
+    settings: { lastSeenVersion: EXPECTED_VERSION }, groups: [], trash: [],
+    notes: [{ id, title: '多行格式', type: 'note', content: original }]
+  } });
+  try {
+    async function selectText(editor) {
+      await editor.evaluate(el => { el.focus(); getSelection().selectAllChildren(el); });
+    }
+
+    async function verifyFormats(editor, detached) {
+      const allText = () => editor.innerText();
+      expect(await allText()).toBe(original);
+      await selectText(editor);
+      const composing = await editor.evaluate(el => el.dispatchEvent(new KeyboardEvent('keydown', {
+        key: 'b', ctrlKey: true, isComposing: true, bubbles: true, cancelable: true
+      })));
+      expect(composing).toBe(true);
+      await expect(editor.locator('b,strong')).toHaveCount(0);
+
+      await editor.press('Control+b');
+      await expect(editor.locator('b,strong').first()).toBeVisible();
+      expect(await allText()).toBe(original);
+      await editor.press('Control+z');
+      await expect(editor.locator('b,strong')).toHaveCount(0);
+
+      await selectText(editor);
+      await editor.press('Control+h');
+      const highlight = editor.locator('mark.hl, span[style*="background"], font[style*="background"]');
+      await expect(highlight.first()).toBeVisible();
+      expect(await allText()).toBe(original);
+      await editor.press('Control+z');
+      await expect(highlight).toHaveCount(0);
+
+      await selectText(editor);
+      await editor.evaluate((el, detached) => {
+        const range = getSelection().getRangeAt(0).cloneRange();
+        if (detached) applyInlineColor(range, '#c0392b');
+        else applyInlineColor(state.notes.find(n => n.id === 'text-format'), range, '#c0392b');
+      }, detached);
+      const color = editor.locator('font[color], span[style*="color"]');
+      await expect(color.first()).toBeVisible();
+      expect(await editor.evaluate(() => saveNow())).toBe(true);
+      expect((await ux01ReadData(ctx.userDataDir)).notes[0].content).toContain('[[c:');
+      expect(await editor.evaluate(el => getSelection().toString().replace(/\s/g, ''))).toBe(original.replace(/\s/g, ''));
+      await editor.press('Control+z');
+      await expect(color).toHaveCount(0);
+      expect(await allText()).toBe(original);
+
+      await selectText(editor);
+      await editor.press('Control+h');
+      await expect(highlight.first()).toBeVisible();
+      await selectText(editor);
+      await editor.press('Control+h');
+      await expect(highlight).toHaveCount(0);
+      expect(await allText()).toBe(original);
+      await editor.press('Control+z');
+      await expect(highlight.first()).toBeVisible();
+      await editor.press('Control+y');
+      await expect(highlight).toHaveCount(0);
+      expect(await allText()).toBe(original);
+    }
+
+    await verifyFormats(ctx.win.locator('#board .note-content').first(), false);
+    expect(await ctx.win.evaluate(() => saveNow())).toBe(true);
+    expect(await ctx.win.evaluate(id => window.api.pinToDesktop(id), id)).toBe(true);
+    const detached = ctx.electronApp.windows().find(page => page.url().endsWith('id=' + id));
+    await verifyFormats(detached.locator('#dnText'), true);
+    expect(await detached.evaluate(() => saveNow())).toBe(true);
+    expect((await ux01ReadData(ctx.userDataDir)).notes[0].content).toBe(original);
+
+    const stored = detached.locator('#dnText');
+    await stored.evaluate(el => { el.innerHTML = '<mark class="hl"><b>甲乙行</b></mark><br><mark class="hl">丙丁行</mark>'; });
+    await selectText(stored);
+    await stored.press('Control+h');
+    await expect(stored.locator('mark.hl')).toHaveCount(0);
+    await expect(stored.locator('b,strong').first()).toHaveText('甲乙行');
+    expect(await stored.innerText()).toBe(original);
+    await stored.press('Control+z');
+    await expect(stored.locator('mark.hl')).toHaveCount(2);
+
+    await stored.evaluate(el => {
+      el.innerHTML = '<div style="text-align: center"><mark class="hl">保留</mark>、<mark class="hl">第一段</mark></div>' +
+        '<div style="text-align: right"><mark class="hl"><b>第二段</b></mark>尾字</div>';
+      el.focus();
+      const marks = el.querySelectorAll('mark');
+      getSelection().setBaseAndExtent(marks[1].firstChild, 0, marks[2].firstChild.firstChild, 3);
+    });
+    await stored.press('Control+h');
+    await expect(stored.locator('mark.hl')).toHaveText(['保留']);
+    await expect(stored.locator(':scope > div[style*="center"]')).toHaveText('保留、第一段');
+    await expect(stored.locator(':scope > div[style*="right"]')).toHaveText('第二段尾字');
+    await expect(stored.locator('b,strong')).toHaveText('第二段');
+  } finally { await closeApp(ctx); }
+});
+
+test('右键剪切指向原选区，表格内换行可原生撤销', async () => {
+  const id = 'cut-break';
+  const ctx = await openApp({ seed: {
+    settings: { lastSeenVersion: EXPECTED_VERSION }, groups: [], trash: [],
+    notes: [{ id, title: '标题文字', type: 'note', content: '甲乙丙\n[[table:t]]',
+      tables: [{ id: 't', rows: 1, cols: 1, cells: [['甲乙']], merges: [], diagonals: [] }] }]
+  } });
+  try {
+    const win = ctx.win;
+    await win.evaluate(() => {
+      const execute = document.execCommand.bind(document);
+      window.cutTargets = [];
+      // Exercise the native deletion and undo without touching the user's clipboard.
+      document.execCommand = (command, ...args) => {
+        if (command !== 'cut') return execute(command, ...args);
+        window.cutTargets.push(document.activeElement.className);
+        return execute('delete');
+      };
+    });
+    const title = win.locator('#board .note-title');
+    const body = win.locator('#board .note-content');
+    const cut = () => win.locator('.ctx-menu .cm-row', { hasText: '剪切' }).click();
+    await title.evaluate(el => { el.focus(); el.setSelectionRange(0, 2); });
+    await title.dispatchEvent('contextmenu', { bubbles: true, cancelable: true });
+    await cut();
+    await expect(title).toHaveValue('文字');
+    await title.press('Control+z');
+    await expect(title).toHaveValue('标题文字');
+
+    await body.evaluate(el => {
+      el.focus();
+      const text = document.createTreeWalker(el, NodeFilter.SHOW_TEXT).nextNode();
+      getSelection().setBaseAndExtent(text, 1, text, 2);
+    });
+    await body.dispatchEvent('contextmenu', { bubbles: true, cancelable: true });
+    await cut();
+    await expect(body).toContainText('甲丙');
+    await body.press('Control+z');
+    await expect(body).toContainText('甲乙丙');
+    expect(await win.evaluate(() => window.cutTargets)).toEqual(['note-title', 'note-content']);
+
+    async function verifyLineBreak(page, cell) {
+      await cell.dblclick();
+      await expect(cell).toHaveClass(/cell-editing/);
+      await expect(cell).toBeFocused();
+      await cell.evaluate(el => getSelection().collapse(el.firstChild, 1));
+      await page.keyboard.press('Enter');
+      expect(await cell.evaluate(el => readRichContent(el))).toBe('甲\n乙');
+      await page.keyboard.press('Control+z');
+      expect(await cell.evaluate(el => readRichContent(el))).toBe('甲乙');
+      await expect(cell).toHaveText('甲乙');
+    }
+
+    await verifyLineBreak(win, win.locator('#board .note-table-block td').first());
+    await win.keyboard.press('Tab');
+    expect(await win.evaluate(() => saveNow())).toBe(true);
+    expect(await win.evaluate(id => window.api.pinToDesktop(id), id)).toBe(true);
+    const detached = ctx.electronApp.windows().find(page => page.url().endsWith('id=' + id));
+    await verifyLineBreak(detached, detached.locator('#dnBody .note-table-block td').first());
   } finally { await closeApp(ctx); }
 });

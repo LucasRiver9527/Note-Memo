@@ -1,0 +1,27 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta http-equiv="Content-Security-Policy" content="default-src 'self'; style-src 'self'; img-src 'self'; object-src 'none'; base-uri 'none'">
+  <title>Note-Memo</title>
+  <link rel="stylesheet" href="quick-capture.css">
+</head>
+<body>
+  <form id="capture">
+    <h1 id="heading">快速记录</h1>
+    <input id="title" type="text" maxlength="160" aria-label="标题" placeholder="标题（可选）" autocomplete="off">
+    <textarea id="content" maxlength="50000" aria-label="正文" placeholder="写下刚想到的事…" autofocus></textarea>
+    <div class="actions">
+      <select id="group" aria-label="分组"><option value="">未分组</option></select>
+      <button id="pin" type="button" aria-pressed="false">
+        <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="m15 4 5 5-3 1-3 4v3l-3-3-5-5h3l4-3 1-3m-3 11-6 6"/></svg>
+        <span id="pinLabel">钉到桌面</span>
+      </button>
+      <button id="save" type="submit" aria-keyshortcuts="Control+Enter">保存</button>
+    </div>
+    <div class="foot"><span id="status" role="status"></span><kbd>Ctrl + Enter</kbd></div>
+  </form>
+  <script src="quick-capture-ui.js"></script>
+</body>
+</html>

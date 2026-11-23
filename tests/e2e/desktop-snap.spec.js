@@ -23,10 +23,20 @@ test('V128-05C desktop snap: production hooks, exact physical preview, cancellat
         return original.call(this,id,fn);
       };
     });
+    await app.evaluate(({app})=>{
+      const require=process.getBuiltinModule('module').createRequire(app.getAppPath()+'/package.json');
+      const { desktopWindowAppearance } = require('./desktop-window-appearance.js');
+      global.__snapSetMaterial = desktopWindowAppearance.setMaterial;
+      desktopWindowAppearance.setMaterial = () => false;
+    });
     expect(await page.evaluate(()=>window.api.pinToDesktop('snap-test'))).toBe(true);
+    const notePage=app.windows().find(p=>p.url().includes('note.html'));
+    await expect(notePage.locator('#note')).toHaveCSS('background-color', 'rgb(147, 241, 206)');
+    expect((await page.evaluate(()=>window.api.loadData())).data.settings.desktopMica).toBe(true);
     await app.evaluate(({BrowserWindow,app})=>{
       const require=process.getBuiltinModule('module').createRequire(app.getAppPath()+'/package.json');
       const path=require('path'),root=app.getAppPath();
+      require('./desktop-window-appearance.js').desktopWindowAppearance.setMaterial = global.__snapSetMaterial;
       global.__snapNative=require(path.join(root,'desktop-snap-native.js'))();
       global.__snapNote=BrowserWindow.getAllWindows().find(w=>w.webContents.getURL().includes('note.html'));
     });
@@ -72,10 +82,10 @@ test('V128-05C desktop snap: production hooks, exact physical preview, cancellat
         }finally{del(region);}
       };
     });
-    const notePage=app.windows().find(p=>p.url().includes('note.html'));
     const originalSize=await app.evaluate(()=>global.__readCorner().bounds);
     for(const radius of [0,28,12]){
       await page.evaluate(radius=>{window.state.settings.noteRadius=radius;window.applyTheme();},radius);
+      await expect(notePage.locator('body')).toHaveClass(/\bglass\b/);
       await expect.poll(async()=>await notePage.evaluate(()=>getComputedStyle(document.getElementById('note')).borderTopLeftRadius)).toBe('0px');
       const region=await app.evaluate(()=>global.__readCorner());
       expect(region.kind).toBe(0);expect(region.cornerPreference).toBe(radius===0?1:2);expect(region.material).toBe(3);

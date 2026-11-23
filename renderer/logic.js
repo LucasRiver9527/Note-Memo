@@ -279,27 +279,38 @@
     return out.join('\n\n');
   }
 
-  // 收集被引用（仍在使用）的媒体文件名，按目录归类。含回收站，避免误删可恢复数据。
+  // 访问便签、回收站和设置中的本地媒体引用。返回字符串时更新引用。
+  function visitMediaReferences(data, visitor) {
+    const visit = (object, key) => {
+      if (!object || typeof object[key] !== 'string') return;
+      const next = visitor(object[key]);
+      if (typeof next === 'string') object[key] = next;
+    };
+    const visitNote = (note) => {
+      if (!Array.isArray(note?.images)) return;
+      note.images.forEach((image) => visit(image, 'src'));
+    };
+    (data.notes || []).forEach(visitNote);
+    (data.trash || []).forEach((entry) => visitNote(entry?.note));
+    const settings = data.settings || {};
+    visit(settings, 'backgroundImage');
+    if (Array.isArray(settings.customFonts)) settings.customFonts.forEach((font) => visit(font, 'url'));
+    visit(settings, 'reminderSoundPath');
+  }
+
+  // 收集被引用（仍在使用）的媒体文件名，含回收站。
   function referencedMedia(data) {
     const byDir = { images: new Set(), backgrounds: new Set(), fonts: new Set(), sounds: new Set() };
-    const add = (url) => {
-      if (typeof url !== 'string') return;
-      const m = /^note-(img|bg|font|sound):\/\/local\/(.+)$/.exec(url);
+    visitMediaReferences(data, (url) => {
+      const m = /^note-(img|bg|font|sound):\/\/local\/(.+)$/i.exec(url);
       if (!m) return;
-      const kind = { img: 'images', bg: 'backgrounds', font: 'fonts', sound: 'sounds' }[m[1]];
-      if (byDir[kind]) byDir[kind].add(decodeURIComponent(m[2]));
-    };
-    const addNote = (n) => { if (n) (n.images || []).forEach((im) => add(im.src)); };
-    (data.notes || []).forEach(addNote);
-    (data.trash || []).forEach((t) => addNote(t && t.note));
-    const s = data.settings || {};
-    add(s.backgroundImage);
-    (s.customFonts || []).forEach((f) => add(f.url));
-    add(s.reminderSoundPath);
+      const kind = { img: 'images', bg: 'backgrounds', font: 'fonts', sound: 'sounds' }[m[1].toLowerCase()];
+      try { byDir[kind].add(decodeURIComponent(m[2])); } catch (err) { /* 无法解码的引用没有对应本地文件 */ }
+    });
     return byDir;
   }
 
-  // 把 \0 分隔的字面文件路径去重收集进 into 数组
+  // 解析 \0 分隔的字面文件路径去重收集进 into 数组
   function parseNullSeparated(str, into) {
     (str || '').split('\0').forEach((p) => { if (p && p.length > 1 && !into.includes(p)) into.push(p); });
     return into;
@@ -729,5 +740,5 @@
     return { parts, truncatedBefore: before, truncatedAfter: after };
   }
 
-  return { mergeDetachedEdits, applyGadgetAction, hexToRgba, luminance, contrastRatio, isDarkColor, autoTextColor, noteShadowCss, escapeHtml, refIdsOf, cleanupRefs, sortNotes, tableToMarkdown, noteToMarkdown, referencedMedia, parseNullSeparated, hdropString, setRenderLocale, formatInlineText, inlineImgHtml, fileLinkHtml, tableBlockHtml, renderRichContent, sanitizeCss, clampInt, clampNum, isCssNumber, findNoteSearchMatches, buildSearchSnippet };
+  return { mergeDetachedEdits, applyGadgetAction, hexToRgba, luminance, contrastRatio, isDarkColor, autoTextColor, noteShadowCss, escapeHtml, refIdsOf, cleanupRefs, sortNotes, tableToMarkdown, noteToMarkdown, visitMediaReferences, referencedMedia, parseNullSeparated, hdropString, setRenderLocale, formatInlineText, inlineImgHtml, fileLinkHtml, tableBlockHtml, renderRichContent, sanitizeCss, clampInt, clampNum, isCssNumber, findNoteSearchMatches, buildSearchSnippet };
 });

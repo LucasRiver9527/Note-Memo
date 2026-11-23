@@ -13,6 +13,80 @@
   'use strict';
 
 /* ============ 批量选中 ============ */
+// 进入批量 UI（不切换开关）：显示批量工具条 + 进入 multi-select 态，供框选等批量入口复用
+function ensureMultiSelectActive() {
+  if (!multiSelect) {
+    multiSelect = true;
+    document.body.classList.add('multi-select');
+    const toggle = $('#btnBatchToggle');
+    if (toggle) toggle.classList.add('active');
+    $('#batchBar').classList.remove('hidden');
+  }
+  syncSelectedVisual();
+}
+
+// 框选：空白背景左键拖拽画出一个选择框，框内（与框相交）的可见便签被选中并进入批量 UI。
+// 纯逻辑（矩形相交判定）复用 BoardLayout.rectsIntersect。
+function startBoxSelect(e) {
+  const board = $('#board');
+  const z = boardZoom();
+  const rect = board.getBoundingClientRect();
+  const startBX = (e.clientX - rect.left) / z;
+  const startBY = (e.clientY - rect.top) / z;
+  let active = false;
+  let marquee = null;
+  let cur = { x: startBX, y: startBY, w: 0, h: 0 };
+
+  const onMove = (ev) => {
+    const bx = (ev.clientX - rect.left) / z;
+    const by = (ev.clientY - rect.top) / z;
+    if (!active) {
+      const dist = Math.abs(ev.clientX - e.clientX) + Math.abs(ev.clientY - e.clientY);
+      if (dist < 4) return;
+      active = true;
+      marquee = document.createElement('div');
+      marquee.id = 'marquee';
+      board.appendChild(marquee);
+    }
+    const x = Math.min(startBX, bx);
+    const y = Math.min(startBY, by);
+    const w = Math.abs(bx - startBX);
+    const h = Math.abs(by - startBY);
+    cur = { x, y, w, h };
+    marquee.style.left = x + 'px';
+    marquee.style.top = y + 'px';
+    marquee.style.width = w + 'px';
+    marquee.style.height = h + 'px';
+  };
+  const onUp = () => {
+    document.removeEventListener('pointermove', onMove);
+    document.removeEventListener('pointerup', onUp);
+    document.removeEventListener('pointercancel', onUp);
+    if (marquee) marquee.remove();
+    if (active) {
+      selectedNotes.clear();
+      visibleNotes().forEach((n) => {
+        const p = effPos(n);
+        const nr = { x: p.x, y: p.y, w: n.w || LAYOUT.defaultW, h: n.h || LAYOUT.defaultH };
+        if (BoardLayout.rectsIntersect(nr, cur)) selectedNotes.add(n.id);
+      });
+      if (selectedNotes.size) ensureMultiSelectActive();
+      else clearSelection();
+    } else {
+      // 空白处单击：取消全部选择（不新建，双击仍负责新建）
+      if (selectedNotes.size) clearSelection();
+    }
+  };
+  document.addEventListener('pointermove', onMove);
+  document.addEventListener('pointerup', onUp);
+  document.addEventListener('pointercancel', onUp);
+}
+
+function selectAllVisible() {
+  visibleNotes().forEach((n) => selectedNotes.add(n.id));
+  syncSelectedVisual();
+}
+
 function toggleMultiSelect() {
   multiSelect = !multiSelect;
   syncCanvasLinks();
@@ -144,5 +218,5 @@ function openGroupPopForBatch() {
   setTimeout(() => document.addEventListener('mousedown', closePopsOnce), 0);
 }
 
-  return { toggleMultiSelect, clearSelection, syncSelectedVisual, toggleSelectNote, updateBatchCount, batchDeleteSelected, batchMoveSelected, setBatchGroup, openGroupPopForBatch };
+  return { startBoxSelect, ensureMultiSelectActive, selectAllVisible, toggleMultiSelect, clearSelection, syncSelectedVisual, toggleSelectNote, updateBatchCount, batchDeleteSelected, batchMoveSelected, setBatchGroup, openGroupPopForBatch };
 }));

@@ -34,7 +34,7 @@ test('R-01B 脚本导出纯校验函数', () => {
   assert.ok(VERSION_RE instanceof RegExp);
 });
 
-test('R-01B 旧版选择：默认 1.2.5，接受 1.2.5/1.2.6/1.2.7/1.2.8/1.3.0/1.3.1，拒绝其它与预发布', () => {
+test('R-01B 旧版选择：默认 1.2.5，接受合法稳定版并拒绝非法或预发布', () => {
   assert.deepStrictEqual(resolveExpectedOldVersion(undefined), { ok: true, version: '1.2.5', source: 'default' });
   assert.deepStrictEqual(resolveExpectedOldVersion(''), { ok: true, version: '1.2.5', source: 'default' });
   assert.deepStrictEqual(resolveExpectedOldVersion('  '), { ok: true, version: '1.2.5', source: 'default' });
@@ -45,7 +45,9 @@ test('R-01B 旧版选择：默认 1.2.5，接受 1.2.5/1.2.6/1.2.7/1.2.8/1.3.0/1
   assert.deepStrictEqual(resolveExpectedOldVersion('1.3.0'), { ok: true, version: '1.3.0', source: 'env' });
   assert.deepStrictEqual(resolveExpectedOldVersion('1.3.1'), { ok: true, version: '1.3.1', source: 'env' });
   assert.deepStrictEqual(resolveExpectedNewVersion('1.3.2', '1.3.1', null), { ok: true, version: '1.3.2', source: 'env' });
-  for (const bad of ['1.3.2', '1.2.7-preview', '1.2.4', '1.2.6-preview', 'v1.2.6', 'abc', '1.2']) {
+  assert.deepStrictEqual(resolveExpectedOldVersion('1.3.2'), { ok: true, version: '1.3.2', source: 'env' });
+  assert.deepStrictEqual(resolveExpectedNewVersion('1.3.3', '1.3.2', null), { ok: true, version: '1.3.3', source: 'env' });
+  for (const bad of ['1.2.7-preview', '01.3.2', '1.9007199254740992.0', 'v1.2.6', 'abc', '1.2']) {
     const r = resolveExpectedOldVersion(bad);
     assert.strictEqual(r.ok, false, `应拒绝旧版值 ${bad}`);
   }

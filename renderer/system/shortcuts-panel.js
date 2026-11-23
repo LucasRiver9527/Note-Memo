@@ -18,6 +18,16 @@ function renderShortcutPanel() {
   const list = $('#shortcutList');
   if (!list) return;
   list.innerHTML = '';
+  const openCapture = $('#openQuickCapture');
+  if (openCapture) openCapture.onclick = () => window.api.openQuickCapture();
+  const mode = $('#globalCreateMode');
+  if (mode) {
+    mode.value = state.settings.globalCreateMode === 'workspace' ? 'workspace' : 'quick';
+    mode.onchange = () => {
+      state.settings.globalCreateMode = mode.value;
+      saveNow();
+    };
+  }
   const overrides = (state.settings.shortcuts && typeof state.settings.shortcuts === 'object') ? state.settings.shortcuts : {};
   Shortcuts.SHORTCUT_DEFS.forEach((def) => {
     const accel = Shortcuts.getShortcut({ shortcuts: overrides }, def.id);

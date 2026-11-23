@@ -402,10 +402,16 @@ function syncSettingsInputs() {
   $$('#noteToolbarVis input[data-tool]').forEach((cb) => { cb.checked = !hiddenTools.has(cb.dataset.tool); });
   const rs = $('#reminderSoundToggle'); if (rs) rs.checked = !!state.settings.reminderSound;
   const rv = $('#reminderVolume'); if (rv) rv.value = state.settings.reminderVolume != null ? state.settings.reminderVolume : 70;
-  const sn = $('#soundName'); if (sn) {
-    if (state.settings.reminderSoundName) {
-      sn.textContent = state.settings.reminderSoundName;
+  const customSound = !!state.settings.reminderSoundPath;
+  const clearSound = $('#btnClearSound');
+  if (clearSound) clearSound.disabled = !customSound;
+  const sn = $('#soundName');
+  if (sn) {
+    if (customSound) {
+      delete sn.dataset.i18n;
+      sn.textContent = state.settings.reminderSoundName || t('custom_sound');
     } else {
+      sn.dataset.i18n = 'default_sound';
       sn.textContent = t('default_sound');
     }
   }

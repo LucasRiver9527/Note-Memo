@@ -44,8 +44,10 @@ Object.assign(global, {
 });
 
 // 真实可见选择器与 noteText：来自生产 UMD 模块（依赖 global state/filter），不复制实现。
-const CanvasZoom = require('../renderer/board/canvas-zoom.js');
+const WorkspaceNotes = require('../renderer/board/workspace-notes.js');
+const GroupCollapse = require('../renderer/board/group-collapse.js');
 const NoteCard = require('../renderer/board/note-card.js');
+const CardSearch = require('../renderer/board/card-search.js');
 const UndoHistory = require('../renderer/core/undo-history.js');
 // The search selector now parses actual rendered content; use a real inert DOM and renderer.
 // Cache behavior is covered separately; this fixture only bypasses the render cache.
@@ -56,11 +58,11 @@ globalThis.document = testDom.window.document;
 globalThis.Node = testDom.window.Node;
 Object.assign(global, {
   noteText: NoteCard.noteText,
-  noteSearchContentMatches: NoteCard.noteSearchContentMatches,
+  noteSearchContentMatches: CardSearch.noteSearchContentMatches,
   renderRichCached: (n) => Logic.renderRichContent(n.content || '', n),
   $$: (selector, root = document) => Array.from(root.querySelectorAll(selector)),
-  visibleNotes: CanvasZoom.visibleNotes,
-  isGroupCollapsed: CanvasZoom.isGroupCollapsed,
+  visibleNotes: WorkspaceNotes.visibleNotes,
+  isGroupCollapsed: GroupCollapse.isGroupCollapsed,
   UndoHistory,
   // arrange.js 通过顶层全局调用（app.js 提供）；测试注入真实栈的薄封装
   beginUndo: () => UndoHistory.beginUndo(state),

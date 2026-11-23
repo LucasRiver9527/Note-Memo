@@ -6,6 +6,7 @@ const path = require('node:path');
 
 const {
   atomicWrite,
+  atomicWriteAsync,
   safeRead,
   isValidDataShape,
   parsesAsJson,
@@ -481,4 +482,20 @@ test('损坏后写入成功时 .bak 不会被损坏内容污染，仍可二次�
     assert.strictEqual(back.status, 'ok');
     assert.strictEqual(back.data.notes[0].id, 'n1');
   });
+});
+
+test('async atomic write preserves a good backup when the previous data is corrupt', async () => {
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'note-async-write-'));
+  try {
+    const file = path.join(dir, 'notes-data.json');
+    const previous = JSON.stringify(GOOD);
+    fs.writeFileSync(file, 'corrupt', 'utf-8');
+    fs.writeFileSync(file + '.bak', previous, 'utf-8');
+    assert.equal(await atomicWriteAsync(file, GOOD_V2), true);
+    assert.deepEqual(JSON.parse(fs.readFileSync(file, 'utf-8')), GOOD_V2);
+    assert.equal(fs.readFileSync(file + '.bak', 'utf-8'), previous);
+    assert.deepEqual(fs.readdirSync(dir).sort(), ['notes-data.json', 'notes-data.json.bak']);
+  } finally {
+    fs.rmSync(dir, { recursive: true, force: true });
+  }
 });

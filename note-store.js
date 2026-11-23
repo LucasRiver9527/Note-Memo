@@ -122,6 +122,21 @@ function createNoteStore(getUserDataPath) {
     return r.data;
   }
 
+  let pendingWrite = Promise.resolve();
+  function queueDataWrite(task) {
+    const result = pendingWrite.then(task);
+    pendingWrite = result.then(() => undefined, () => undefined);
+    return result;
+  }
+
+  async function waitForDataWrites() {
+    let tail;
+    do {
+      tail = pendingWrite;
+      await tail;
+    } while (tail !== pendingWrite);
+  }
+
   // 返回 true 表示已落盘。data 损坏锁定时拒绝写入（force 可越过锁，供「导入备份」自救）。
   function writeData(data, opts) {
     const force = !!(opts && opts.force);
@@ -129,7 +144,15 @@ function createNoteStore(getUserDataPath) {
       console.error('[data] 已锁定写入：数据文件损坏且无可用 .bak，拒绝覆盖以保护用户数据');
       return false;
     }
-    const ok = DataIO.atomicWrite(dataPath(), data);
+    return recordWrite(DataIO.atomicWrite(dataPath(), data));
+  }
+
+  async function writeDataAsync(data, opts) {
+    if (isDataLocked() && !opts?.force) return false;
+    return recordWrite(await DataIO.atomicWriteAsync(dataPath(), data));
+  }
+
+  function recordWrite(ok) {
     if (ok) {
       // 成功落盘说明磁盘上已是合法 JSON，解除锁定
       _dataStatus = 'ok';
@@ -138,7 +161,7 @@ function createNoteStore(getUserDataPath) {
     return ok;
   }
 
-  return { dataPath, dataHealth, isDataLocked, readData, writeData, captureRecovery, clearRecovery, writeRecovery, recoveryCandidate };
+  return { dataPath, dataHealth, isDataLocked, readData, writeData, writeDataAsync, queueDataWrite, waitForDataWrites, captureRecovery, clearRecovery, writeRecovery, recoveryCandidate };
 }
 
 module.exports = { createNoteStore };

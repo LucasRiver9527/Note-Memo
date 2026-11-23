@@ -34,13 +34,23 @@ function releaseTarget({ start, actual, pending, display, systemGesture, options
 function createDesktopSnap({ BrowserWindow, screen, platform = process.platform,
   loadNative = () => require('./desktop-snap-native.js')(), onError = console.warn }) {
   const attached = new Map();
-  let enabled = true, faulted = false, disposed = false, native = null;
+  let enabled = true, nativeUnavailable = false, disposed = false, native = null;
   let preview = null, ready = false, session = null, generation = 0;
   let appearance = { dark: false, radius: 12 };
   const hide = () => { if (preview && !preview.isDestroyed()) preview.hide(); };
   function cancel() { generation++; session = null; hide(); }
-  function fail(error) { cancel(); faulted = true; onError('[desktop-snap] Disabled; native dragging remains available:', error); }
-  function initNative() { if (!native) native = loadNative(); return native; }
+  function discardPreview() {
+    const stale = preview;
+    preview = null;
+    ready = false;
+    if (stale && !stale.isDestroyed()) stale.destroy();
+  }
+  function fail(error) {
+    generation++;
+    session = null;
+    discardPreview();
+    onError('[desktop-snap] Snap canceled; native dragging remains available:', error);
+  }
   function ensurePreview() {
     if (preview && !preview.isDestroyed()) return;
     const p = new BrowserWindow({ width: 300, height: 240, show: false, frame: false, transparent: true,
@@ -68,20 +78,31 @@ function createDesktopSnap({ BrowserWindow, screen, platform = process.platform,
     const pixels = native.targetPhysicalBounds(current.window, candidate, display, OPTIONS.inset, screen);
     native.placePreview(preview, pixels);
     const classes = [appearance.dark ? 'dark' : '', candidate.xEdge, candidate.yEdge].filter(Boolean).join(' ');
-    preview.webContents.executeJavaScript('document.getElementById("outline").className=' + JSON.stringify(classes)
+    const p = preview, ticket = generation;
+    p.webContents.executeJavaScript('document.getElementById("outline").className=' + JSON.stringify(classes)
       + ';document.documentElement.style.setProperty("--radius",' + JSON.stringify(appearance.radius + 'px') + ')')
-      .catch(error => { if (!disposed && preview && !preview.isDestroyed()) fail(error); });
-    preview.showInactive();
-    preview.moveTop();
-    current.advertised = { candidate, pixels };
+      .then(() => {
+        if (preview !== p || session !== current || current.pending !== candidate) return;
+        p.showInactive();
+        p.moveTop();
+        current.advertised = { candidate, pixels };
+      })
+      .catch(error => { if (!disposed && preview === p && generation === ticket) fail(error); });
   }
   function attach(window) {
     if (disposed || platform !== 'win32' || attached.has(window)) return;
     const begin = () => {
       cancel();
-      if (!enabled || faulted || !window.isVisible() || window.isMaximized()) return;
+      if (!enabled || nativeUnavailable || !window.isVisible() || window.isMaximized()) return;
+      if (!native) {
+        try { native = loadNative(); }
+        catch (error) {
+          nativeUnavailable = true;
+          onError('[desktop-snap] Native adapter unavailable:', error);
+          return;
+        }
+      }
       try {
-        initNative();
         session = { window, start: native.logicalBounds(window, screen), physicalStart: native.physicalBounds(window), moving: false, pending: null, advertised: null, systemGesture: false };
       } catch (error) { fail(error); }
     };
@@ -110,7 +131,7 @@ function createDesktopSnap({ BrowserWindow, screen, platform = process.platform,
       const ticket = ++generation;
       // Windows must finish Escape restoration / native Snap before committing.
       setImmediate(() => {
-        if (ticket !== generation || disposed || !enabled || faulted || window.isDestroyed() || !window.isVisible() || window.isMaximized()) return;
+        if (ticket !== generation || disposed || !enabled || nativeUnavailable || window.isDestroyed() || !window.isVisible() || window.isMaximized()) return;
         if (!ended.moving || !ended.advertised) return;
         try {
           const physical = native.physicalBounds(window), advertised = ended.advertised;
@@ -127,7 +148,7 @@ function createDesktopSnap({ BrowserWindow, screen, platform = process.platform,
     const invalidate = () => { if (session && session.window === window) cancel(); else generation++; };
     const closed = () => {
       invalidate(); attached.delete(window);
-      if (!attached.size && preview && !preview.isDestroyed()) preview.destroy();
+      if (!attached.size) discardPreview();
     };
     window.hookWindowMessage(0x0231, begin);
     window.hookWindowMessage(0x0232, end);
@@ -142,7 +163,7 @@ function createDesktopSnap({ BrowserWindow, screen, platform = process.platform,
   displayEvents.forEach(name => screen.on(name, cancel));
   return {
     attach,
-    setEnabled(value) { if (enabled !== value) { cancel(); if (value) faulted = false; } enabled = value; },
+    setEnabled(value) { if (enabled !== value) { cancel(); if (value) nativeUnavailable = false; } enabled = value; },
     setAppearance({ dark, radius }) {
       if (typeof dark === 'boolean') appearance.dark = dark;
       if (Number.isFinite(radius)) appearance.radius = Math.max(0, Math.min(28, radius));
@@ -152,7 +173,7 @@ function createDesktopSnap({ BrowserWindow, screen, platform = process.platform,
       disposed = true; cancel();
       attached.forEach(cleanup => cleanup()); attached.clear();
       displayEvents.forEach(name => screen.removeListener(name, cancel));
-      if (preview && !preview.isDestroyed()) preview.destroy();
+      discardPreview();
     }
   };
 }

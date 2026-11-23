@@ -2,10 +2,6 @@
 // Windows main-process adapter; only operates on BrowserWindows owned by this app.
 const koffi = require('koffi');
 const user32 = koffi.load('user32.dll');
-const dwmapi = koffi.load('dwmapi.dll');
-const setWindowRgn = user32.func('int __stdcall SetWindowRgn(void *window, void *region, bool redraw)');
-const setWindowAttribute = dwmapi.func('int32_t __stdcall DwmSetWindowAttribute(void *window, uint32_t attribute, void *value, uint32_t length)');
-const cornerSignatures = new WeakMap();
 const getWindowRect = user32.func('bool __stdcall GetWindowRect(void *window, void *rect)');
 const setWindowPos = user32.func('bool __stdcall SetWindowPos(void *window, void *after, int x, int y, int width, int height, uint32_t flags)');
 const hwnd = (window) => {
@@ -43,25 +39,4 @@ function placePreview(window, rect) {
   // Preview alone is resized; the user's note always uses SWP_NOSIZE.
   if(!setWindowPos(hwnd(window),null,rect.x,rect.y,rect.width,rect.height,0x0214))throw new Error('Preview SetWindowPos failed');
 }
-// A native DWM backdrop is not clipped reliably by CSS/GDI custom corners.
-// Let Windows clip the backdrop and full rectangular content together instead.
-function applyRoundedCorners(window, radius) {
-  const handle = hwnd(window), bounds = physicalBounds(window);
-  const preference = radius === 0 ? 1 : 2; // DWMWCP_DONOTROUND / DWMWCP_ROUND
-  const signature = [bounds.width, bounds.height, preference].join(':');
-  if (cornerSignatures.get(window) === signature) return;
-  cornerSignatures.set(window, signature);
-  try {
-    if (!setWindowRgn(handle, null, true)) throw new Error('Clear custom window region failed');
-    const value = Buffer.alloc(4);
-    value.writeUInt32LE(preference);
-    if (setWindowAttribute(handle, 33, value, 4) < 0) throw new Error('Native window corners unavailable');
-    // Hide the extra native frame line; the note keeps its own glass border.
-    value.writeUInt32LE(0xFFFFFFFE);
-    if (setWindowAttribute(handle, 34, value, 4) < 0) throw new Error('Native border color unavailable');
-  } catch (error) {
-    cornerSignatures.delete(window);
-    throw error;
-  }
-}
-module.exports = () => ({physicalBounds, moveToPhysical, logicalBounds, targetPhysicalBounds, placePreview, applyRoundedCorners});
+module.exports = () => ({physicalBounds, moveToPhysical, logicalBounds, targetPhysicalBounds, placePreview});

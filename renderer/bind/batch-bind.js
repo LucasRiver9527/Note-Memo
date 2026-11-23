@@ -136,12 +136,24 @@ function bindBatch() {
   };
   const narrowNav = window.matchMedia('(max-width: 820px)');
   const add = $('#btnAdd');
+  const navItems = nav.querySelector('.workspace-nav-items');
+  const fixedNav = nav.querySelector('.workspace-nav-fixed');
+  const updateNavScrolling = () => {
+    if (!navItems.clientHeight) return;
+    const style = getComputedStyle(navItems);
+    const spacing = parseFloat(style.paddingTop) + parseFloat(style.paddingBottom) + parseFloat(style.rowGap);
+    // Keep room for almost three group rows; a shorter sidebar scrolls as one region.
+    navItems.classList.toggle('workspace-nav-overflow', navItems.clientHeight - fixedNav.offsetHeight - spacing < 100);
+  };
+  const navResize = new ResizeObserver(updateNavScrolling);
+  navResize.observe(navItems);
+  navResize.observe(fixedNav);
   const placeAdd = () => {
     if (narrowNav.matches) {
       navToggle.parentElement.appendChild(add);
       return;
     }
-    nav.querySelector('.workspace-nav-items').prepend(add);
+    fixedNav.prepend(add);
     setNav(false);
   };
   narrowNav.addEventListener('change', placeAdd);
@@ -153,7 +165,8 @@ function bindBatch() {
   };
   document.addEventListener('pointerdown', (event) => {
     if ($('#settingsPanel').classList.contains('hidden') &&
-        !nav.contains(event.target) && !navToggle.contains(event.target)) setNav(false);
+        !nav.contains(event.target) && !navToggle.contains(event.target) &&
+        !event.target.closest('.group-edit-pop')) setNav(false);
   });
   document.addEventListener('keydown', (event) => {
     if (!event.defaultPrevented && event.key === 'Escape' && nav.classList.contains('workspace-nav-open') && navToggle.offsetWidth && $('#settingsPanel').classList.contains('hidden')) {

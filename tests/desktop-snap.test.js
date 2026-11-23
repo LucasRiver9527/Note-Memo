@@ -79,7 +79,7 @@ test('bounds equality compares size as well as location', () => {
 const { EventEmitter } = require('node:events');
 const { createDesktopSnap } = require('../desktop-snap.js');
 const tick = () => new Promise(resolve => setImmediate(resolve));
-function harness({ deferLoad = false, broken = false } = {}) {
+function harness({ deferLoad = false, loadNative } = {}) {
   const previews = [], moves = [], errors = [];
   const display = { id: 1, scaleFactor: 1.25, bounds: { x: 0, y: 0, width: 2048, height: 1152 }, workArea: { x: 0, y: 0, width: 2048, height: 1104 } };
   const screen = Object.assign(new EventEmitter(), { getAllDisplays: () => [display], getCursorScreenPoint: () => ({ x: 120, y: 200 }), getDisplayNearestPoint: () => display });
@@ -93,7 +93,7 @@ function harness({ deferLoad = false, broken = false } = {}) {
     isDestroyed() { return this.destroyed; } isVisible() { return this.visible; } isMaximized() { return this.maximized; }
     hookWindowMessage(id, fn) { this.hooks.set(id, fn); } unhookWindowMessage(id) { this.hooks.delete(id); }
     setIgnoreMouseEvents(v) { this.ignore = v; } setAlwaysOnTop() {} moveTop() {}
-    loadFile() { return deferLoad ? new Promise(resolve => { this.resolveLoad = resolve; }) : Promise.resolve(); }
+    loadFile() { return deferLoad ? new Promise((resolve, reject) => { this.resolveLoad = resolve; this.rejectLoad = reject; }) : Promise.resolve(); }
     hide() { this.visible = false; } showInactive() { this.visible = true; }
     destroy() { this.destroyed = true; this.visible = false; this.emit('closed'); }
   }
@@ -101,9 +101,9 @@ function harness({ deferLoad = false, broken = false } = {}) {
     logicalBounds: w => ({ ...w.bounds }), physicalBounds: w => ({ ...w.physical }),
     targetPhysicalBounds: (w, candidate) => ({ x: Math.round(candidate.bounds.x * 1.25), y: Math.round(candidate.bounds.y * 1.25), width: w.physical.width, height: w.physical.height }),
     placePreview: (p, pixels) => { p.physical = { ...pixels }; },
-    moveToPhysical: (w, p) => { if (broken) throw new Error('native unavailable'); moves.push(p); w.physical = { ...p }; }
+    moveToPhysical: (w, p) => { moves.push(p); w.physical = { ...p }; }
   };
-  const manager = createDesktopSnap({ BrowserWindow: Window, screen, platform: 'win32', loadNative: () => native, onError: (...e) => errors.push(e) });
+  const manager = createDesktopSnap({ BrowserWindow: Window, screen, platform: 'win32', loadNative: () => loadNative ? loadNative(native) : native, onError: (...e) => errors.push(e) });
   const window = new Window(); manager.attach(window);
   const begin = () => window.hooks.get(0x0231)();
   const move = (x = 17) => { window.emit('will-move'); window.bounds.x = x; window.physical.x = Math.round(x * 1.25); window.emit('move'); };
@@ -140,10 +140,67 @@ test('desktop snap lifecycle: turning off after release invalidates the queued c
   const h = harness(); h.begin(); h.move(); await tick(); h.end(); h.manager.setEnabled(false); await tick();
   assert.equal(h.moves.length, 0); h.manager.dispose();
 });
-test('desktop snap lifecycle: native failure keeps ordinary dragging available and does not retry unsafe fallback', async () => {
-  const h = harness({ broken: true }); h.begin(); h.move(); await tick(); h.end(); await tick();
-  assert.equal(h.errors.length, 1); assert.equal(h.moves.length, 0); assert.equal(h.previews[0].visible, false);
-  h.begin(); h.move(16); h.end(); await tick(); assert.equal(h.errors.length, 1); h.manager.dispose();
+test('desktop snap retries a failed native move only on a new drag', async () => {
+  const h = harness();
+  const moveToPhysical = h.native.moveToPhysical;
+  h.native.moveToPhysical = () => { throw new Error('Move failed'); };
+  h.begin(); h.move(); await tick(); h.end(); await tick();
+  assert.equal(h.errors.length, 1);
+  assert.equal(h.moves.length, 0);
+  assert.equal(h.previews[0].destroyed, true);
+  h.native.moveToPhysical = moveToPhysical;
+  h.begin(); h.move(16); await tick(); h.end(); await tick();
+  assert.equal(h.errors.length, 1);
+  assert.deepEqual(h.moves, [h.previews[1].physical]);
+  h.manager.dispose();
+});
+
+test('desktop snap recreates the preview after a failed load', async () => {
+  const h = harness({ deferLoad: true });
+  h.begin(); h.move(); await tick();
+  h.previews[0].rejectLoad(new Error('Preview load failed'));
+  await tick(); h.end(); await tick();
+  assert.equal(h.previews[0].destroyed, true);
+  assert.equal(h.moves.length, 0);
+  h.begin(); h.move(16); await tick();
+  h.previews[1].resolveLoad();
+  await tick(); h.end(); await tick();
+  assert.equal(h.errors.length, 1);
+  assert.deepEqual(h.moves, [h.previews[1].physical]);
+  h.manager.dispose();
+});
+
+test('desktop snap makes no move if drawing the outline fails during release', async () => {
+  const h = harness({ deferLoad: true });
+  h.begin(); h.move(); await tick();
+  let rejectDraw;
+  h.previews[0].webContents.executeJavaScript = () => new Promise((resolve, reject) => { rejectDraw = reject; });
+  h.previews[0].resolveLoad();
+  await tick();
+  h.end();
+  rejectDraw(new Error('Outline rendering failed'));
+  await tick();
+  assert.equal(h.moves.length, 0);
+  assert.equal(h.previews[0].visible, false);
+  h.manager.dispose();
+});
+
+test('desktop snap retries native adapter loading after explicitly re-enabling it', async () => {
+  let loads = 0;
+  const h = harness({ loadNative(native) {
+    if (++loads === 1) throw new Error('Adapter unavailable');
+    return native;
+  } });
+  h.begin(); h.move(); h.end(); await tick();
+  h.begin(); h.move(16); h.end(); await tick();
+  assert.equal(loads, 1);
+  assert.equal(h.previews.length, 0);
+  h.manager.setEnabled(false);
+  h.manager.setEnabled(true);
+  h.begin(); h.move(17); await tick(); h.end(); await tick();
+  assert.equal(loads, 2);
+  assert.equal(h.moves.length, 1);
+  h.manager.dispose();
 });
 test('desktop snap lifecycle: native system edge gesture takes priority', async () => {
   const h = harness(); h.screen.getCursorScreenPoint = () => ({ x: 0, y: 200 }); h.begin(); h.move(); h.end(); await tick();

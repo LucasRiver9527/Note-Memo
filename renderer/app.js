@@ -48,13 +48,13 @@ function t(key) {
   return T(key, lang);
 }
 
-// v1.3.2 用户可见更新。
+// v1.3.3 用户可见更新。
 const CHANGELOG = [
-  { zh: "在画布上关联便签，可添加关系标签、区分双向连接，并选择是否始终显示关联线。", en: "Link notes on the canvas, label relationships, distinguish links in both directions, and choose when to show them." },
-  { zh: "在画布或便签上涂鸦。便签上的笔迹随卡片移动，画笔和擦除操作支持撤销。", en: "Draw on the canvas or on notes. Note annotations move with their cards, and drawing and erasing can be undone." },
-  { zh: "新增专注计时和日历，可写专注备注、标记日期和记录当天的事。两种组件均可钉到桌面，并与工作区同步。", en: "Add focus timers and calendars with focus notes, date markers, and daily entries. Both widgets can be pinned to the desktop and stay in sync with the workspace." },
-  { zh: "调整主界面布局与缩放入口，统一文档工具栏、批量操作和时间待办图标。", en: "Refined the workspace layout and zoom controls, and aligned the icons in document, batch, and timed-task controls." },
-  { zh: "Windows 通知精简长标题和待办预览，点击可打开对应便签。任务栏显示 Note-Memo 名称和图标，关闭主窗口前会询问。", en: "Windows reminders show shorter titles and task previews. Select a notification to open its note. The taskbar displays the Note-Memo name and icon, and closing the main window asks for confirmation." }
+  { zh: "全局新建快捷键可打开速记窗，直接保存、选分组或钉到桌面。", en: "Open Quick Capture with the global shortcut to save a note, choose a group, or pin it to the desktop." },
+  { zh: "导出或恢复完整备份，包含便签、分组、外观、布局和应用内媒体。旧版 JSON 仍可导入。", en: "Export or restore a complete backup of notes, groups, appearance, layout, and in-app media. Legacy JSON imports are still supported." },
+  { zh: "分组列表可单独滚动，调整了分组右键菜单以及提醒和备份设置的布局。", en: "The group list scrolls independently. The group menu and reminder and backup settings have updated layouts." },
+  { zh: "改进多屏窗口位置恢复和桌面便签的保存、关闭及贴边体验。", en: "Improved window restoration across displays and how desktop notes save, close, and snap." },
+  { zh: "便签按顺序在后台保存，优化右键编辑操作及常用富文本操作的撤销。", en: "Notes save in order in the background. Editing menus and undo for common rich-text actions have been improved." }
 ];
 
 const APP_VERSION = (window.api && window.api.appVersion) || '';
@@ -321,6 +321,11 @@ function saveNow(opts) {
 /* ============ 待办提醒 / 闹铃声音 / 闹铃提醒弹窗（已拆分到 system/alarm.js） ============ */
 
 /* ============ 通用弹窗 / 关闭确认弹窗 / 备份（已拆分到 system/dialogs.js） ============ */
+function renderLastFullBackup(exportedAt) {
+  const stamp = $('#fullBackupLastExport');
+  stamp.textContent = exportedAt ? t('full_backup_last').replace('{time}', formatDate(exportedAt)) : t('full_backup_none');
+}
+
 function switchTab(name) {
   const settingsContent = $('#settingsPanel .sp-content');
   if (settingsContent) settingsContent.scrollTop = 0;
@@ -331,7 +336,11 @@ function switchTab(name) {
   if (name === 'reminder') syncSettingsInputs();
   if (name === 'sort') renderSortPanel();
   if (name === 'shortcuts') renderShortcutPanel();
-  if (name === 'backup') { const el = $('#backupDir'); if (el) el.value = state.settings.backupDir || ''; }
+  if (name === 'backup') {
+    const el = $('#backupDir');
+    if (el) el.value = state.settings.backupDir || '';
+    window.api.getLastFullBackup().then(renderLastFullBackup).catch(() => renderLastFullBackup(null));
+  }
   if (name === 'trash') renderTrashPanel();
   if (name === 'about') syncSettingsInputs();
 }
@@ -419,6 +428,7 @@ async function init() {
   setInterval(() => purgeTrash(), 60 * 60 * 1000);
 
   registerIpc();
+  enableQuickCapture();
 }
 
 init();

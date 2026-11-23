@@ -14,14 +14,10 @@
 
 function insertTextAtCaret(n, text) {
   const contentEl = focusNoteContent(n);
-  if (contentEl && (document.activeElement === contentEl || contentEl.contains(document.activeElement))) {
-    contentEl.focus();
-    document.execCommand('insertText', false, text);
-    n.content = readRichContent(contentEl);
-  } else if (contentEl && savedNoteId === n.id && savedRange) {
-    contentEl.focus();
-    restoreSelection();
-    document.execCommand('insertText', false, text);
+  const isFocused = contentEl?.contains(document.activeElement);
+  if (TextEditing.insertText(contentEl, text) ||
+      (!isFocused && savedNoteId === n.id && savedRange &&
+        TextEditing.insertText(contentEl, text, { range: savedRange, focus: true }))) {
     n.content = readRichContent(contentEl);
   } else {
     n.content = ((n.content || '').trim() ? n.content + '\n' : '') + text;
@@ -79,6 +75,7 @@ async function insertPastedFilesAtCursor(n, paths) {
     if (imageExts.some((e) => lower.endsWith(e))) {
       const r = await window.api.addImageFile(p);
       if (r.ok) insertImageByUrl(n, r.url);
+      else toast(r.error);
     } else {
       const st = await window.api.statPath(p);
       if (st && st.exists) addFileToNote(n, p, !!st.isDirectory);

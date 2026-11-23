@@ -238,37 +238,89 @@ function bindSettings() {
     if (r.ok) toast(t('toast_cleanup_ok').replace('{n}', r.freedCount).replace('{m}', (r.freedBytes / 1024 / 1024).toFixed(1)));
     else toast(t('toast_cleanup_fail') + (r.error || ''));
   };
-  $('#btnImport').onclick = async () => {
-    const r = await window.api.importData();
-    if (r.ok) {
-      const ok = await confirmModal(t('confirm_import_title'), t('confirm_import_msg'));
-      if (ok) {
-        const migrated = migrateData(r.data, uid);
-        const previous = { settings: state.settings, groups: state.groups, notes: state.notes, trash: state.trash };
-        state.settings = migrated.settings;
-        state.groups = migrated.groups;
-        state.notes = migrated.notes;
-        state.trash = migrated.trash;
-        ensureOrder();
-        // 只补全 positionAll，不在此刻落盘/留下恢复草稿；等下面的显式 replace 提交成功再落盘。
-        initAllLayout({ persist: false });
-        // 确认后立即提交整份替换；force 仅供坏档导入自救，成功后才解除只读并显示成功。
-        if (!(await saveNow({ replace: true, force: true }))) {
-          Object.assign(state, previous);
-          return;
-        }
-        exitDataReadonly();
-        applyTheme();
-        applyCustomFonts();
-        syncSettingsInputs();
-        renderThemePanel();
-        renderGroupChips();
-        renderAll();
-        applyLanguage();
-        switchTab('appearance');
-        toast(t('toast_imported'));
+  async function applyBackup(data, fullBackupToken) {
+    const migrated = migrateData(data, uid);
+    const previous = { settings: state.settings, groups: state.groups, notes: state.notes, trash: state.trash };
+    Object.assign(state, migrated);
+    let saved = false;
+    try {
+      ensureOrder();
+      initAllLayout({ persist: false });
+      saved = await saveNow({ replace: true, force: true, fullBackupToken });
+    } finally {
+      if (!saved) Object.assign(state, previous);
+    }
+    if (!saved) return;
+    if (fullBackupToken) {
+      UndoHistory.cancelUndo();
+      UndoHistory.clearStacks();
+      syncUndoButtons();
+    }
+    exitDataReadonly();
+    applyTheme();
+    applyCustomFonts();
+    syncSettingsInputs();
+    renderThemePanel();
+    renderGroupChips();
+    renderAll();
+    applyLanguage();
+    switchTab(fullBackupToken ? 'backup' : 'appearance');
+    toast(t('toast_imported'));
+  }
+
+  let fullBackupBusy = false;
+  async function runFullBackup(operation, errorKey) {
+    if (fullBackupBusy) return;
+    fullBackupBusy = true;
+    const buttons = [$('#btnExportFullBackup'), $('#btnRestoreFullBackup'), $('#btnImport')];
+    buttons.forEach((button) => { button.disabled = true; });
+    const status = $('#fullBackupStatus');
+    status.textContent = t('full_backup_working');
+    try {
+      await operation();
+    } catch (error) {
+      toast(t(errorKey) + error.message);
+    } finally {
+      status.textContent = '';
+      buttons.forEach((button) => { button.disabled = false; });
+      fullBackupBusy = false;
+    }
+  }
+
+  function exportFullBackup() {
+    return runFullBackup(async () => {
+      if (!(await saveNow())) throw new Error(t('full_backup_save_first'));
+      const result = await window.api.exportFullBackup();
+      if (result.ok) {
+        renderLastFullBackup(result.exportedAt);
+        toast(t('toast_backup_ok') + result.path);
+      } else if (!result.canceled) throw new Error(result.error);
+    }, 'toast_backup_fail');
+  }
+
+  function restoreFullBackup() {
+    return runFullBackup(async () => {
+      const result = await window.api.openFullBackup();
+      if (result.canceled) return;
+      if (!result.ok) throw new Error(result.error);
+      try {
+        if (!(await confirmModal(t('full_backup_title'), t('full_backup_confirm')))) return;
+        // Flush the current workspace before replacing it, unless recovering a locked store.
+        if (!dataReadonly && !(await saveNow())) throw new Error(t('full_backup_save_first'));
+        await applyBackup(result.data, result.token);
+      } finally {
+        await window.api.discardFullBackup(result.token);
       }
-    } else if (!r.canceled) toast(t('toast_import_fail') + r.error);
+    }, 'toast_import_fail');
+  }
+
+  $('#btnExportFullBackup').onclick = exportFullBackup;
+  $('#btnRestoreFullBackup').onclick = restoreFullBackup;
+  $('#btnImport').onclick = async () => {
+    const result = await window.api.importData();
+    if (result.ok && await confirmModal(t('confirm_import_title'), t('confirm_import_msg'))) {
+      await applyBackup(result.data);
+    } else if (!result.ok && !result.canceled) toast(t('toast_import_fail') + result.error);
   };
 
   $('#btnArrange').onclick = () => { if (arrangeNotes()) toast(t('toast_arranged_menu')); };

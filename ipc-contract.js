@@ -29,9 +29,9 @@ function readFileSafe(filePath) {
 
 // 校验 main 与 preload 的 IPC 契约，返回 { missingHandlers, missingSenders }。
 function checkIpcContract(rootDir) {
-  const preloadPath = path.join(rootDir, 'preload.js');
-  const mainFiles = ['main.js', 'file-ipc.js', 'window-manager.js'];
-  const pre = readFileSafe(preloadPath);
+  const preloadFiles = ['preload.js', 'quick-capture-preload.js'];
+  const mainFiles = ['main.js', 'file-ipc.js', 'window-manager.js', 'window-ipc.js', 'global-shortcuts.js', 'quick-capture.js', 'backup-ipc.js'];
+  const pre = preloadFiles.map((name) => readFileSafe(path.join(rootDir, name))).join('\n');
   const main = mainFiles.map((name) => readFileSafe(path.join(rootDir, name))).join('\n');
 
   const preInvokeSend = extractChannels(pre, /ipcRenderer\.(?:invoke|sendSync|send)\('([^']+)'/g);

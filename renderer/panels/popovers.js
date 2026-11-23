@@ -39,12 +39,79 @@ async function exportNoteAsMarkdown(n) {
   return r;
 }
 
+const menuIcon = (name) => '<svg class="ui-icon cm-icon" aria-hidden="true" focusable="false"><use href="#ui-' + name + '"/></svg>';
+
+// 空白画布右键菜单：快捷插入（新建便签 / 新建待办 / 粘贴为新便签 / 一键整理）
+function showBoardContextMenu(e) {
+  e.preventDefault();
+  e.stopPropagation();
+  closePops();
+  const board = $('#board');
+  const z = boardZoom();
+  const rect = board.getBoundingClientRect();
+  const bx = (e.clientX - rect.left) / z;
+  const by = (e.clientY - rect.top) / z;
+  const pop = document.createElement('div');
+  pop.className = 'color-pop ctx-menu';
+  const addItem = (icon, label, onClick) => {
+    const button = document.createElement('button');
+    button.type = 'button';
+    button.className = 'cm-row';
+    button.innerHTML = `<svg class="ui-icon cm-icon" aria-hidden="true" focusable="false"><use href="#ui-${icon}"/></svg><span class="cm-label"></span>`;
+    button.querySelector('.cm-label').textContent = label;
+    button.onclick = () => { closePops(); onClick(); };
+    pop.appendChild(button);
+    return button;
+  };
+
+  addItem('plus', t('board_new_note'), () => createNote(Math.round(bx), Math.round(by)));
+  addItem('todo', t('board_new_todo'), () => {
+    const n = createTodoNote('', Math.round(bx), Math.round(by));
+    renderAll();
+    focusNewNote(n.id);
+  });
+  addItem('cm-paste', t('board_paste_note'), async () => {
+    const text = await window.api.readClipboard();
+    if (text && text.trim()) createNoteWithContent(Math.round(bx), Math.round(by), text);
+    else toast(t('toast_paste_empty'));
+  });
+  const separator = document.createElement('div');
+  separator.className = 'cm-separator';
+  pop.appendChild(separator);
+  addItem('arrange', t('board_arrange'), () => arrangeNotes());
+  if (!dataReadonly) {
+    const always = state.settings.showCanvasLinks !== false;
+    const toggle = addItem('eye', t('canvas_link_show_always'), () => {
+      state.settings.showCanvasLinks = !always;
+      scheduleCanvasLinks();
+      save();
+    });
+    toggle.setAttribute('aria-pressed', String(always));
+    if (always) toggle.insertAdjacentHTML('beforeend', '<svg class="ui-icon cm-icon" aria-hidden="true"><use href="#ui-check"/></svg>');
+  }
+  // 仅在存在可恢复的已保存布局（当前作用域、当前可见）时显示「恢复保存布局」。
+  if (typeof canRestoreSavedLayout === 'function' && canRestoreSavedLayout()) {
+    addItem('undo', t('restore_layout'), () => restoreSavedLayout());
+  }
+
+  // 菜单外观（透明度/亚克力）已归位到「设置 → 外观」，不再挂在每个右键菜单底部
+  document.body.appendChild(pop);
+  const x = Math.max(8, Math.min(e.clientX, window.innerWidth - pop.offsetWidth - 8));
+  const y = Math.max(8, Math.min(e.clientY, window.innerHeight - pop.offsetHeight - 8));
+  pop.style.left = x + 'px';
+  pop.style.top = y + 'px';
+  activeColorPop = pop;
+  setTimeout(() => document.addEventListener('mousedown', closePopsOnce), 0);
+}
+
 function showNoteContextMenu(e, n) {
   e.preventDefault();
   e.stopPropagation();
   closePops();
   savedNoteId = n.id;
   captureSelection();
+  const cutField = e.target.closest('.note-title, .todo-text');
+  const fieldSelection = cutField && [cutField.selectionStart, cutField.selectionEnd, cutField.selectionDirection];
   savedImageSrc = getSelectedImageSrc(n);
   // 菜单锚点：切换模式/展开二级后需按同一锚点重新定位，避免菜单"跳走"
   const trigger = e.type === 'click' && e.detail === 0 && e.currentTarget instanceof HTMLElement
@@ -53,7 +120,6 @@ function showNoteContextMenu(e, n) {
   const anchorY = trigger ? trigger.bottom : e.clientY;
   const pop = document.createElement('div');
   pop.className = 'color-pop ctx-menu';
-  const menuIcon = (name) => '<svg class="ui-icon cm-icon" aria-hidden="true" focusable="false"><use href="#ui-' + name + '"/></svg>';
   const row = (icon, label, end = '') => menuIcon(icon) + '<span class="cm-label">' + label + '</span>' + end;
   const addItem = (icon, label, onClick, danger, accel, host) => {
     const button = document.createElement('button');
@@ -144,11 +210,12 @@ function showNoteContextMenu(e, n) {
     clearSavedSelection();
   };
   const fnCut = () => {
-    const c = focusNoteContent(n);
-    if (c) c.focus();
-    if (savedRange && savedNoteId === n.id) restoreSelection();
-    document.execCommand('cut');
-    copiedImage = null;
+    if (savedNoteId === n.id) {
+      const cut = cutField
+        ? TextEditing.cutInput(cutField, ...fieldSelection)
+        : TextEditing.cut(focusNoteContent(n), savedRange);
+      if (cut) copiedImage = null;
+    }
     clearSavedSelection();
   };
   const fnPaste = async () => {
@@ -170,20 +237,15 @@ function showNoteContextMenu(e, n) {
       return;
     }
     const text = await window.api.readClipboard();
-    if (text) {
-      const c = focusNoteContent(n);
-      if (c) {
-        c.focus();
-        if (savedRange && savedNoteId === n.id) restoreSelection();
-        document.execCommand('insertText', false, text);
-      }
-    }
+    const c = focusNoteContent(n);
+    const range = savedNoteId === n.id ? savedRange : null;
+    TextEditing.insertText(c, text, { range, focus: true });
     clearSavedSelection();
   };
   const fnSelectAll = () => {
     const c = focusNoteContent(n);
-    if (c) { c.focus(); document.execCommand('selectAll'); }
-    else { const ae = document.activeElement; if (ae && ae.select) ae.select(); else document.execCommand('selectAll'); }
+    const active = document.activeElement;
+    TextEditing.selectAll(c || (typeof active?.select === 'function' || active?.isContentEditable ? active : document.body));
     clearSavedSelection();
   };
 
@@ -295,7 +357,8 @@ function showNoteContextMenu(e, n) {
     addItem('cm-select', t('select_all'), fnSelectAll, false, 'Ctrl+A');
     addSep();
     const isBold = !!document.queryCommandState('bold');
-    const isHl = selectionHasHighlight();
+    const content = focusNoteContent(n);
+    const isHl = content ? TextEditing.selectionHasHighlight(content) : false;
     addItem('cm-bold', isBold ? t('unbold') : t('bold'), fnBold, false, 'Ctrl+B');
     addItem('cm-highlight', isHl ? t('unhighlight') : t('highlight'), fnHighlight, false, 'Ctrl+H');
 
@@ -559,22 +622,19 @@ function openGroupEditPop(anchorEl, g) {
   closePops();
   clearSavedSelection();
   const pop = document.createElement('div');
-  pop.className = 'color-pop';
-  pop.style.gridTemplateColumns = '1fr';
-  pop.style.minWidth = '170px';
-  pop.style.padding = '6px';
+  pop.className = 'color-pop ctx-menu group-edit-pop';
 
-  const addBtn = (html, onClick) => {
-    const b = document.createElement('button');
-    b.style.cssText = 'background:transparent;border:none;color:var(--fg);padding:8px 10px;border-radius:7px;cursor:pointer;text-align:left;font-size:13px;font-family:inherit;width:100%;';
-    b.innerHTML = html;
-    b.onmouseenter = () => (b.style.background = 'var(--accent-soft)');
-    b.onmouseleave = () => (b.style.background = 'transparent');
-    b.onclick = (e) => { e.stopPropagation(); closePops(); onClick(); };
-    pop.appendChild(b);
+  const addBtn = (icon, label, onClick, danger = false) => {
+    const button = document.createElement('button');
+    button.type = 'button';
+    button.className = danger ? 'cm-row cm-danger' : 'cm-row';
+    button.innerHTML = menuIcon(icon) + '<span class="cm-label"></span>';
+    button.lastElementChild.textContent = label;
+    button.onclick = (event) => { event.stopPropagation(); closePops(); onClick(); };
+    pop.appendChild(button);
   };
 
-  addBtn(`✏ ${t('rename_group')}`, () => {
+  addBtn('pen', t('rename_group'), () => {
     promptModal(t('rename_group'), t('group_name'), g.name).then((name) => {
       if (name && name.trim()) {
         g.name = name.trim();
@@ -585,22 +645,31 @@ function openGroupEditPop(anchorEl, g) {
     });
   });
 
-  addBtn(isGroupCollapsed(g.id) ? (t('group_expand') + (state.notes.some((n) => n.groupId === g.id) ? '（' + state.notes.filter((n) => n.groupId === g.id).length + '）' : '')) : `▾ ${t('group_collapse')}`, () => {
+  const collapsed = isGroupCollapsed(g.id);
+  const count = collapsed ? state.notes.filter((note) => note.groupId === g.id).length : 0;
+  const collapseLabel = t(collapsed ? 'group_expand' : 'group_collapse') + (count ? '（' + count + '）' : '');
+  addBtn(collapsed ? 'cm-chevron' : 'chevron-down', collapseLabel, () => {
     toggleGroupCollapse(g.id);
   });
 
-
   const colorLabel = document.createElement('div');
-  colorLabel.style.cssText = 'font-size:11px;color:var(--fg-dim);padding:8px 10px 2px;';
+  colorLabel.className = 'group-edit-color-label';
   colorLabel.textContent = t('change_color');
   pop.appendChild(colorLabel);
 
   const colorRow = document.createElement('div');
-  colorRow.style.cssText = 'display:flex;gap:6px;flex-wrap:wrap;padding:4px 10px 8px;';
+  colorRow.className = 'group-edit-colors';
+  colorRow.setAttribute('role', 'group');
+  colorRow.setAttribute('aria-label', t('change_color'));
   ACCENTS.forEach((c) => {
     const s = document.createElement('button');
-    s.className = 'swatch' + (g.color === c ? ' active' : '');
-    s.style.background = c;
+    const selected = g.color?.toLowerCase() === c;
+    s.type = 'button';
+    s.className = 'group-edit-color';
+    s.style.setProperty('--swatch-color', c);
+    s.setAttribute('aria-label', c);
+    s.setAttribute('aria-pressed', String(selected));
+    if (selected) s.innerHTML = menuIcon('check');
     s.onclick = (e) => {
       e.stopPropagation();
       g.color = c;
@@ -612,7 +681,11 @@ function openGroupEditPop(anchorEl, g) {
   });
   pop.appendChild(colorRow);
 
-  addBtn(`<span style="color:#e5484d">🗑 ${t('delete_group')}</span>`, () => {
+  const separator = document.createElement('div');
+  separator.className = 'cm-separator';
+  pop.appendChild(separator);
+
+  addBtn('trash', t('delete_group'), () => {
     confirmModal(t('delete_group'), `${t('confirm_delete_group_msg')}（${g.name}）`).then((ok) => {
       if (ok) {
         pushUndo();
@@ -626,14 +699,24 @@ function openGroupEditPop(anchorEl, g) {
         toast(t('toast_group_deleted'));
       }
     });
-  });
+  }, true);
 
-  // 菜单外观（透明度/亚克力）已归位到「设置 → 外观」，不再挂在每个右键菜单底部
   document.body.appendChild(pop);
-  const r = anchorEl.getBoundingClientRect();
-  pop.style.left = r.left + 'px';
-  pop.style.top = Math.min(r.bottom + 4, window.innerHeight - pop.offsetHeight - 8) + 'px';
+  const anchor = anchorEl.getBoundingClientRect();
+  const below = anchor.bottom + 4;
+  const above = anchor.top - pop.offsetHeight - 4;
+  const topLimit = window.innerHeight - pop.offsetHeight - 8;
+  pop.style.left = Math.max(8, Math.min(anchor.left, window.innerWidth - pop.offsetWidth - 8)) + 'px';
+  pop.style.top = Math.max(8, below <= topLimit ? below : above >= 8 ? above : topLimit) + 'px';
+  pop.addEventListener('keydown', (event) => {
+    if (event.key !== 'Escape') return;
+    event.preventDefault();
+    event.stopPropagation();
+    closePops();
+    anchorEl.focus({ preventScroll: true });
+  });
   activeColorPop = pop;
+  pop.querySelector('button').focus({ preventScroll: true });
   setTimeout(() => document.addEventListener('mousedown', closePopsOnce), 0);
 }
 
@@ -670,5 +753,5 @@ function appendMenuAppearanceFooter(pop) {
   });
 }
 
-  return { closePops, showNoteContextMenu, openColorPop, openGroupPop, closePopsOnce, openGroupEditPop, appendMenuAppearanceFooter, exportNoteAsMarkdown };
+  return { closePops, showBoardContextMenu, showNoteContextMenu, openColorPop, openGroupPop, closePopsOnce, openGroupEditPop, appendMenuAppearanceFooter, exportNoteAsMarkdown };
 }));

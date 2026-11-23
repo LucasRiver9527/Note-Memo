@@ -3,13 +3,16 @@ const path = require('path');
 const fs = require('fs');
 const { pathToFileURL, fileURLToPath } = require('url');
 const logic = require('./renderer/logic.js');
-const Shortcuts = require('./renderer/shortcuts.js');
 const DataIO = require('./data-io.js');
 const { createNoteStore } = require('./note-store.js');
 const { mergeDetachedEdits, applyGadgetAction } = logic;
 const { registerFileIpc } = require('./file-ipc.js');
+const { createBackupIpc } = require('./backup-ipc.js');
 const MediaProtocol = require('./media-protocol.js');
 const { createWindowManager } = require('./window-manager.js');
+const { registerWindowIpc } = require('./window-ipc.js');
+const { createGlobalShortcuts } = require('./global-shortcuts.js');
+const { createQuickCapture } = require('./quick-capture.js');
 const { autoUpdater } = require('electron-updater');
 
 const isDev = !app.isPackaged;
@@ -49,13 +52,13 @@ const recentlyFired = new Set();
 
 // ---- P0-04 IPC 来源（provenance）校验 ----
 // 每个渲染层 → 主进程的 ipcMain.handle/on 都必须先通过来源校验再进入正文：
-//   - sender 必须是「当前主窗 webContents」或「当前注册的独立窗 webContents」，销毁/未注册/被导入作废的一律拒绝；
+//   - sender 必须是当前主窗、当前注册的独立便签窗或速记窗，销毁/未注册/被导入作废的一律拒绝；
 //   - 必须是该 sender 的顶层 frame（拒绝子框架）；
-//   - frame URL 必须精确等于应用页面文件路径（index.html / note.html），用 fileURLToPath + path 相等比较，
+//   - frame URL 必须精确等于对应的应用页面文件路径，用 fileURLToPath + path 相等比较，
 //     而非前缀/子串匹配，因此 loadURL 到任意本地/远端/devtools 页面都会被拒绝；
 //   - 独立窗 URL 的 ?id= 必须等于其注册的便签 id；
 //   - 任一 getter 缺失/抛异常/已释放 → 失败关闭（拒绝）。
-// 这是信任边界，不是功能白名单；合法的主窗/独立窗调用路径不受影响。
+// 速记窗只允许调用显式标记 role: 'quick' 的专用通道。
 const APP_MAIN_PAGE = path.join(__dirname, 'renderer', 'index.html');
 const APP_NOTE_PAGE = path.join(__dirname, 'renderer', 'note.html');
 
@@ -86,6 +89,7 @@ function classifyRendererSource(event) {
       }
     } catch (e) { return null; }
   }
+  if (!role && quickCapture.owns(sender)) { role = 'quick'; expectedPage = quickCapture.page; }
   if (!role) return null;
   try { if (supersededDetached.has(sender)) return null; } catch (e) { return null; }
 
@@ -119,7 +123,7 @@ const RAW_ON = ipcMain.on.bind(ipcMain);
 function guardedHandle(channel, handler, opts) {
   RAW_HANDLE(channel, async (event, ...args) => {
     const src = classifyRendererSource(event);
-    if (!src) {
+    if (!src || (opts?.role ? src.role !== opts.role : src.role === 'quick')) {
       if (opts && Object.prototype.hasOwnProperty.call(opts, 'denyValue')) return opts.denyValue;
       throw unauthorizedError();
     }
@@ -139,7 +143,7 @@ function guardedHandle(channel, handler, opts) {
 function guardedOn(channel, handler, opts) {
   RAW_ON(channel, (event, ...args) => {
     const src = classifyRendererSource(event);
-    if (!src) { event.returnValue = false; return; }
+    if (!src || (opts?.role ? src.role !== opts.role : src.role === 'quick')) { event.returnValue = false; return; }
     if (opts && opts.noteScoped) {
       const target = args[0];
       const id = target && typeof target === 'object' ? target.id : null;
@@ -149,7 +153,7 @@ function guardedOn(channel, handler, opts) {
   });
 }
 
-const { dataPath, dataHealth, isDataLocked, readData, writeData, captureRecovery, clearRecovery, writeRecovery, recoveryCandidate } =
+const { dataPath, dataHealth, isDataLocked, readData, writeData, writeDataAsync, queueDataWrite, waitForDataWrites, captureRecovery, clearRecovery, writeRecovery, recoveryCandidate } =
   createNoteStore(() => app.getPath('userData'));
 
 const windows = createWindowManager({
@@ -157,19 +161,23 @@ const windows = createWindowManager({
   notePage: APP_NOTE_PAGE,
   taskbarDetails,
   readData,
-  writeData,
+  writeData: writeDataAsync,
+  queueDataWrite,
+  waitForDataWrites,
   clearRecoveryAfterReplace: () => writeRecovery({ version: 1, main: null, notes: {} })
 });
 const {
   detachedWindows, supersededDetached, createWindow, createDetachedWindow,
-  requestCloseMainWindow, handleCloseDecision, flushDetachedNote, flushDetachedNotes,
+  requestCloseMainWindow, flushDetachedNote, flushDetachedNotes,
   reconcileDetachedAfterReplace
 } = windows;
+
+const fullBackup = createBackupIpc({ readData, queueDataWrite, flushDetachedNotes, getMainWindow: () => windows.mainWindow });
 
 function openStartupPinned(data) {
   if (!data || !Array.isArray(data.notes)) return;
   scheduleReminders(data.notes);
-  data.notes.forEach((note) => { if (note.desktopPin) createDetachedWindow(note.id); });
+  data.notes.forEach((note) => { if (note.desktopPin) createDetachedWindow(note, data.settings); });
 }
 
 function clipboardImageToDataUrl() {
@@ -319,8 +327,9 @@ function reminderPreview(text, limit) {
 
 function fireReminder(note) {
   recentlyFired.add(note.id);
-  const settings = readData()?.settings || {};
-  const english = settings.language === 'en';
+  const { settings, notes } = readData() || {};
+  const currentSettings = settings || {};
+  const english = currentSettings.language === 'en';
   const title = reminderPreview(note.title, 32) || (english ? 'Note reminder' : '便签提醒');
   let body = reminderPreview(note.content, 64);
   if (note.type === 'todo') {
@@ -354,41 +363,36 @@ function fireReminder(note) {
     setTimeout(() => windows.mainWindow.flashFrame(false), 4000);
     windows.mainWindow.webContents.send('reminder:fired', note.id);
     // 播报闹铃声音：把声音设置传给渲染进程播放（preload 监听 reminder:sound）
-    const data = readData();
-    const s = (data && data.settings) || {};
     windows.mainWindow.webContents.send('reminder:sound', {
-      enabled: !!settings.reminderSound,
-      path: settings.reminderSoundPath || null,
-      volume: settings.reminderVolume ?? 70
+      enabled: !!currentSettings.reminderSound,
+      path: currentSettings.reminderSoundPath || null,
+      volume: currentSettings.reminderVolume ?? 70
     });
   }
 
-  scheduleReminders(readDataNotes());
+  scheduleReminders(notes);
 }
 
-function readDataNotes() {
-  const data = readData();
-  return data ? data.notes || [] : [];
-}
-
-// P0-04 phase2c：数值 IPC 入参的有限性/类型校验（绝不对任意值做 Number() 强转）。
-// 只接受有限 number 或非空数字字符串；null/undefined/bool/array/object/空串/NaN/Infinity 一律返回 null。
-function finiteNumber(v) {
-  if (typeof v === 'number') return Number.isFinite(v) ? v : null;
-  if (typeof v === 'string') {
-    const s = v.trim();
-    if (s === '') return null;
-    const n = Number(s);
-    return Number.isFinite(n) ? n : null;
+const quickCapture = createQuickCapture({
+  getMainContents: () => {
+    const win = windows.mainWindow;
+    if (!win || win.isDestroyed()) return null;
+    const contents = win.webContents;
+    return isExpectedAppUrl(contents.mainFrame.url, APP_MAIN_PAGE) ? contents : null;
   }
-  return null;
-}
-// 校验并夹取到 [min,max]；非法返回 null（调用方据此在产生任何副作用前拒绝）。
-function clampFinite(v, min, max) {
-  const n = finiteNumber(v);
-  if (n === null) return null;
-  return Math.max(min, Math.min(max, n));
-}
+});
+
+const shortcuts = createGlobalShortcuts({
+  readData, writeData: writeDataAsync, queueDataWrite, toggleWindow,
+  createNote: () => {
+    if (readData()?.settings?.globalCreateMode !== 'workspace') {
+      quickCapture.show();
+      return;
+    }
+    showWindow();
+    if (windows.mainWindow && !windows.mainWindow.isDestroyed()) windows.mainWindow.webContents.send('note:create');
+  }
+});
 
 // ---- IPC ----
 function setupIpc() {
@@ -396,12 +400,12 @@ function setupIpc() {
   //   data  —— 数据对象；首次运行或损坏不可读时为 null
   //   status—— 'ok' | 'first-run' | 'recovered' | 'corrupt'
   // 渲染层据此区分「首次运行」与「损坏」，损坏时进入只读并引导导入备份。
-  guardedHandle('data:load', () => {
+  guardedHandle('data:load', () => queueDataWrite(() => {
     const data = readData();
     const health = dataHealth();
     return { data: data || null, status: health.status, corruptPath: health.corruptPath,
       recovery: recoveryCandidate(data) };
-  });
+  }));
 
   guardedOn('data:draft', (event, data) => {
     event.returnValue = isDataLocked() ? false : captureRecovery('main', data);
@@ -409,7 +413,7 @@ function setupIpc() {
   guardedOn('note:draft', (event, note) => {
     event.returnValue = isDataLocked() || supersededDetached.has(event.sender) ? false : captureRecovery('note', note);
   }, { noteScoped: true });
-  guardedHandle('data:recovery:resolve', (event, decision) => {
+  guardedHandle('data:recovery:resolve', (event, decision) => queueDataWrite(() => {
     if (decision !== 'restore' && decision !== 'discard') throw new Error('invalid recovery decision');
     const original = readData();
     const candidate = recoveryCandidate(original);
@@ -418,7 +422,7 @@ function setupIpc() {
     if (!writeRecovery({ version: 1, main: null, notes: {} })) return { ok: false };
     openStartupPinned(decision === 'restore' ? candidate : original);
     return { ok: true, data: decision === 'restore' ? candidate : null };
-  });
+  }));
 
   // 只读通道：单独查询数据健康状态（供渲染层随时重查，无需重新读盘）。
   guardedHandle('data:health', () => {
@@ -440,53 +444,63 @@ function setupIpc() {
     // opts.replace：整份显式替换（导入备份），此时不做独立窗口字段合并——否则导入内容会被
     // 磁盘上同 ID 旧便签的编辑字段悄悄顶掉。普通自动保存仍走下面的合并保护。
     const replace = !!(opts && opts.replace);
-    // 独立便签窗口是它自己编辑内容的唯一写入者（note:update）。显式取消钉住
-    // （desktopPin:false，例如主窗发起 unpin）时不合并，仍采用主窗版本。
-    const disk = replace ? null : readData();
-    if (disk?.settings?.windowState) {
-      data.settings ||= {};
-      data.settings.windowState = disk.settings.windowState;
-    }
-    if (!replace && detachedWindows.size && Array.isArray(data.notes)) {
-      if (disk && Array.isArray(disk.notes)) {
-        const diskById = new Map(disk.notes.filter(Boolean).map((n) => [n.id, n]));
-        data.notes = data.notes.map((n) => {
-          if (!n || !detachedWindows.has(n.id) || n.desktopPin === false) return n;
-          const diskNote = diskById.get(n.id);
-          if (!diskNote) return n;
-          if (n.gadget && diskNote.gadget?.kind === n.gadget.kind) return { ...n, gadget: diskNote.gadget };
-          return mergeDetachedEdits(n, diskNote);
+    const backupToken = opts?.fullBackupToken;
+    if (backupToken && (!replace || classifyRendererSource(e)?.role !== 'main')) throw unauthorizedError();
+    let reopened;
+    await queueDataWrite(async () => {
+      // 独立便签窗口是它自己编辑内容的唯一写入者（note:update）。显式取消钉住
+      // （desktopPin:false，例如主窗发起 unpin）时不合并，仍采用主窗版本。
+      const disk = replace ? null : readData();
+      if (disk?.settings?.windowState) {
+        data.settings ||= {};
+        data.settings.windowState = disk.settings.windowState;
+      }
+      if (!replace && detachedWindows.size && Array.isArray(data.notes)) {
+        if (disk && Array.isArray(disk.notes)) {
+          const diskById = new Map(disk.notes.filter(Boolean).map((n) => [n.id, n]));
+          data.notes = data.notes.map((n) => {
+            if (!n || !detachedWindows.has(n.id) || n.desktopPin === false) return n;
+            const diskNote = diskById.get(n.id);
+            if (!diskNote) return n;
+            if (n.gadget && diskNote.gadget?.kind === n.gadget.kind) return { ...n, gadget: diskNote.gadget };
+            return mergeDetachedEdits(n, diskNote);
+          });
+        }
+      }
+      const write = () => writeData(data, opts);
+      const ok = backupToken ? fullBackup.commit(e.sender, backupToken, write) :
+        replace ? write() : await writeDataAsync(data, opts);
+      if (!ok) {
+        throw new Error(isDataLocked() ? '数据文件损坏且无可用备份，已锁定写入' : '数据写入失败');
+      }
+      clearRecovery('main', null, opts && opts.draftToken, data);
+      if (!replace && detachedWindows.size && Array.isArray(data.notes)) {
+        for (const note of data.notes) {
+          const win = note?.gadget && detachedWindows.get(note.id);
+          if (win && !win.isDestroyed()) win.webContents.send('note:changed', note);
+        }
+      }
+
+      if (Array.isArray(data.notes)) {
+        // 重新武装的提醒（fired=false 且启用的便签）允许再次调度——解除最近触发标记（「稍后再响」依赖此机制）。
+        data.notes.forEach((n) => {
+          if (n && n.reminder && n.reminder.enabled && !n.reminder.fired) recentlyFired.delete(n.id);
         });
+        scheduleReminders(data.notes);
       }
-    }
-    const ok = writeData(data, opts);
-    if (!ok) {
-      throw new Error(isDataLocked() ? '数据文件损坏且无可用备份，已锁定写入' : '数据写入失败');
-    }
-    clearRecovery('main', null, opts && opts.draftToken, data);
-    if (!replace && detachedWindows.size && Array.isArray(data.notes)) {
-      for (const note of data.notes) {
-        const win = note?.gadget && detachedWindows.get(note.id);
-        if (win && !win.isDestroyed()) win.webContents.send('note:changed', note);
+      // 设置变更（含快捷键）后同步全局快捷键；失败仅记录，不阻塞保存
+      if (data.settings && typeof data.settings === 'object') {
+        const reg = shortcuts.registerGlobalShortcuts(data.settings);
+        if (reg.failures.length) console.warn('[shortcuts] 注册失败:', reg.failures.join(','));
       }
-    }
-    if (replace) await reconcileDetachedAfterReplace(data);
-    if (Array.isArray(data.notes)) {
-      // 重新武装的提醒（fired=false 且启用的便签）允许再次调度——解除最近触发标记（「稍后再响」依赖此机制）。
-      data.notes.forEach((n) => {
-        if (n && n.reminder && n.reminder.enabled && !n.reminder.fired) recentlyFired.delete(n.id);
-      });
-      scheduleReminders(data.notes);
-    }
-    // 设置变更（含快捷键）后同步全局快捷键；失败仅记录，不阻塞保存
-    if (data.settings && typeof data.settings === 'object') {
-      const reg = registerGlobalShortcuts(data.settings);
-      if (reg.failures.length) console.warn('[shortcuts] 注册失败:', reg.failures.join(','));
-    }
+      if (replace) reopened = reconcileDetachedAfterReplace(data);
+    });
+    await reopened;
     return true;
   });
 
   registerFileIpc({ guardedHandle, getMainWindow: () => windows.mainWindow, readData });
+  fullBackup.registerIpc(guardedHandle);
 
   guardedHandle('clipboard:read-text', () => clipboard.readText());
   guardedHandle('clipboard:read-image', () => clipboardImageToDataUrl());
@@ -509,39 +523,64 @@ function setupIpc() {
     }
   });
   // 桌面便签（独立窗口）
+  const pendingPins = new Set();
   guardedHandle('note:pin', async (e, id) => {
-    const data = readData();
-    if (!data || !Array.isArray(data.notes)) return false;
-    const note = data.notes.find((n) => n.id === id);
-    if (!note) return false;
-    const wasPinned = !!note.desktopPin;
-    note.desktopPin = true;
-    if (!writeData(data)) return false;
+    if (pendingPins.has(id)) return false;
+    const initial = readData();
+    const initialNote = initial?.notes?.find(note => note.id === id);
+    if (!initialNote) return false;
+    const existing = detachedWindows.get(id);
+    if (existing && !existing.isDestroyed()) {
+      try { await existing.noteLoadPromise; } catch { return false; }
+      return !existing.isDestroyed() && detachedWindows.get(id) === existing &&
+        !!readData()?.notes?.find(note => note.id === id)?.desktopPin;
+    }
+    if (existing) detachedWindows.delete(id);
+    pendingPins.add(id);
     let win;
     try {
-      win = createDetachedWindow(id);
+      win = createDetachedWindow(initialNote, initial.settings, { pendingPin: true });
       await win.noteLoadPromise;
-      return true;
+      return await queueDataWrite(async () => {
+        if (win.isDestroyed() || detachedWindows.get(id) !== win || supersededDetached.has(win.webContents)) return false;
+        const data = readData();
+        const note = data?.notes?.find(item => item.id === id);
+        if (!note) return false;
+        win.show();
+        if (!win.isVisible() || win.isDestroyed()) throw new Error('Desktop note window did not show');
+        note.desktopPin = true;
+        if (!(await writeDataAsync(data))) return false;
+        win.notePinPending = false;
+        return true;
+      });
     } catch (err) {
       console.error('[note] 钉到桌面失败：', err);
-      if (win && !win.isDestroyed()) {
-        win.notePinFailed = true;
-        win.destroy();
-      }
-      note.desktopPin = wasPinned;
-      if (!writeData(data)) console.error('[note] 钉桌失败后回滚存档失败');
       return false;
+    } finally {
+      pendingPins.delete(id);
+      if (win && !win.isDestroyed() && win.notePinPending) win.destroy();
     }
+  });
+  guardedOn('note:flush-result', (e, id, saved) => {
+    windows.completeDetachedFlush(BrowserWindow.fromWebContents(e.sender), id, saved);
+  }, { role: 'note' });
+  guardedOn('note:ready', (e, id, ok) => {
+    const win = detachedWindows.get(id);
+    if (win && !win.isDestroyed() && win.webContents === e.sender) win.finishNoteInit?.(ok === true);
   });
   guardedHandle('note:get', (e, id) => {
     const data = readData();
     if (data) {
       const note = (data.notes || []).find((n) => n.id === id) || null;
-      return { note, settings: data.settings || null };
+      const win = detachedWindows.get(id);
+      const settings = win && win.webContents === e.sender
+        ? { ...data.settings, desktopMica: win.noteAcrylicActive }
+        : data.settings || null;
+      return { note, settings };
     }
     return { note: null, settings: null };
   });
-  guardedHandle('note:update', (e, note, opts) => {
+  guardedHandle('note:update', (e, note, opts) => queueDataWrite(async () => {
     // 被导入替换作废的旧窗口迟到写入：拒绝，避免覆盖已落盘的导入内容。
     if (supersededDetached.has(e.sender)) return false;
     // 数据不可用时返回 false，让渲染层知道未落盘，避免「显示已保存但磁盘是空的」
@@ -552,7 +591,7 @@ function setupIpc() {
     const current = data.notes[index];
     if (opts?.gadgetAction) {
       if (!current.desktopPin || !applyGadgetAction(current.gadget, opts.gadgetAction)) return false;
-      if (!writeData(data)) return false;
+      if (!(await writeDataAsync(data))) return false;
       const win = detachedWindows.get(current.id);
       if (win && !win.isDestroyed()) win.webContents.send('note:changed', current);
       if (windows.mainWindow && !windows.mainWindow.isDestroyed()) windows.mainWindow.webContents.send('note:changed', current);
@@ -561,7 +600,7 @@ function setupIpc() {
     if (current.gadget) return true; // Widgets write by action so a close-time note snapshot cannot replace shared data.
     const savedNote = mergeDetachedEdits(current, note);
     data.notes[index] = savedNote;
-    const ok = writeData(data);
+    const ok = await writeDataAsync(data);
     if (!ok) return false;
     clearRecovery('note', note.id, opts && opts.draftToken);
     // 重新武装的提醒允许再次调度（稍后再响）
@@ -569,7 +608,7 @@ function setupIpc() {
     scheduleReminders(data.notes);
     if (windows.mainWindow) windows.mainWindow.webContents.send('note:changed', savedNote);
     return ok;
-  }, { denyValue: false, noteScoped: true });
+  }), { denyValue: false, noteScoped: true });
   // UX-20A：仅「显示/恢复/聚焦」已钉桌便签，绝不写盘（区别于会写 pin 状态的 note:pin）。
   // 仅主窗可调用；独立窗/伪造来源拒绝。复用与重建统一等待加载后再校验，缺失窗口安全重建。
   guardedHandle('note:show', async (e, id) => {
@@ -588,7 +627,7 @@ function setupIpc() {
     let win = detachedWindows.get(id) || null;
     const created = !win;
     if (!win) {
-      try { win = createDetachedWindow(id); } catch (err) { return false; }
+      try { win = createDetachedWindow(note, data.settings); } catch (err) { return false; }
       if (!win) return false;
     }
     // 复用窗可能仍在加载（含并发第二次请求）：统一等待完成后再判定，绝不提前 show/成功。
@@ -615,48 +654,35 @@ function setupIpc() {
   guardedHandle('note:unpin', async (e, id) => {
     const win = detachedWindows.get(id);
     if (!(await flushDetachedNote(win))) return false;
-    if (win) win.close();
+    if (win) windows.closeDetachedNote(win);
     else if (windows.mainWindow) windows.mainWindow.webContents.send('note:unpinned', id);
     return true;
   });
   guardedHandle('note:close-all', async () => {
     if (!(await flushDetachedNotes())) return false;
-    detachedWindows.forEach((w) => w.close());
+    detachedWindows.forEach(windows.closeDetachedNote);
     detachedWindows.clear();
     return true;
   });
   guardedHandle('note:delete', async (e, id) => {
     const win = detachedWindows.get(id);
     if (!(await flushDetachedNote(win))) return false;
-    const data = readData();
-    if (!data) return false;
-    const idx = (data.notes || []).findIndex((n) => n.id === id);
-    if (idx >= 0) {
-      const note = data.notes.splice(idx, 1)[0];
-      note.desktopPin = false;
-      data.trash = data.trash || [];
-      data.trash.push({ note, deletedAt: Date.now() });
-      writeData(data);
-      scheduleReminders(data.notes);
-    }
-    if (win) win.close();
-    if (windows.mainWindow && !windows.mainWindow.isDestroyed()) windows.mainWindow.webContents.send('note:deleted', id);
-    return true;
-  });
-  guardedHandle('settings:set-font-size', (e, size) => {
-    const v = clampFinite(size, 11, 22);
-    // 非法入参：拒绝且不落盘、不广播，而不是用 14 覆盖用户设置。
-    if (v === null) throw new Error('invalid font size');
-    // 数据不可用时只同步到窗口，不落盘：字号是次要偏好，不值得为它冒覆盖存档的风险
-    const data = readData();
-    if (data) {
-      data.settings = data.settings || {};
-      data.settings.fontSize = v;
-      writeData(data);
-    }
-    if (windows.mainWindow && !windows.mainWindow.isDestroyed()) windows.mainWindow.webContents.send('settings:font-size', v);
-    detachedWindows.forEach((w) => { if (w && !w.isDestroyed()) w.webContents.send('settings:font-size', v); });
-    return v;
+    return queueDataWrite(async () => {
+      const data = readData();
+      if (!data) return false;
+      const idx = (data.notes || []).findIndex((n) => n.id === id);
+      if (idx >= 0) {
+        const note = data.notes.splice(idx, 1)[0];
+        note.desktopPin = false;
+        data.trash = data.trash || [];
+        data.trash.push({ note, deletedAt: Date.now() });
+        if (!(await writeDataAsync(data))) return false;
+        scheduleReminders(data.notes);
+      }
+      windows.closeDetachedNote(win);
+      if (windows.mainWindow && !windows.mainWindow.isDestroyed()) windows.mainWindow.webContents.send('note:deleted', id);
+      return true;
+    });
   });
   guardedHandle('note:show-menu', (e, opts) => {
     const win = BrowserWindow.fromWebContents(e.sender);
@@ -764,37 +790,8 @@ function setupIpc() {
     }
   });
 
-  // ---- 全局快捷键 ----
-  guardedHandle('shortcuts:get', () => {
-    try {
-      return { ok: true, ...getShortcutsPayload() };
-    } catch (e) {
-      return { ok: false, error: (e && e.message) || String(e) };
-    }
-  });
-  guardedHandle('shortcuts:set', (e, overrides) => {
-    try {
-      // 覆盖项对象（{ id: accel }）；设空值即恢复默认（从 settings 里移除该 id）
-      const clean = {};
-      Object.entries(overrides && typeof overrides === 'object' ? overrides : {}).forEach(([id, accel]) => {
-        if (accel && Shortcuts.isValidAccelerator(accel)) clean[id] = accel;
-      });
-      // 数据不可用时只在本次运行内生效、不落盘，避免用 {} 覆盖整个数据文件
-      const data = readData();
-      let persisted = false;
-      if (data) {
-        data.settings = data.settings || {};
-        data.settings.shortcuts = clean;
-        persisted = writeData(data);
-      }
-      // effectiveShortcuts 只读 settings.shortcuts，故这里包一层，形状与原实现一致；
-      // 数据不可用时也能让新键位在本次运行内立即生效
-      const reg = registerGlobalShortcuts({ shortcuts: clean });
-      return { ok: true, overrides: clean, failures: reg.failures, persisted };
-    } catch (err) {
-      return { ok: false, error: (err && err.message) || String(err) };
-    }
-  });
+  shortcuts.registerIpc(guardedHandle);
+  quickCapture.registerIpc(guardedHandle, guardedOn);
 
   // ---- 自动更新 ----
   guardedHandle('update:check', async () => {
@@ -813,7 +810,7 @@ function setupIpc() {
     try {
       // 独立便签各自持有尚未写盘的编辑态；任何一个保存失败都不能销毁窗口。
       if (!(await flushDetachedNotes())) return { ok: false, error: '独立便签保存失败，请检查后重试' };
-      windows.prepareToQuit();
+      await windows.prepareToQuit();
       for (const win of detachedWindows.values()) {
         if (!win.isDestroyed()) win.destroy();
       }
@@ -825,125 +822,7 @@ function setupIpc() {
     } catch (e) { return { ok: false, error: (e && e.message) || String(e) }; }
   });
 
-  // Window controls
-  guardedOn('window:minimize', () => windows.mainWindow && windows.mainWindow.minimize());
-  guardedOn('window:maximize', () => {
-    if (!windows.mainWindow) return;
-    if (windows.mainWindow.isMaximized()) windows.mainWindow.unmaximize();
-    else windows.mainWindow.maximize();
-  });
-  guardedOn('window:hide', () => windows.mainWindow && windows.mainWindow.hide());
-  guardedOn('window:close', () => requestCloseMainWindow());
-  guardedOn('window:close-decision', (e, decision) => {
-    handleCloseDecision(decision).catch((err) => console.error('[window] 退出失败：', err));
-  });
-  guardedOn('window:always-on-top', (e, flag) => {
-    if (windows.mainWindow) windows.mainWindow.setAlwaysOnTop(!!flag);
-  });
-  guardedOn('window:set-opacity', (e, opacity) => {
-    const v = clampFinite(opacity, 0, 1);
-    if (v === null) { e.returnValue = false; return; }
-    if (windows.mainWindow) windows.mainWindow.setOpacity(v);
-  });
-  // 自定义背景图/明暗变化时同步原生窗口控制按钮(─ □ ✕)的符号颜色，避免亮背景上看不清
-  guardedOn('window:set-controls', (e, opts) => {
-    const win = BrowserWindow.fromWebContents(e.sender) || windows.mainWindow;
-    if (!win || !win.setTitleBarOverlay) return;
-    const symbolColor = (opts && opts.symbolColor) || '#c8c8c8';
-    try {
-      win.setTitleBarOverlay({ color: '#00000000', symbolColor, height: 50 });
-    } catch (err) { /* 非标题栏覆盖窗口忽略 */ }
-  });
-  guardedOn('window:set-self-opacity', (e, opacity) => {
-    const v = clampFinite(opacity, 0, 1);
-    if (v === null) { e.returnValue = false; return; }
-    let win = null;
-    try { win = BrowserWindow.fromWebContents(e.sender); } catch (err) { win = null; }
-    if (!win && windows.mainWindow && windows.mainWindow.webContents === e.sender) win = windows.mainWindow;
-    if (win && !win.isDestroyed()) win.setOpacity(v);
-  });
-  guardedOn('window:set-note-opacity', (e, opacity) => {
-    const v = clampFinite(opacity, 0, 100);
-    if (v === null) { e.returnValue = false; return; }
-    detachedWindows.forEach((w) => {
-      if (w && !w.isDestroyed()) w.webContents.send('window:note-opacity', v);
-    });
-  });
-  // 钉窗右键菜单「便签透明度」滑杆：持久化全局 noteOpacity 并同步主窗口（复用到所有便签卡片）
-  guardedOn('note:save-note-opacity', (e, opacity) => {
-    const v = clampFinite(opacity, 0, 100);
-    if (v === null) { e.returnValue = false; return; } // 非法：不读档、不落盘、不广播
-    // 数据不可用时只同步到窗口、不落盘，避免用 {} 覆盖整个数据文件
-    const data = readData();
-    if (data) {
-      data.settings = data.settings || {};
-      data.settings.noteOpacity = v;
-      writeData(data);
-    }
-    if (windows.mainWindow && !windows.mainWindow.isDestroyed()) windows.mainWindow.webContents.send('window:note-opacity-setting', v);
-  });
-  guardedOn('window:set-effects', (e, fx) => {
-    const srcWin = BrowserWindow.fromWebContents(e.sender);
-    if (srcWin === windows.mainWindow) {
-      windows.setDesktopSnapAppearance(fx);
-      detachedWindows.forEach((w) => {
-        if (w && !w.isDestroyed()) {
-          w.webContents.send('window:effects', fx);
-          if (Number.isFinite(fx?.noteRadius)) w.noteCornerRadius = Math.max(0, Math.min(28, fx.noteRadius));
-          if (typeof w.setBackgroundMaterial === 'function') {
-            try {
-              w.setBackgroundMaterial(fx && fx.desktopMica ? 'acrylic' : 'none');
-              if (w.updateNoteShape) w.updateNoteShape();
-            } catch (err) { /* ignore */ }
-          }
-        }
-      });
-    }
-  });
-  guardedHandle('window:toggle', () => {
-    toggleWindow();
-    return windows.mainWindow && windows.mainWindow.isVisible();
-  });
-}
-
-// ---- 全局快捷键 ----
-// 从 settings（短期由 renderer 持久化到数据文件）注册「唤起/隐藏窗口」「新建便签」两个全局快捷键。
-// 返回 { failures: [id...] }，方便 renderer 把注册失败（被其它应用占用）提示给用户。
-function registerGlobalShortcuts(settings) {
-  const failures = [];
-  const accels = Shortcuts.effectiveShortcuts(settings);
-  const spec = [
-    { id: 'toggleWindow', accel: accels.toggleWindow, cb: () => toggleWindow() },
-    { id: 'createNote', accel: accels.createNote, cb: () => { showWindow(); if (windows.mainWindow && !windows.mainWindow.isDestroyed()) windows.mainWindow.webContents.send('note:create'); } }
-  ];
-  // 先清掉所有旧的全局快捷键（含用户改绑过的旧加速键），避免残留旧绑定导致新注册失败
-  try { globalShortcut.unregisterAll(); } catch (e) { /* ignore */ }
-  // 注册单个加速键：失败重试一次（Electron 偶发因窗口/焦点时序失败，重试可消解）
-  const tryRegister = (accel, cb) => {
-    try {
-      if (globalShortcut.register(accel, cb)) return true;
-    } catch (e) { /* ignore */ }
-    return false;
-  };
-  spec.forEach(({ id, accel, cb }) => {
-    if (!accel) return;
-    if (!Shortcuts.isValidAccelerator(accel)) { failures.push(id); return; }
-    let ok = tryRegister(accel, cb);
-    if (!ok) ok = tryRegister(accel, cb);
-    if (!ok) failures.push(id);
-  });
-  return { failures };
-}
-
-// 读取快捷键设置（settings.shortcuts，只含用户覆盖，默认由 shortcuts.js 兜底）+ 默认表，供设置面板渲染
-function getShortcutsPayload() {
-  const data = readData() || {};
-  const settings = data.settings || {};
-  return {
-    overrides: settings.shortcuts || {},
-    defaults: Shortcuts.buildDefaultShortcuts(),
-    globalFailures: [] // 由每次注册时返回
-  };
+  registerWindowIpc({ guardedHandle, guardedOn, windows, readData, writeData: writeDataAsync, queueDataWrite, toggleWindow });
 }
 
 // 稳定版不接受预发布更新：防止发布流程误把 `x.y.z-preview` 包发成正式版（releases/latest 返回预发布），
@@ -1003,15 +882,14 @@ if (!gotLock) {
     }
 
     setupIpc();
-    createWindow();
+    const initial = readData();
+    createWindow(initial);
     createTray();
     setupAutoUpdate();
-
-    const initial = readData();
     if (!recoveryCandidate(initial)) openStartupPinned(initial);
 
     // 从持久化设置注册全局快捷键（缺省用 shortcuts.js 默认，避免与系统默认冲突）
-    const reg = registerGlobalShortcuts(initial ? (initial.settings || {}) : {});
+    const reg = shortcuts.registerGlobalShortcuts(initial ? (initial.settings || {}) : {});
     if (reg.failures.length) console.warn('[shortcuts] 启动注册失败:', reg.failures.join(','));
 
     app.on('activate', () => {
@@ -1024,8 +902,14 @@ if (!gotLock) {
     // 常驻托盘，不退出
   });
 
-  app.on('before-quit', () => {
-    windows.prepareToQuit();
+  app.on('before-quit', (event) => {
+    if (!windows.isReadyToQuit()) {
+      event.preventDefault();
+      windows.prepareToQuit().then(() => app.quit());
+      return;
+    }
+    quickCapture.dispose();
+    fullBackup.dispose();
     windows.dispose();
     globalShortcut.unregisterAll();
   });
